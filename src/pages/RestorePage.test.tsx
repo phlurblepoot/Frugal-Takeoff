@@ -17,10 +17,17 @@ vi.mock('../utils/store', async (orig) => ({ ...(await orig<typeof import('../ut
 import { RestorePage } from './RestorePage';
 
 const mount = () => render(<MemoryRouter><ToastProvider><ConfirmProvider><RestorePage /></ConfirmProvider></ToastProvider></MemoryRouter>);
-// clearAllMocks only clears recorded calls — an implementation set with
-// mockResolvedValue in one test would otherwise leak into the next, so the
-// defaults ("fresh install", "server still answering fresh") are re-armed here.
-beforeEach(() => { vi.clearAllMocks(); h.getSetupState.mockResolvedValue({ fresh: true }); h.getSetupStateStrict.mockResolvedValue({ fresh: true }); localStorage.setItem('token', 't'); localStorage.setItem('user', JSON.stringify({ id: 'admin-id-123', username: 'admin', role: 'admin' })); });
+// clearAllMocks only clears recorded calls. mockReset also drops the
+// implementation and any *unconsumed* once-answers, which a test that fails
+// early would otherwise leave queued for the next one — so the two setup reads
+// are reset and re-armed with their "fresh install" defaults here.
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.getSetupState.mockReset().mockResolvedValue({ fresh: true });
+  h.getSetupStateStrict.mockReset().mockResolvedValue({ fresh: true });
+  localStorage.setItem('token', 't');
+  localStorage.setItem('user', JSON.stringify({ id: 'admin-id-123', username: 'admin', role: 'admin' }));
+});
 
 // A test that fails before its own useRealTimers() would otherwise leave fake
 // timers armed for the next one, turning one failure into several.
@@ -32,20 +39,25 @@ const pickAndConfirm = async () => {
   fireEvent.click(screen.getByTestId('restore-confirm'));
   fireEvent.click(await screen.findByRole('button', { name: /^restore$/i })); // confirm dialog
   await waitFor(() => expect(h.restoreSnapshot).toHaveBeenCalled());
-  expect(await screen.findByTestId('restore-progress')).toHaveTextContent(/restarting/i);
+  await waitFor(() => expect(screen.getByTestId('restore-progress')).toHaveTextContent(/restarting/i));
 };
 
 describe('RestorePage', () => {
   it('lists local snapshots, shows a summary on pick, and after confirm polls until the server is back then routes to login', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    h.getSetupStateStrict.mockRejectedValueOnce(new Error('down')).mockRejectedValueOnce(new Error('down')).mockResolvedValueOnce({ fresh: false });
+    h.getSetupStateStrict
+      .mockResolvedValueOnce({ fresh: true })            // the mount gate
+      .mockRejectedValueOnce(new Error('down'))          // poll: still down
+      .mockRejectedValueOnce(new Error('down'))          // poll: still down
+      .mockResolvedValueOnce({ fresh: false });          // poll: back, restored
     mount();
     fireEvent.click(await screen.findByTestId('restore-snapshot-20260912-020000'));
     expect(screen.getByText(/3 files/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('restore-confirm'));
     fireEvent.click(await screen.findByRole('button', { name: /^restore$/i })); // confirm dialog
     await waitFor(() => expect(h.restoreSnapshot).toHaveBeenCalledWith({ source: 'local', snapshotId: '20260912-020000' }));
-    expect(await screen.findByTestId('restore-progress')).toHaveTextContent(/restarting/i);
+    // restore-progress carries every progress phase, so wait for this one's text.
+    await waitFor(() => expect(screen.getByTestId('restore-progress')).toHaveTextContent(/restarting/i));
     await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
     await waitFor(() => expect(screen.getByTestId('restore-progress')).toHaveTextContent(/restored/i));
     // The fresh-install admin's session does not exist on the restored server.
@@ -55,7 +67,11 @@ describe('RestorePage', () => {
 
   it('keeps waiting while the server answers that it is still fresh', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    h.getSetupStateStrict.mockResolvedValueOnce({ fresh: true }).mockResolvedValueOnce({ fresh: true }).mockResolvedValueOnce({ fresh: false });
+    h.getSetupStateStrict
+      .mockResolvedValueOnce({ fresh: true })            // the mount gate
+      .mockResolvedValueOnce({ fresh: true })            // poll: answered, db not swapped yet
+      .mockResolvedValueOnce({ fresh: true })            // poll: same again
+      .mockResolvedValueOnce({ fresh: false });          // poll: back, restored
     mount();
     await pickAndConfirm();
     // Two answers in, the database has not been swapped yet — still restarting.
@@ -68,7 +84,7 @@ describe('RestorePage', () => {
 
   it('gives up after five minutes of a server that never comes back', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    h.getSetupStateStrict.mockRejectedValue(new Error('down'));
+    h.getSetupStateStrict.mockRejectedValue(new Error('down')).mockResolvedValueOnce({ fresh: true }); // the mount gate, then nothing but silence
     mount();
     await pickAndConfirm();
     await act(async () => { await vi.advanceTimersByTimeAsync(4 * 60 * 1000); });
@@ -78,8 +94,39 @@ describe('RestorePage', () => {
     vi.useRealTimers();
   });
 
+  it('offers a retry when the server cannot be reached, instead of claiming it has data', async () => {
+    h.getSetupStateStrict.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    mount();
+    expect(await screen.findByText(/can't reach the server/i)).toBeInTheDocument();
+    expect(screen.queryByText(/already has data/i)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    expect(await screen.findByTestId('restore-source-local')).toBeInTheDocument();
+    expect(await screen.findByTestId('restore-snapshot-20260912-020000')).toBeInTheDocument();
+  });
+
+  it('names the unpacking step while the restore request is still in flight', async () => {
+    let release: (v: unknown) => void = () => {};
+    h.restoreSnapshot.mockImplementationOnce(() => new Promise(r => { release = r; }));
+    mount();
+    fireEvent.click(await screen.findByTestId('restore-snapshot-20260912-020000'));
+    fireEvent.click(screen.getByTestId('restore-confirm'));
+    fireEvent.click(await screen.findByRole('button', { name: /^restore$/i }));
+    expect(await screen.findByTestId('restore-progress')).toHaveTextContent(/unpacking/i);
+    await act(async () => { release({ restarting: true, files: 3, bytes: 900 }); });
+    await waitFor(() => expect(screen.getByTestId('restore-progress')).toHaveTextContent(/restarting/i));
+  });
+
+  it('refuses a dropped file that is not a zip', async () => {
+    mount();
+    fireEvent.click(await screen.findByTestId('restore-source-upload'));
+    const zone = screen.getByTestId('restore-upload-input').closest('label') as HTMLLabelElement;
+    fireEvent.drop(zone, { dataTransfer: { files: [new File(['x'], 'site-photo.jpg')] } });
+    expect(await screen.findByText(/please drop a snapshot \.zip/i)).toBeInTheDocument();
+    expect(h.uploadRestoreZip).not.toHaveBeenCalled();
+  });
+
   it('refuses to render when the install is not fresh', async () => {
-    h.getSetupState.mockResolvedValue({ fresh: false });
+    h.getSetupStateStrict.mockResolvedValue({ fresh: false });
     mount();
     expect(await screen.findByText(/already has data/i)).toBeInTheDocument();
   });

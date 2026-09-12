@@ -21,7 +21,7 @@ import {
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
-  formatBytes, getRestoreDriveSnapshots, getRestoreSources, getSetupState, getSetupStateStrict, restoreDriveStartUrl,
+  formatBytes, getRestoreDriveSnapshots, getRestoreSources, getSetupStateStrict, restoreDriveStartUrl,
   restoreSnapshot, uploadRestoreZip, type BackupSnapshot,
 } from '../utils/store';
 
@@ -36,7 +36,7 @@ const POLL_MS = 2000;
 const GIVE_UP_MS = 5 * 60 * 1000;
 const BACK_TO_LOGIN_MS = 1500;
 
-type Phase = 'loading' | 'not-fresh' | 'pick' | 'restoring' | 'restarting' | 'done' | 'gone';
+type Phase = 'loading' | 'unreachable' | 'not-fresh' | 'pick' | 'restoring' | 'restarting' | 'done' | 'gone';
 type Source = 'local' | 'upload' | 'drive';
 
 type Sources = Awaited<ReturnType<typeof getRestoreSources>>;
@@ -148,18 +148,28 @@ export const RestorePage: React.FC = () => {
   }, []);
 
   // Fresh install? That gate comes first — everything else on this screen is
-  // pointless (and refused by the server) once there is data to lose.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const state = await getSetupState().catch(() => ({ fresh: false }));
-      if (cancelled) return;
-      if (!state.fresh) { setPhase('not-fresh'); return; }
-      if (!isSetupAdmin()) { setAuthed(false); setPhase('pick'); return; }
-      await loadSources();
-    })();
-    return () => { cancelled = true; };
+  // pointless (and refused by the server) once there is data to lose. It reads
+  // strictly, so a server that is down or throwing 500s says exactly that and
+  // offers a retry, instead of being mistaken for a server that has data.
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+
+  const checkFresh = useCallback(async () => {
+    setPhase('loading');
+    let state: { fresh: boolean };
+    try {
+      state = await getSetupStateStrict();
+    } catch {
+      if (alive.current) setPhase('unreachable');
+      return;
+    }
+    if (!alive.current) return;
+    if (!state.fresh) { setPhase('not-fresh'); return; }
+    if (!isSetupAdmin()) { setAuthed(false); setPhase('pick'); return; }
+    await loadSources();
   }, [loadSources]);
+
+  useEffect(() => { void checkFresh(); }, [checkFresh]);
 
   // Read the Drive callback's result off the URL once, then forget it so a
   // reload is not a rerun of the toast.
@@ -225,6 +235,14 @@ export const RestorePage: React.FC = () => {
   const pickSnapshot = (s: BackupSnapshot, src: Source, uploadId?: string) =>
     setPicked(uploadId ? { source: src, snapshot: s, uploadId } : { source: src, snapshot: s });
 
+  // The file input has accept=".zip", but a drop bypasses that entirely — and
+  // uploading a photo to the restore endpoint just wastes the upload.
+  const takeDroppedFile = (file: File | null | undefined) => {
+    if (!file) return;
+    if (!/\.zip$/i.test(file.name)) { toast('Please drop a snapshot .zip', { type: 'error' }); return; }
+    void takeFile(file);
+  };
+
   const takeFile = async (file: File | null | undefined) => {
     if (!file) return;
     setUploading(true);
@@ -283,6 +301,24 @@ export const RestorePage: React.FC = () => {
     return shell(<div className="space-y-4"><Skeleton className="h-24 w-full rounded-xl" /><Skeleton className="h-48 w-full rounded-xl" /></div>);
   }
 
+  if (phase === 'unreachable') {
+    return shell(
+      <Card>
+        <CardBody className="space-y-4">
+          <p className="flex items-start gap-2 text-sm text-ink">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-500" />
+            <span>Can't reach the server. Is it running?</span>
+          </p>
+          <p className="text-sm text-ink-soft">
+            Nothing has been changed. Once the server answers, this screen will say whether it is empty enough to
+            restore into.
+          </p>
+          <Button variant="secondary" onClick={() => void checkFresh()}><RefreshCw size={15} /> Try again</Button>
+        </CardBody>
+      </Card>
+    );
+  }
+
   if (phase === 'not-fresh') {
     return shell(
       <Card>
@@ -304,41 +340,40 @@ export const RestorePage: React.FC = () => {
   if (phase === 'restoring' || phase === 'restarting' || phase === 'done' || phase === 'gone') {
     return shell(
       <Card>
-        <CardBody className="space-y-4">
-          {phase === 'restoring' ? (
-            <p className="flex items-center gap-2 text-sm text-ink">
-              <Loader2 size={18} className="animate-spin text-accent-600" /> Unpacking the snapshot…
-            </p>
-          ) : (
-            <div data-testid="restore-progress" className="space-y-3">
-              {phase === 'restarting' && (
-                <>
-                  <p className="flex items-center gap-2 text-base font-medium text-ink">
-                    <Loader2 size={18} className="animate-spin text-accent-600" /> Restarting the server…
-                  </p>
-                  <p className="text-sm text-ink-soft">
-                    The backup is in place. This page waits for the server to come back — it usually takes under a minute.
-                  </p>
-                </>
-              )}
-              {phase === 'done' && (
+        <CardBody>
+          <div data-testid="restore-progress" className="space-y-3">
+            {phase === 'restoring' && (
+              <p className="flex items-center gap-2 text-base font-medium text-ink">
+                <Loader2 size={18} className="animate-spin text-accent-600" /> Unpacking the snapshot…
+              </p>
+            )}
+            {phase === 'restarting' && (
+              <>
                 <p className="flex items-center gap-2 text-base font-medium text-ink">
-                  <CheckCircle2 size={18} className="text-green-600" /> Restored. Sign in with your usual account.
+                  <Loader2 size={18} className="animate-spin text-accent-600" /> Restarting the server…
                 </p>
-              )}
-              {phase === 'gone' && (
-                <p className="flex items-start gap-2 text-base font-medium text-ink">
-                  <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-500" />
-                  The server has not come back. Start the container again, then sign in.
-                </p>
-              )}
-              {result && (
                 <p className="text-sm text-ink-soft">
-                  {plural(result.files, 'file')} · {formatBytes(result.bytes)} put back.
+                  The backup is in place. This page waits for the server to come back — it usually takes under a minute.
                 </p>
-              )}
-            </div>
-          )}
+              </>
+            )}
+            {phase === 'done' && (
+              <p className="flex items-center gap-2 text-base font-medium text-ink">
+                <CheckCircle2 size={18} className="text-green-600" /> Restored. Sign in with your usual account.
+              </p>
+            )}
+            {phase === 'gone' && (
+              <p className="flex items-start gap-2 text-base font-medium text-ink">
+                <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-500" />
+                The server has not come back. Start the container again, then sign in.
+              </p>
+            )}
+            {result && (
+              <p className="text-sm text-ink-soft">
+                {plural(result.files, 'file')} · {formatBytes(result.bytes)} put back.
+              </p>
+            )}
+          </div>
         </CardBody>
       </Card>
     );
@@ -403,7 +438,7 @@ export const RestorePage: React.FC = () => {
           <CardBody className="space-y-4">
             <label
               onDragOver={e => e.preventDefault()}
-              onDrop={e => { e.preventDefault(); void takeFile(e.dataTransfer?.files?.[0]); }}
+              onDrop={e => { e.preventDefault(); takeDroppedFile(e.dataTransfer?.files?.[0]); }}
               className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-edge-strong bg-sunken/40 px-6 py-10 text-center transition-colors hover:bg-hover"
             >
               <Upload size={22} className="text-ink-faint" />
