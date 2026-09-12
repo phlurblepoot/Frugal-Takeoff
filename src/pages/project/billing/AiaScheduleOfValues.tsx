@@ -15,6 +15,7 @@ import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { exportAiaXlsx, sanitizeFilename } from './aiaExcel';
 import { resolveAiaExportEnv, buildBlankSovContext } from './aiaExportShared';
+import { SplitSovLineModal } from './SplitSovLineModal';
 import {
   Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Skeleton,
   StatusPill, Table, TBody, TD, TH, THead, TR,
@@ -61,10 +62,6 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
   const [nValue, setNValue] = useState('');
   const [nRetainage, setNRetainage] = useState('');
 
-  // Split target — the modal itself lands in the next task; the button that
-  // arms it ships now so the row action bar is complete, which is why the
-  // state is written but not yet read.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [splitTarget, setSplitTarget] = useState<AiaSovLine | null>(null);
 
   const loadLock = () => getSovLock(projectId).then(setLock).catch(() => setLock(null));
@@ -580,6 +577,7 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
           </div>
         )}
       </CardBody>
+      <SplitSovLineModal line={splitTarget} onClose={() => setSplitTarget(null)} onSplit={reload} />
     </Card>
   );
 };
