@@ -859,6 +859,45 @@ describe('AIA billing routes (admin-gated)', () => {
     expect(stale.body.code).toBe('version_conflict');
   });
 
+  it('SOV lock: GET state, POST locks (manual, by caller), mutations 409 sov_locked, DELETE reopens', async () => {
+    const line = await request(app).post('/api/projects/p1/aia/sov').send({ description: 'D', scheduledValueCents: 1000 });
+    const unlocked = await request(app).get('/api/projects/p1/aia/sov/lock');
+    expect(unlocked.status).toBe(200);
+    expect(unlocked.body).toEqual({ locked: false, payAppCount: 0 });
+
+    const lock = await request(app).post('/api/projects/p1/aia/sov/lock').send({});
+    expect(lock.status).toBe(200);
+    expect(lock.body.locked).toBe(true);
+    expect(lock.body.reason).toBe('manual');
+    expect(lock.body.lockedByUserId).toBe('u1');
+    expect(lock.body.lockedByName).toBeNull(); // no users row in this harness
+
+    const blocked = await request(app).put(`/api/aia/sov/${line.body.id}`).send({ description: 'E', scheduledValueCents: 1, version: 1 });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe('sov_locked');
+    expect((await request(app).post('/api/projects/p1/aia/sov').send({ description: 'X', scheduledValueCents: 1 })).status).toBe(409);
+    expect((await request(app).delete(`/api/aia/sov/${line.body.id}`)).status).toBe(409);
+    expect((await request(app).post('/api/projects/p1/aia/sov/seed').send({ lines: [] })).status).toBe(409);
+
+    const reopen = await request(app).delete('/api/projects/p1/aia/sov/lock');
+    expect(reopen.status).toBe(200);
+    expect(reopen.body.locked).toBe(false);
+    expect((await request(app).put(`/api/aia/sov/${line.body.id}`).send({ description: 'E', scheduledValueCents: 1, version: 1 })).status).toBe(200);
+  });
+
+  it('SOV lock: creating the first pay app locks it and payAppCount is reported', async () => {
+    await request(app).post('/api/projects/p1/aia/sov').send({ description: 'D', scheduledValueCents: 1000 });
+    await request(app).post('/api/projects/p1/aia/pay-apps').send({});
+    const state = await request(app).get('/api/projects/p1/aia/sov/lock');
+    expect(state.body.locked).toBe(true);
+    expect(state.body.reason).toBe('pay-app');
+    expect(state.body.payAppCount).toBe(1);
+  });
+
+  it('SOV lock: 404 for an unknown project', async () => {
+    expect((await request(app).get('/api/projects/nope/aia/sov/lock')).status).toBe(404);
+  });
+
   it('pay app create → get returns app, lines, g702, g703', async () => {
     await request(app).post('/api/projects/p1/aia/sov')
       .send({ description: 'Work', scheduledValueCents: 100000 });
