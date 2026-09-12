@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AiaPayAppDetail, AiaPayAppLine, AiaG703Row, AiaG702,
-  getPayApp, savePayAppLines, setPayApp,
+  getPayApp, savePayAppLines, setPayApp, lineTypeOf,
 } from '../../../utils/store';
 import { buildAiaXlsxBlob } from './aiaExcel';
 import { resolveAiaExportEnv } from './aiaExportShared';
@@ -81,6 +81,7 @@ export const AiaPayAppEditor: React.FC<{
     for (const l of d.lines) byLine[l.sovLineId] = l;
     const next: Record<string, EditLine> = {};
     for (const row of d.g703) {
+      if (lineTypeOf(row) !== 'item') continue;
       const line = byLine[row.sovLineId];
       next[row.sovLineId] = {
         percentComplete: line ? String(line.percentComplete) : String(row.percentComplete ?? 0),
@@ -242,6 +243,7 @@ export const AiaPayAppEditor: React.FC<{
     const map: Record<string, number> = {};
     if (!data) return map;
     for (const row of data.g703) {
+      if (lineTypeOf(row) !== 'item') continue;
       const e = edits[row.sovLineId];
       const pct = e ? parseFloat(e.percentComplete) : row.percentComplete;
       const storedCents = e ? dollarsToCents(e.storedMaterials) : row.storedCents;
@@ -373,6 +375,18 @@ export const AiaPayAppEditor: React.FC<{
                 </THead>
                 <TBody>
                   {data.g703.map(row => {
+                    const type = lineTypeOf(row);
+                    if (type === 'header') {
+                      return (
+                        <TR key={row.sovLineId} data-testid={`g703-header-row-${row.sovLineId}`}>
+                          <TD className="text-ink-soft">{row.itemNo || ''}</TD>
+                          <TD colSpan={9} className="font-semibold text-ink">{row.description}</TD>
+                        </TR>
+                      );
+                    }
+                    if (type === 'blank') {
+                      return <TR key={row.sovLineId} data-testid={`g703-blank-row-${row.sovLineId}`}><TD colSpan={10} className="h-8" /></TR>;
+                    }
                     const e = edits[row.sovLineId] ?? { percentComplete: '0', storedMaterials: '0' };
                     return (
                       <TR key={row.sovLineId}>
@@ -396,6 +410,7 @@ export const AiaPayAppEditor: React.FC<{
                         </TD>
                         <TD className="w-32">
                           <Input
+                            data-testid={`pa-pct-${row.sovLineId}`}
                             type="number"
                             className="text-right tabular-nums w-full"
                             value={e.percentComplete}
@@ -427,6 +442,9 @@ export const AiaPayAppEditor: React.FC<{
                 to the table). So the G702 summary reconciles identically. */}
             <div className="space-y-3 md:hidden">
               {data.g703.map(row => {
+                const type = lineTypeOf(row);
+                if (type === 'header') return <div key={row.sovLineId} data-testid={`g703-header-card-${row.sovLineId}`} className="px-1 pt-2 text-sm font-semibold text-ink">{row.description}</div>;
+                if (type === 'blank') return <div key={row.sovLineId} data-testid={`g703-blank-card-${row.sovLineId}`} className="h-3" />;
                 const e = edits[row.sovLineId] ?? { percentComplete: '0', storedMaterials: '0' };
                 return (
                   <div key={row.sovLineId} className="rounded-lg border border-edge p-3">

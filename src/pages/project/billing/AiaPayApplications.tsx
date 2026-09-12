@@ -1,7 +1,7 @@
 // src/pages/project/billing/AiaPayApplications.tsx
 import React, { useState } from 'react';
 import { Eye, Plus, Trash2 } from 'lucide-react';
-import { AiaPayAppListItem, getPayApps, createPayApp, deletePayApp } from '../../../utils/store';
+import { AiaPayAppListItem, SovLockState, getPayApps, createPayApp, deletePayApp, getSovLock } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
@@ -50,6 +50,7 @@ export const AiaPayApplications: React.FC<{ projectId: string; contractTotalCent
   const [nPeriodTo, setNPeriodTo] = useState('');
   const [nAppDate, setNAppDate] = useState(today());
   const [busy, setBusy] = useState(false);
+  const [sovLock, setSovLock] = useState<SovLockState | null>(null);
 
   const reload = () => {
     getPayApps(projectId).then(setApps).catch(() => setApps([]));
@@ -71,6 +72,8 @@ export const AiaPayApplications: React.FC<{ projectId: string; contractTotalCent
   const startCreate = () => {
     setNPeriodTo('');
     setNAppDate(today());
+    setSovLock(null);
+    getSovLock(projectId).then(setSovLock).catch(() => setSovLock(null));
     setCreating(true);
   };
 
@@ -175,6 +178,9 @@ export const AiaPayApplications: React.FC<{ projectId: string; contractTotalCent
         <div className="space-y-3">
           <Field label="Period to" htmlFor="new-pa-period"><Input id="new-pa-period" type="date" value={nPeriodTo} onChange={e => setNPeriodTo(e.target.value)} /></Field>
           <Field label="Application date" htmlFor="new-pa-date"><Input id="new-pa-date" type="date" value={nAppDate} onChange={e => setNAppDate(e.target.value)} /></Field>
+          {sovLock && !sovLock.locked && (
+            <p className="text-xs text-ink-faint">Creating the first application finalizes the schedule of values. Lines can't change afterwards until an admin reopens it from the SOV tab.</p>
+          )}
         </div>
       </Modal>
 
