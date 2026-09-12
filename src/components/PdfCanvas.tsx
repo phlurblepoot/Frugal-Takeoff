@@ -1279,8 +1279,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             finalizeSegment();
           }
         }
-      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+      } else if (e.key === 'Backspace') {
+        // Backspace ONLY pops the last in-progress point. Delete is owned by
+        // CanvasView (delete the selected measurement/segment) and must not
+        // touch the drawing state; the two keys are deliberately disjoint.
         if (activePoints.length > 0) {
+          e.preventDefault();
           const lastIdx = activePoints.length - 1;
           const lastMidIdx = activeArcMidIndices[activeArcMidIndices.length - 1];
           if (lastMidIdx === lastIdx - 1) {

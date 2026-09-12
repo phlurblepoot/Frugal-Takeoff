@@ -619,7 +619,9 @@ const CanvasViewInner: React.FC = () => {
       // All measurement-mutating shortcuts (delete / delete-segment / resume-
       // drawing / paste) are disabled on frozen-history & phone read-only pages.
       // Copy, undo/redo, escape, help, and page navigation stay available.
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedMeasurementId && !readOnly) {
+      // Delete ONLY. Backspace is owned by PdfCanvas (remove the last
+      // in-progress point) and must never open the delete confirm.
+      if (e.key === 'Delete' && selectedMeasurementId && !readOnly) {
         // If a single canvas segment is selected, only delete that segment
         if (selectedSegmentIdx !== null) {
           deleteSegment(selectedMeasurementId, selectedSegmentIdx);
