@@ -42,8 +42,57 @@ describe('backup admin routes', () => {
   it('status reports the root, defaults, no runs yet, and no drive', async () => {
     const r = await request(app).get('/api/backup/status');
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ root: root, rootIsDefault: false, drive: { connected: false }, schedule: { enabled: false, hour: 2, minute: 0 }, keep: { local: 14, drive: 14 }, running: null });
+    const off = { enabled: false, hour: 2, minute: 0 };
+    expect(r.body).toMatchObject({ root: root, rootIsDefault: false, drive: { connected: false }, schedule: { local: off, drive: off }, keep: { local: 14, drive: 14 }, running: null, progress: [] });
     expect(r.body.lastRun).toEqual({ local: null, drive: null });
+    expect(r.body.nextRunAt).toEqual({ local: null, drive: null });
+    expect(r.body.setup).toEqual({ publicUrl: null, googleClientId: false, googleClientSecret: false, redirectUris: null });
+  });
+
+  it('status gives the setup guide the exact redirect URIs the Drive sign-in will use', async () => {
+    const a = mkApp({ publicUrl: 'https://takeoff.example.com/', env: { GOOGLE_OAUTH_CLIENT_ID: 'cid' } });
+    expect((await request(a).get('/api/backup/status')).body.setup).toEqual({
+      publicUrl: 'https://takeoff.example.com/', googleClientId: true, googleClientSecret: false,
+      redirectUris: { backup: 'https://takeoff.example.com/api/backup/drive/callback', restore: 'https://takeoff.example.com/api/setup/restore/drive/callback' },
+    });
+  });
+
+  it('progress lists a run while it is going and is empty once it finishes', async () => {
+    putBuffer(db, dataDir, 'f1', Buffer.from('x'), 'text/plain', { kind: 'document', name: 'x' });
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    // The run's listing (the first one made) waits on the test, so the run
+    // can be caught mid-way; the status route's own listing goes straight through.
+    const orig = LocalStore.prototype.listObjects;
+    let listings = 0;
+    LocalStore.prototype.listObjects = async function (this: LocalStore) { if (listings++ === 0) await gate; return orig.call(this); };
+    const a = mkApp();
+    try {
+      const r = await request(a).post('/api/backup/run').send({ target: 'local' });
+      expect(r.status).toBe(202);
+      // The database copy runs first; wait for the run to reach the gated listing.
+      let mid = await request(a).get('/api/backup/progress');
+      for (let i = 0; i < 100 && mid.body[0]?.phase !== 'scanning'; i++) {
+        await new Promise(res => setTimeout(res, 20));
+        mid = await request(a).get('/api/backup/progress');
+      }
+      expect(mid.status).toBe(200);
+      expect(mid.body).toHaveLength(1);
+      expect(mid.body[0]).toMatchObject({ runId: r.body.runId, target: 'local', trigger: 'manual', phase: 'scanning', percent: 4 });
+      expect((await request(a).get('/api/backup/status')).body.progress).toHaveLength(1);
+      release();
+      await new Promise(res => setTimeout(res, 300));
+      expect((await request(a).get('/api/backup/progress')).body).toEqual([]);
+      expect((await request(a).get('/api/backup/runs')).body[0]).toMatchObject({ status: 'ok' });
+    } finally { LocalStore.prototype.listObjects = orig; release(); }
+  });
+
+  it('a run left marked running by a restart is closed as interrupted, so the next run is not refused', async () => {
+    db.prepare(`INSERT INTO backup_runs (id, target, trigger, startedAt, status) VALUES ('stale', 'local', 'schedule', ?, 'running')`).run(Date.now() - 60_000);
+    const a = mkApp();
+    expect((await request(a).get('/api/backup/status')).body.running).toBeNull();
+    expect((await request(a).get('/api/backup/runs')).body[0]).toMatchObject({ id: 'stale', status: 'error', error: expect.stringMatching(/interrupted/i) });
+    expect((await request(a).post('/api/backup/run').send({ target: 'local' })).status).toBe(202);
   });
 
   it('run → 202 then the run shows ok, a snapshot lists, and a backupRun event was broadcast', async () => {
@@ -64,6 +113,22 @@ describe('backup admin routes', () => {
     expect(r.status).toBe(409); expect(r.body.code).toBe('backup_running');
   });
 
+  it("a snapshot's warnings can be read back, each matched to its file and project", async () => {
+    db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Main St Remodel', 1);
+    putBuffer(db, dataDir, 'f-gone', Buffer.from('x'), 'application/pdf', { kind: 'document', name: 'plans.pdf', projectId: 'p1' });
+    fs.rmSync(pathFor(dataDir, 'f-gone'));
+    await request(app).post('/api/backup/run').send({ target: 'local' });
+    await new Promise(res => setTimeout(res, 300));
+    const snap = (await request(app).get('/api/backup/snapshots?target=local')).body[0];
+    expect(snap.warnings).toBe(1);
+    const r = await request(app).get(`/api/backup/snapshots/${snap.id}/warnings?target=local`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([{ message: 'file f-gone skipped: not on disk', fileId: 'f-gone', fileName: 'plans.pdf', projectName: 'Main St Remodel' }]);
+    expect((await request(app).get(`/api/backup/snapshots/${snap.id}/warnings?target=drive`)).status).toBe(400);
+    expect((await request(app).get('/api/backup/snapshots/nope/warnings?target=local')).status).toBe(400);
+    expect((await request(app).get('/api/backup/snapshots/20200101-000000/warnings?target=local')).status).toBe(502);
+  });
+
   it('download streams a zip that unpacks to the same snapshot', async () => {
     putBuffer(db, dataDir, 'f1', Buffer.from('hello'), 'text/plain', { kind: 'document', name: 'x' });
     await request(app).post('/api/backup/run').send({ target: 'local' });
@@ -78,11 +143,16 @@ describe('backup admin routes', () => {
   });
 
   it('settings round-trip with clamping; non-admin gets 403 everywhere', async () => {
-    const r = await request(app).put('/api/backup/settings').send({ schedule: { enabled: true, hour: 23, minute: 30 }, keep: { local: 0, drive: 9999 } });
+    const r = await request(app).put('/api/backup/settings').send({ schedule: { local: { enabled: true, hour: 23, minute: 30 }, drive: { enabled: true, hour: 99, minute: -5 } }, keep: { local: 0, drive: 9999 } });
     expect(r.status).toBe(200);
-    expect((await request(app).get('/api/backup/status')).body).toMatchObject({ schedule: { enabled: true, hour: 23, minute: 30 }, keep: { local: 1, drive: 365 } });
+    expect((await request(app).get('/api/backup/status')).body).toMatchObject({
+      schedule: { local: { enabled: true, hour: 23, minute: 30 }, drive: { enabled: true, hour: 23, minute: 0 } }, keep: { local: 1, drive: 365 },
+    });
+    // One half alone leaves the other where it was.
+    await request(app).put('/api/backup/settings').send({ schedule: { drive: { enabled: false, hour: 4, minute: 15 } } });
+    expect((await request(app).get('/api/backup/status')).body.schedule).toEqual({ local: { enabled: true, hour: 23, minute: 30 }, drive: { enabled: false, hour: 4, minute: 15 } });
     const member = mkApp({}, { id: 'u2', role: 'user' });
-    for (const [m, p] of [['get', '/api/backup/status'], ['post', '/api/backup/run'], ['get', '/api/backup/runs'], ['put', '/api/backup/settings']] as const) {
+    for (const [m, p] of [['get', '/api/backup/status'], ['post', '/api/backup/run'], ['get', '/api/backup/runs'], ['get', '/api/backup/progress'], ['get', '/api/backup/snapshots/20260912-020000/warnings?target=local'], ['put', '/api/backup/settings']] as const) {
       expect((await (request(member) as any)[m](p).send({})).status).toBe(403);
     }
   });

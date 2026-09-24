@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { pipeline } from 'stream/promises';
+import { pipeline as pipeStreams, Transform } from 'stream';
 import type { BackupSource, BackupTarget, Manifest, SnapshotSummary } from './types';
 import { isSnapshotId } from './types';
 
@@ -21,6 +22,16 @@ export async function sha256OfStream(s: NodeJS.ReadableStream): Promise<{ sha256
   let size = 0;
   for await (const chunk of s as AsyncIterable<Buffer>) { h.update(chunk); size += chunk.length; }
   return { sha256: h.digest('hex'), size };
+}
+
+/** `src` passed through unchanged, telling `onBytes` how many bytes have gone
+ *  by so far. A read error surfaces on the returned stream, and a consumer
+ *  that stops early closes `src` with it. */
+export function countBytes(src: NodeJS.ReadableStream, onBytes: (sent: number) => void): NodeJS.ReadableStream {
+  let sent = 0;
+  const counter = new Transform({ transform(chunk: Buffer, _enc, cb) { sent += chunk.length; onBytes(sent); cb(null, chunk); } });
+  pipeStreams(src, counter, () => { /* any error already reached `counter` */ });
+  return counter;
 }
 
 export const summarize = (id: string, m: Manifest): SnapshotSummary => ({

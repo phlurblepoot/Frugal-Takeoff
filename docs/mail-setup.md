@@ -148,6 +148,24 @@ from §1 cover this too. Without the Drive API enabled or the redirect URIs
 added, "Connect Google Drive" on either screen fails with Google's own
 `redirect_uri_mismatch` or `access_denied` error text.
 
+The same steps, with this deployment's own redirect URIs and copy buttons, are
+in **Settings → Backup → Setup guide**. Two things the steps above do not say:
+
+- **Backing up to a personal @gmail.com Drive** needs the consent screen's user
+  type set to **External** (an Internal app only admits Workspace accounts),
+  and then **Publish app** so it reads *In production*. An External app left in
+  *Testing* has its refresh tokens revoked after 7 days, so Drive backups stop
+  and the Backup tab asks for a reconnect every week. `drive.file` is a
+  non-sensitive scope, so publishing needs no Google review.
+- **Keep the OAuth client.** `drive.file` only shows the app the files it
+  created, and Google ties that to the client's Cloud project. A rebuilt server
+  must use the same client id/secret (and `APP_PUBLIC_URL`) or the restore
+  screen's Drive tab will not see the old snapshots.
+
+Local and Drive backups are scheduled separately (Settings → Backup →
+Schedule & retention). A schedule saved before they were split keeps driving
+both until one of them is changed.
+
 ---
 
 ## 5. Backups and the key file

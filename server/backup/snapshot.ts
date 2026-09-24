@@ -9,9 +9,21 @@ import { pathFor } from '../fileStore';
 import { migrations } from '../migrationList';
 import type { BackupTarget, Manifest, ManifestFile } from './types';
 import { snapshotIdNow } from './types';
-import { sha256OfStream } from './store';
+import { sha256OfStream, countBytes } from './store';
 
 export class BackupRunningError extends Error { constructor() { super('A backup is already running for this target'); } }
+
+export type BackupPhase = 'database' | 'scanning' | 'files' | 'snapshot' | 'pruning';
+/** Where a run has got to. Copying is measured in bytes — the new files the
+ *  target lacked plus the database — because that is where a run's time goes. */
+export interface BackupProgress {
+  runId: string;
+  phase: BackupPhase;
+  /** Whole numbers 0–100; never goes backwards within a run. */
+  percent: number;
+  filesDone: number; filesTotal: number;
+  bytesDone: number; bytesTotal: number;
+}
 
 export interface TakeSnapshotOpts {
   trigger: 'manual' | 'schedule';
@@ -19,7 +31,14 @@ export interface TakeSnapshotOpts {
   appVersion: string;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
+  onProgress?: (p: BackupProgress) => void;
 }
+
+// How much of the bar each phase gets. The database copy and the target's
+// listing are short; the bytes being copied fill everything in between.
+const DB_END = 4;
+const COPY_START = 5;
+const COPY_END = 97;
 export interface SnapshotResult { runId: string; snapshotId: string; objectsAdded: number; bytesWritten: number; warnings: string[] }
 export interface BackupRunRow {
   id: string; target: 'local' | 'drive'; trigger: 'manual' | 'schedule'; startedAt: number; finishedAt: number | null;
@@ -55,15 +74,47 @@ export async function takeSnapshot(db: Database.Database, dataDir: string, targe
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-snap-'));
   const warnings: string[] = [];
   let objectsAdded = 0; let bytesWritten = 0;
+
+  const progress: BackupProgress = { runId, phase: 'database', percent: 0, filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0 };
+  const report = (p: Partial<Omit<BackupProgress, 'runId'>>): void => {
+    // A retry re-reads an upload from its start; the bar holds its place
+    // rather than sliding back.
+    const percent = Math.max(progress.percent, p.percent ?? 0);
+    const bytesDone = Math.max(progress.bytesDone, p.bytesDone ?? 0);
+    Object.assign(progress, p, { percent, bytesDone });
+    try { opts.onProgress?.({ ...progress }); } catch { /* a listener must never fail the backup */ }
+  };
+  // Bytes fully on the target, plus however far the upload in flight has got.
+  let landed = 0;
+  const copied = (inFlight: number): void => {
+    const done = landed + inFlight;
+    const share = progress.bytesTotal > 0 ? Math.min(1, done / progress.bytesTotal) : 1;
+    report({ bytesDone: done, percent: COPY_START + Math.floor((COPY_END - COPY_START) * share) });
+  };
+  report({});
+
   try {
     // 1. consistent database copy (online backup API)
     const dbCopy = path.join(tmpDir, 'app.db');
-    await db.backup(dbCopy);
+    await db.backup(dbCopy, {
+      progress: ({ totalPages, remainingPages }) => {
+        if (totalPages > 0) report({ percent: Math.floor(DB_END * (totalPages - remainingPages) / totalPages) });
+        return 100; // pages per step — better-sqlite3's own default
+      },
+    });
     const dbInfo = await fileSha(dbCopy);
 
     // 2. objects the target lacks
+    report({ phase: 'scanning', percent: DB_END });
     const have = await target.listObjects();
     const rows = db.prepare('SELECT id, sha256, size FROM files').all() as ManifestFile[];
+    // The copy plan, so the bar has a total before the first byte moves.
+    const planned = new Set<string>(); let plannedBytes = 0;
+    for (const row of rows) {
+      if (have.has(row.sha256) || planned.has(row.sha256) || !fs.existsSync(pathFor(dataDir, row.id))) continue;
+      planned.add(row.sha256); plannedBytes += row.size;
+    }
+    report({ phase: 'files', percent: COPY_START, filesTotal: planned.size, bytesTotal: plannedBytes + dbInfo.size });
     const files: ManifestFile[] = [];
     for (const row of rows) {
       const p = pathFor(dataDir, row.id);
@@ -72,12 +123,19 @@ export async function takeSnapshot(db: Database.Database, dataDir: string, targe
         let actual = await fileSha(p);
         if (actual.sha256 !== row.sha256) actual = await fileSha(p); // one retry: a regenerate may be mid-write
         if (actual.sha256 !== row.sha256) { warnings.push(`file ${row.id} skipped: on-disk hash did not match the row after retry`); continue; }
-        await target.putObject(row.sha256, () => fs.createReadStream(p), actual.size);
+        await target.putObject(row.sha256, () => countBytes(fs.createReadStream(p), copied), actual.size);
         have.add(row.sha256);
         objectsAdded++; bytesWritten += actual.size;
+        landed += actual.size;
+        report({ filesDone: progress.filesDone + 1 });
+        copied(0);
       }
       files.push({ id: row.id, sha256: row.sha256, size: row.size });
     }
+    // Anything skipped above was planned but never copied: the totals become
+    // what actually moved, plus the database still to go.
+    report({ phase: 'snapshot', filesTotal: progress.filesDone, bytesTotal: landed + dbInfo.size });
+    copied(0);
 
     // 3. mail key
     const keyPath = path.join(dataDir, 'mail.key');
@@ -90,10 +148,13 @@ export async function takeSnapshot(db: Database.Database, dataDir: string, targe
       db: dbInfo, mailKey, files,
       counts: { files: files.length, bytes: files.reduce((a, f) => a + f.size, 0) }, warnings,
     };
-    await target.writeSnapshot(snapshotId, { dbPath: dbCopy, mailKeyPath: env.MAIL_SECRET_KEY ? null : keyPath, manifest });
+    await target.writeSnapshot(snapshotId, { dbPath: dbCopy, mailKeyPath: env.MAIL_SECRET_KEY ? null : keyPath, manifest, onDbBytes: copied });
     bytesWritten += dbInfo.size;
+    landed += dbInfo.size;
+    copied(0);
 
     // 4. retention
+    report({ phase: 'pruning' });
     await pruneTarget(target, opts.keep, snapshotId);
 
     db.prepare(`UPDATE backup_runs SET finishedAt = ?, status = 'ok', snapshotId = ?, objectsAdded = ?, bytesWritten = ?, warningsJson = ? WHERE id = ?`)

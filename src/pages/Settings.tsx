@@ -30,6 +30,10 @@ const CHANGELOG: ChangelogEntry[] = [
       'Backups, managed by the app: Settings → Backup takes a complete snapshot (database, every file and document, and the mail encryption key) into a backup folder, and after the first one only new or changed files are copied. Set BACKUP_PATH to a second volume; run on a daily schedule or on demand; keep as many snapshots as you like; download any snapshot as one zip.',
       'Google Drive backup: connect a Google account once (Drive access only) and the same snapshots are pushed to a "Frugal Takeoff Backups" folder on Drive, incrementally.',
       'Disaster recovery: on a fresh install the login page offers "Restore from backup" — pick a snapshot from the backup folder, upload a snapshot zip, or connect Google Drive, and the server rebuilds itself from it and restarts.',
+      'Local and Google Drive backups each have their own daily schedule — on or off, and at their own time. A schedule saved before this keeps running both at the same time until it is changed.',
+      'A backup in progress shows a progress bar with its percentage, what it is doing, and how much has been copied.',
+      'Settings → Backup has a collapsible setup guide for the backup folder and for connecting Google Drive, with this server\'s own redirect addresses to copy.',
+      'A snapshot with warnings can be opened to see each one: which file (and project) it is about, and what it means. A backup interrupted by a server restart is now marked as failed instead of blocking every later backup.',
     ],
   },
   {

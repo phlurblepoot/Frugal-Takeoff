@@ -11,10 +11,14 @@
 // link is the honest element for it (middle-click, "copy link") and it keeps
 // the redirect testable without jsdom navigation. Same for the snapshot
 // download, which streams a zip the browser saves itself.
+//
+// A run in progress is polled about once a second (GET /api/backup/progress
+// reads server memory only) for its bar; the change feed's backupRun event
+// still carries the finish.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Cloud, DatabaseBackup, Download, HardDrive, Play, RefreshCw, Save } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Cloud, DatabaseBackup, Download, HardDrive, Play, RefreshCw, Save } from 'lucide-react';
 import {
-  Button, Card, CardBody, CardHeader, Checkbox, Field, Input, Select, Skeleton, StatusPill,
+  Button, Card, CardBody, CardHeader, Checkbox, Field, Input, ProgressBar, Select, Skeleton, StatusPill,
   Table, TBody, TD, TH, THead, TR,
 } from '../../components/ui';
 import { useToast } from '../../components/Toast';
@@ -22,9 +26,10 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
 import {
   BackupRunningError, backupDownloadUrl, backupDriveStartUrl, disconnectBackupDrive, formatBytes,
-  getBackupRuns, getBackupSnapshots, getBackupStatus, runBackup, saveBackupSettings,
-  type BackupRun, type BackupSnapshot, type BackupStatus,
+  getBackupProgress, getBackupRuns, getBackupSnapshotWarnings, getBackupSnapshots, getBackupStatus, runBackup, saveBackupSettings,
+  type BackupProgress, type BackupRun, type BackupSchedule, type BackupSnapshot, type BackupSnapshotWarning, type BackupStatus,
 } from '../../utils/store';
+import { BackupSetupGuide } from './BackupSetupGuide';
 
 type Target = 'local' | 'drive';
 
@@ -42,6 +47,90 @@ const isDriveConnected = (d: DriveState): d is DriveConnected => d.connected;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const MINUTES = [0, 15, 30, 45];
 const pad2 = (n: number) => String(n).padStart(2, '0');
+const PROGRESS_POLL_MS = 1000;
+const plural = (n: number, one: string) => `${n.toLocaleString()} ${one}${n === 1 ? '' : 's'}`;
+
+const phaseText = (p: BackupProgress): string => {
+  switch (p.phase) {
+    case 'database': return 'Copying the database';
+    case 'scanning': return p.target === 'drive' ? 'Checking what is already in Google Drive' : 'Checking what is already in the backup folder';
+    case 'files': return p.filesTotal ? `Copying new and changed files — ${p.filesDone.toLocaleString()} of ${p.filesTotal.toLocaleString()}` : 'No new or changed files to copy';
+    case 'snapshot': return 'Saving the database and snapshot record';
+    case 'pruning': return 'Removing snapshots past the keep limit';
+    default: return 'Working';
+  }
+};
+
+/** One run in flight: what it is doing, and how far along. */
+const RunProgress: React.FC<{ p: BackupProgress }> = ({ p }) => (
+  <div className="space-y-2 rounded-lg border border-edge bg-sunken/50 p-3" data-testid={`backup-progress-${p.target}`}>
+    <div className="flex items-center justify-between gap-3">
+      <span className="flex items-center gap-2 text-sm font-medium text-ink">
+        <RefreshCw size={15} className="animate-spin text-accent-600" />
+        {p.target === 'local' ? 'Backing up to the backup folder…' : 'Backing up to Google Drive…'}
+      </span>
+      <span className="text-sm font-semibold tabular-nums text-ink">{p.percent}%</span>
+    </div>
+    <ProgressBar
+      done={p.percent}
+      total={100}
+      barClassName="breathing"
+      label={p.bytesTotal > 0 ? `${formatBytes(p.bytesDone)} of ${formatBytes(p.bytesTotal)}` : ''}
+    />
+    <p className="text-xs text-ink-soft">{phaseText(p)}</p>
+  </div>
+);
+
+/** A warning, said in terms of the file it is about and what to do next. The
+ *  raw message stays underneath — it is what the server log says too. */
+const WarningItem: React.FC<{ w: BackupSnapshotWarning }> = ({ w }) => {
+  const what = w.fileName
+    ? `${w.fileName}${w.projectName ? ` — ${w.projectName}` : ''}`
+    : w.fileId ? 'A file that is no longer in the app' : 'Backup warning';
+  const why = /skipped: not on disk/.test(w.message)
+    ? "The app lists this file, but its contents are missing from the server's file storage, so there was nothing to back up. Try opening it in the app — if it won't open there either, upload it again."
+    : /hash did not match/.test(w.message)
+      ? 'The file on disk did not match what the app has on record — it may have been changing while the backup ran — so it was left out of this snapshot. The next backup tries it again.'
+      : null;
+  return (
+    <li className="flex items-start gap-2">
+      <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+      <div className="min-w-0 space-y-0.5">
+        <div className="font-medium text-ink">{what}</div>
+        {why && <div className="text-ink-soft">{why}</div>}
+        <code className="block break-all font-mono text-xs text-ink-faint">{w.message}</code>
+      </div>
+    </li>
+  );
+};
+
+/** The daily time and keep count for one target. */
+const SchedulePanel: React.FC<{
+  title: React.ReactNode; checkboxLabel: string; prefix: 'Local' | 'Drive';
+  schedule: BackupSchedule; onSchedule: (s: BackupSchedule) => void;
+  keepId: string; keepLabel: string; keepHint: string; keep: number; onKeep: (n: number) => void;
+  note?: string;
+}> = ({ title, checkboxLabel, prefix, schedule, onSchedule, keepId, keepLabel, keepHint, keep, onKeep, note }) => (
+  <div className="space-y-3 rounded-lg border border-edge p-4">
+    <h3 className="flex items-center gap-2 text-sm font-semibold text-ink">{title}</h3>
+    <div className="flex flex-wrap items-center gap-3">
+      <Checkbox label={checkboxLabel} checked={schedule.enabled} onChange={e => onSchedule({ ...schedule, enabled: e.target.checked })} />
+      <div className="flex items-center gap-2">
+        <Select aria-label={`${prefix} hour`} className="w-auto" value={String(schedule.hour)} onChange={e => onSchedule({ ...schedule, hour: Number(e.target.value) })}>
+          {HOURS.map(h => <option key={h} value={h}>{pad2(h)}</option>)}
+        </Select>
+        <span className="text-ink-soft">:</span>
+        <Select aria-label={`${prefix} minute`} className="w-auto" value={String(schedule.minute)} onChange={e => onSchedule({ ...schedule, minute: Number(e.target.value) })}>
+          {MINUTES.map(m => <option key={m} value={m}>{pad2(m)}</option>)}
+        </Select>
+      </div>
+    </div>
+    {note && <p className="text-xs text-ink-faint">{note}</p>}
+    <Field label={keepLabel} htmlFor={keepId} hint={keepHint}>
+      <Input id={keepId} type="number" min={1} value={keep} onChange={e => onKeep(Number(e.target.value))} />
+    </Field>
+  </div>
+);
 
 /** One finished run, as it reads on the status card. A failure shows its error
  *  text verbatim — it is usually the whole diagnosis ("disk full"). */
@@ -78,9 +167,15 @@ export const BackupTab: React.FC = () => {
   // Draft copies of the settings. They are adopted from the server on every
   // load until the user touches the form — a live reload landing mid-edit must
   // not silently undo what they just typed.
-  const [schedule, setSchedule] = useState<BackupStatus['schedule']>({ enabled: false, hour: 2, minute: 0 });
+  const [schedule, setSchedule] = useState<BackupStatus['schedule']>({
+    local: { enabled: false, hour: 2, minute: 0 }, drive: { enabled: false, hour: 2, minute: 0 },
+  });
   const [keep, setKeep] = useState<BackupStatus['keep']>({ local: 14, drive: 14 });
   const formDirty = useRef(false);
+  const [progress, setProgress] = useState<BackupProgress[]>([]);
+  // Which snapshot's warnings are open, and what the server said about them.
+  const [openWarnings, setOpenWarnings] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<{ id: string; items: BackupSnapshotWarning[] | null; error: string | null } | null>(null);
 
   // Read through a ref so `load` stays identity-stable: useLiveQuery only
   // re-runs its initial load when the *filter* changes, so a `load` that
@@ -97,6 +192,7 @@ export const BackupTab: React.FC = () => {
         getBackupSnapshots(viewRef.current).catch(() => [] as BackupSnapshot[]),
       ]);
       setStatus(s);
+      setProgress(s.progress ?? []);
       if (!formDirty.current) { setSchedule(s.schedule); setKeep(s.keep); }
       setSnapshots(snaps);
       setError(null);
@@ -113,12 +209,46 @@ export const BackupTab: React.FC = () => {
   const firstView = useRef(true);
   useEffect(() => {
     if (firstView.current) { firstView.current = false; return; }
+    setOpenWarnings(null);
     let cancelled = false;
     getBackupSnapshots(view)
       .then(s => { if (!cancelled) setSnapshots(s); })
       .catch(() => { if (!cancelled) setSnapshots([]); });
     return () => { cancelled = true; };
   }, [view]);
+
+  // While a run is going its bar is polled once a second. The poll ends itself
+  // once nothing is left in flight, and one more load then shows the result
+  // (the backupRun event usually gets there first).
+  const runningId = status?.running?.id ?? null;
+  useEffect(() => {
+    if (!runningId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const p = await getBackupProgress();
+        if (cancelled) return;
+        setProgress(p);
+        if (p.length === 0) { void load(); return; }
+      } catch { /* a missed poll is simply retried on the next one */ }
+      if (!cancelled) timer = setTimeout(poll, PROGRESS_POLL_MS);
+    };
+    timer = setTimeout(poll, PROGRESS_POLL_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [runningId, load]);
+
+  const toggleWarnings = async (id: string) => {
+    if (openWarnings === id) { setOpenWarnings(null); return; }
+    setOpenWarnings(id);
+    setWarnings({ id, items: null, error: null });
+    try {
+      const items = await getBackupSnapshotWarnings(view, id);
+      setWarnings(w => (w?.id === id ? { id, items, error: null } : w));
+    } catch (e) {
+      setWarnings(w => (w?.id === id ? { id, items: [], error: errText(e) } : w));
+    }
+  };
 
   // The Drive OAuth callback lands back here as /settings?tab=backup&drive=connected
   // (or &error=…). Read it off the URL and clear it so a reload is not a rerun
@@ -212,6 +342,14 @@ export const BackupTab: React.FC = () => {
   // Pulled out so the connected/not-connected union narrows once for the whole
   // Drive card (TS will not narrow a nested `status.drive.*` path across JSX).
   const drive = status.drive;
+  // A run the status knows about but no progress has arrived for yet still
+  // gets its panel, at 0%, rather than nothing.
+  const inFlight: BackupProgress[] = progress.length ? progress : running ? [{
+    runId: running.id, target: running.target, trigger: running.trigger, phase: 'database',
+    percent: 0, filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0,
+  }] : [];
+  const editSchedule = (t: 'local' | 'drive', v: BackupSchedule) => { formDirty.current = true; setSchedule(s => ({ ...s, [t]: v })); };
+  const editKeep = (t: 'local' | 'drive', n: number) => { formDirty.current = true; setKeep(k => ({ ...k, [t]: n })); };
 
   return (
     <div className="space-y-6">
@@ -257,15 +395,12 @@ export const BackupTab: React.FC = () => {
             </div>
           </div>
 
-          <p className="text-sm text-ink-soft">
-            Next scheduled run: <span className="text-ink">{status.nextRunAt ? when(status.nextRunAt) : 'Not scheduled'}</span>
-          </p>
+          <div className="space-y-0.5 text-sm text-ink-soft">
+            <p>Next local backup: <span className="text-ink">{status.nextRunAt.local ? when(status.nextRunAt.local) : 'Not scheduled'}</span></p>
+            <p>Next Drive backup: <span className="text-ink">{status.nextRunAt.drive ? when(status.nextRunAt.drive) : 'Not scheduled'}</span></p>
+          </div>
 
-          {running && (
-            <p className="flex items-center gap-2 text-sm text-accent-700 dark:text-accent-300">
-              <RefreshCw size={15} className="animate-spin" /> Backing up… ({running.target})
-            </p>
-          )}
+          {inFlight.map(p => <RunProgress key={p.runId} p={p} />)}
 
           <div className="flex flex-wrap gap-2 border-t border-edge pt-4">
             <Button disabled={busy || !!running} onClick={() => void start('local')}>
@@ -307,58 +442,44 @@ export const BackupTab: React.FC = () => {
               </a>
             </>
           ) : (
-            <p className="text-sm text-ink-soft">Set GOOGLE_OAUTH_CLIENT_ID / SECRET and APP_PUBLIC_URL to enable Drive</p>
+            <p className="text-sm text-ink-soft">
+              Google Drive is not set up on this server yet. The setup guide below walks through it step by step.
+            </p>
           )}
         </CardBody>
       </Card>
 
+      <BackupSetupGuide setup={status.setup} root={status.root} rootIsDefault={status.rootIsDefault} />
+
       <Card>
         <CardHeader title="Schedule &amp; retention" />
         <CardBody className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <Checkbox
-              label="Run every day at"
-              checked={schedule.enabled}
-              onChange={e => { formDirty.current = true; setSchedule(s => ({ ...s, enabled: e.target.checked })); }}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <SchedulePanel
+              title={<><HardDrive size={15} className="text-accent-600" /> Backup folder</>}
+              checkboxLabel="Back up locally every day at"
+              prefix="Local"
+              schedule={schedule.local}
+              onSchedule={v => editSchedule('local', v)}
+              keepId="backup-keep-local"
+              keepLabel="Keep local snapshots"
+              keepHint="Older local snapshots are pruned after each run."
+              keep={keep.local}
+              onKeep={n => editKeep('local', n)}
             />
-            <Select
-              aria-label="Hour"
-              className="w-auto"
-              value={String(schedule.hour)}
-              onChange={e => { formDirty.current = true; setSchedule(s => ({ ...s, hour: Number(e.target.value) })); }}
-            >
-              {HOURS.map(h => <option key={h} value={h}>{pad2(h)}</option>)}
-            </Select>
-            <span className="text-ink-soft">:</span>
-            <Select
-              aria-label="Minute"
-              className="w-auto"
-              value={String(schedule.minute)}
-              onChange={e => { formDirty.current = true; setSchedule(s => ({ ...s, minute: Number(e.target.value) })); }}
-            >
-              {MINUTES.map(m => <option key={m} value={m}>{pad2(m)}</option>)}
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Keep local snapshots" htmlFor="backup-keep-local" hint="Older local snapshots are pruned after each run.">
-              <Input
-                id="backup-keep-local"
-                type="number"
-                min={1}
-                value={keep.local}
-                onChange={e => { formDirty.current = true; setKeep(k => ({ ...k, local: Number(e.target.value) })); }}
-              />
-            </Field>
-            <Field label="Keep Drive snapshots" htmlFor="backup-keep-drive" hint="Applies to the copies in Google Drive.">
-              <Input
-                id="backup-keep-drive"
-                type="number"
-                min={1}
-                value={keep.drive}
-                onChange={e => { formDirty.current = true; setKeep(k => ({ ...k, drive: Number(e.target.value) })); }}
-              />
-            </Field>
+            <SchedulePanel
+              title={<><Cloud size={15} className="text-accent-600" /> Google Drive</>}
+              checkboxLabel="Back up to Drive every day at"
+              prefix="Drive"
+              schedule={schedule.drive}
+              onSchedule={v => editSchedule('drive', v)}
+              keepId="backup-keep-drive"
+              keepLabel="Keep Drive snapshots"
+              keepHint="Older Drive snapshots are pruned after each Drive run."
+              keep={keep.drive}
+              onKeep={n => editKeep('drive', n)}
+              note={isDriveConnected(drive) ? undefined : 'Runs once Google Drive is connected.'}
+            />
           </div>
 
           <Button disabled={saving} onClick={() => void saveSettings()}>
@@ -407,20 +528,56 @@ export const BackupTab: React.FC = () => {
               </THead>
               <TBody>
                 {snapshots.map(s => (
-                  <TR key={s.id}>
-                    <TD className="font-mono">{s.id}</TD>
-                    <TD>{s.appVersion}</TD>
-                    <TD>{s.counts.files.toLocaleString()}</TD>
-                    <TD>{formatBytes(s.counts.bytes)}</TD>
-                    <TD>{s.warnings > 0 ? <StatusPill tone="amber">{s.warnings}</StatusPill> : <span className="text-ink-faint">0</span>}</TD>
-                    <TD>
-                      {view === 'local' && (
-                        <a href={backupDownloadUrl(s.id)} download className="inline-flex items-center gap-1 text-sm font-medium text-accent-600 hover:underline">
-                          <Download size={14} /> Download zip
-                        </a>
-                      )}
-                    </TD>
-                  </TR>
+                  <React.Fragment key={s.id}>
+                    <TR>
+                      <TD className="font-mono">{s.id}</TD>
+                      <TD>{s.appVersion}</TD>
+                      <TD>{s.counts.files.toLocaleString()}</TD>
+                      <TD>{formatBytes(s.counts.bytes)}</TD>
+                      <TD>
+                        {s.warnings > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => void toggleWarnings(s.id)}
+                            aria-expanded={openWarnings === s.id}
+                            title="Show what the warnings are"
+                            className="inline-flex items-center gap-1 rounded-full"
+                          >
+                            <StatusPill tone="amber">
+                              <span className="inline-flex items-center gap-1">
+                                {plural(s.warnings, 'warning')}
+                                <ChevronDown size={12} className={`transition-transform ${openWarnings === s.id ? 'rotate-180' : ''}`} />
+                              </span>
+                            </StatusPill>
+                          </button>
+                        ) : <span className="text-ink-faint">0</span>}
+                      </TD>
+                      <TD>
+                        {view === 'local' && (
+                          <a href={backupDownloadUrl(s.id)} download className="inline-flex items-center gap-1 text-sm font-medium text-accent-600 hover:underline">
+                            <Download size={14} /> Download zip
+                          </a>
+                        )}
+                      </TD>
+                    </TR>
+                    {openWarnings === s.id && (
+                      <TR>
+                        <TD colSpan={6} className="bg-sunken/40">
+                          {!warnings?.items ? (
+                            <p className="text-sm text-ink-faint">Loading…</p>
+                          ) : warnings.error ? (
+                            <p className="text-sm text-red-600 dark:text-red-400">{warnings.error}</p>
+                          ) : warnings.items.length === 0 ? (
+                            <p className="text-sm text-ink-faint">This snapshot recorded no warning text.</p>
+                          ) : (
+                            <ul className="space-y-3 text-sm">
+                              {warnings.items.map((w, i) => <WarningItem key={i} w={w} />)}
+                            </ul>
+                          )}
+                        </TD>
+                      </TR>
+                    )}
+                  </React.Fragment>
                 ))}
               </TBody>
             </Table>
@@ -443,6 +600,11 @@ export const BackupTab: React.FC = () => {
                   <span className="text-ink">{when(r.startedAt)}</span>
                   <span className="text-ink-soft">{r.target} · {r.trigger}</span>
                   {r.status === 'ok' && <span className="text-ink-soft">{formatBytes(r.bytesWritten)}</span>}
+                  {r.warnings.length > 0 && (
+                    <span className="text-amber-700 dark:text-amber-300">
+                      {plural(r.warnings.length, 'warning')}: {r.warnings.slice(0, 3).join('; ')}{r.warnings.length > 3 ? ` and ${r.warnings.length - 3} more` : ''}
+                    </span>
+                  )}
                   {r.error && <span className="text-red-600 dark:text-red-400">{r.error}</span>}
                 </li>
               ))}

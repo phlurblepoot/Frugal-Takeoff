@@ -3,6 +3,8 @@ import type Database from 'better-sqlite3';
 import type { MailCrypto } from '../mail/crypto';
 
 export interface BackupSchedule { enabled: boolean; hour: number; minute: number }
+/** Local and Drive backups each run on their own daily schedule. */
+export interface BackupSchedules { local: BackupSchedule; drive: BackupSchedule }
 export interface DriveConnection { refreshToken: string; email: string; folderId: string; objectsFolderId: string; snapshotsFolderId: string; needsReconnect?: boolean }
 
 const get = (db: Database.Database, key: string): string | null =>
@@ -15,12 +17,26 @@ const clamp = (n: unknown, lo: number, hi: number, dflt: number): number => {
   const v = Math.floor(Number(n)); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
 };
 
-export function readSchedule(db: Database.Database): BackupSchedule {
-  try { const s = JSON.parse(get(db, 'backup.schedule') ?? '') ; return { enabled: !!s.enabled, hour: clamp(s.hour, 0, 23, 2), minute: clamp(s.minute, 0, 59, 0) }; }
-  catch { return { enabled: false, hour: 2, minute: 0 }; }
+const OFF: BackupSchedule = { enabled: false, hour: 2, minute: 0 };
+const normalize = (s: any): BackupSchedule => ({ enabled: !!s?.enabled, hour: clamp(s?.hour, 0, 23, 2), minute: clamp(s?.minute, 0, 59, 0) });
+const parseSchedule = (raw: string | null): BackupSchedule | null => {
+  if (raw === null) return null;
+  try { const s = JSON.parse(raw); return s && typeof s === 'object' ? normalize(s) : null; } catch { return null; }
+};
+
+// Local keeps the key the single shared schedule always used. Drive has its
+// own key, and until one is saved it follows the local schedule — which is
+// what the shared schedule meant (local, then Drive straight after).
+export function readSchedule(db: Database.Database): BackupSchedules {
+  const local = parseSchedule(get(db, 'backup.schedule')) ?? OFF;
+  return { local, drive: parseSchedule(get(db, 'backup.scheduleDrive')) ?? local };
 }
-export function writeSchedule(db: Database.Database, s: BackupSchedule): void {
-  set(db, 'backup.schedule', JSON.stringify({ enabled: !!s.enabled, hour: clamp(s.hour, 0, 23, 2), minute: clamp(s.minute, 0, 59, 0) }));
+/** Either half may be left out; both keys are written, so a Drive schedule
+ *  that was only ever inherited is pinned before local moves away from it. */
+export function writeSchedule(db: Database.Database, s: { local?: unknown; drive?: unknown }): void {
+  const cur = readSchedule(db);
+  set(db, 'backup.schedule', JSON.stringify(s.local ? normalize(s.local) : cur.local));
+  set(db, 'backup.scheduleDrive', JSON.stringify(s.drive ? normalize(s.drive) : cur.drive));
 }
 export function readKeep(db: Database.Database): { local: number; drive: number } {
   const local = get(db, 'backup.keepLocal');

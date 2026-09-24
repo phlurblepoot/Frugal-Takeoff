@@ -17,7 +17,9 @@ export interface BackupTarget {
   /** Called once per run; returns the set of sha256 already stored. */
   listObjects(): Promise<Set<string>>;
   putObject(sha256: string, source: () => NodeJS.ReadableStream, size: number): Promise<void>;
-  writeSnapshot(id: string, files: { dbPath: string; mailKeyPath: string | null; manifest: Manifest }): Promise<void>;
+  /** `onDbBytes`, when a target can report it, is told how much of app.db
+   *  has been sent so far (from 0 again if a retry starts it over). */
+  writeSnapshot(id: string, files: { dbPath: string; mailKeyPath: string | null; manifest: Manifest; onDbBytes?: (sent: number) => void }): Promise<void>;
   listSnapshots(): Promise<SnapshotSummary[]>;
   /** Ids of snapshot folders that exist but carry no manifest.json — what a
    *  run that died mid-write leaves behind. Every listing ignores them, so

@@ -521,13 +521,26 @@ export const formatBytes = (bytes: number): string => {
 // PUTs that fetchWithRetry deliberately never retries.
 export interface BackupRun { id: string; target: 'local' | 'drive'; trigger: 'manual' | 'schedule'; startedAt: number; finishedAt: number | null; status: 'running' | 'ok' | 'error'; snapshotId: string | null; objectsAdded: number; bytesWritten: number; warnings: string[]; error: string | null }
 export interface BackupSnapshot { id: string; createdAt: number; appVersion: string; schemaVersion: number; counts: { files: number; bytes: number }; warnings: number }
+export interface BackupSchedule { enabled: boolean; hour: number; minute: number }
+/** A run in flight. `percent` is 0–100 and only ever goes up. */
+export interface BackupProgress {
+  runId: string; target: 'local' | 'drive'; trigger: 'manual' | 'schedule';
+  phase: 'database' | 'scanning' | 'files' | 'snapshot' | 'pruning';
+  percent: number; filesDone: number; filesTotal: number; bytesDone: number; bytesTotal: number;
+}
 export interface BackupStatus {
   root: string; rootIsDefault: boolean;
   lastRun: { local: BackupRun | null; drive: BackupRun | null }; running: BackupRun | null;
-  totals: { snapshots: number; objects: number; bytes: number }; nextRunAt: number | null;
-  schedule: { enabled: boolean; hour: number; minute: number }; keep: { local: number; drive: number };
+  totals: { snapshots: number; objects: number; bytes: number };
+  nextRunAt: { local: number | null; drive: number | null };
+  schedule: { local: BackupSchedule; drive: BackupSchedule }; keep: { local: number; drive: number };
+  progress: BackupProgress[];
   drive: { connected: true; email: string; needsReconnect: boolean } | { connected: false; configurable: boolean };
+  /** What the setup guide shows; redirect URIs are null until APP_PUBLIC_URL is set. */
+  setup: { publicUrl: string | null; googleClientId: boolean; googleClientSecret: boolean; redirectUris: { backup: string; restore: string } | null };
 }
+/** One warning from a snapshot's manifest, matched to the file it names while that file still exists. */
+export interface BackupSnapshotWarning { message: string; fileId: string | null; fileName: string | null; projectName: string | null }
 
 /** Thrown for the server's 409 `backup_running` so the UI can say "already
  *  running" instead of showing a generic failure for a harmless collision. */
@@ -597,10 +610,22 @@ export const getBackupSnapshots = async (target: 'local' | 'drive'): Promise<Bac
   return res.json();
 };
 
+export const getBackupProgress = async (): Promise<BackupProgress[]> => {
+  const res = await fetchWithRetry('/api/backup/progress', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getBackupSnapshotWarnings = async (target: 'local' | 'drive', id: string): Promise<BackupSnapshotWarning[]> => {
+  const res = await fetchWithRetry(`/api/backup/snapshots/${encodeURIComponent(id)}/warnings?target=${target}`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
 export const backupDownloadUrl = (id: string): string =>
   `/api/backup/snapshots/${encodeURIComponent(id)}/download?${tokenParam()}`;
 
-export const saveBackupSettings = async (s: { schedule?: BackupStatus['schedule']; keep?: BackupStatus['keep'] }): Promise<void> => {
+export const saveBackupSettings = async (s: { schedule?: Partial<BackupStatus['schedule']>; keep?: BackupStatus['keep'] }): Promise<void> => {
   await handleResponse(await backupJson('PUT', '/api/backup/settings', s));
 };
 

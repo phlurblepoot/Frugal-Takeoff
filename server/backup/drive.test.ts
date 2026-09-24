@@ -179,6 +179,21 @@ describe('DriveStore', () => {
     expect((await st.listSnapshots()).map(s => s.id)).toEqual(['20260912-000000']);
   });
 
+  it('writeSnapshot tells onDbBytes how much of app.db has gone, starting over from 0 when a retry re-sends it', async () => {
+    const folders = await ensureDriveFolders(async () => 'AT', fake.fetch as any);
+    const st = new DriveStore({ refreshToken: 'r', email: 'a@b', ...folders }, { env, fetch: fake.fetch as any, sleep: async () => {} });
+    const fs = await import('fs'); const os = await import('os'); const path = await import('path');
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ft-dr-')), 'db');
+    const size = 9 * 1024 * 1024 + 5; // more than one 8 MiB chunk
+    fs.writeFileSync(dbPath, Buffer.alloc(size, 1));
+    fake.failNextUploadWith = 503; // app.db's first chunk
+    const sent: number[] = [];
+    await st.writeSnapshot('20260912-000000', { dbPath, mailKeyPath: null, manifest: manifest([]), onDbBytes: n => sent.push(n) });
+    expect(sent.at(-1)).toBe(size);
+    expect(sent.filter((n, i) => i > 0 && n < sent[i - 1]).length).toBe(1); // the one retry
+    expect([...fake.files.values()].find(f => f.name === 'app.db')!.data!.length).toBe(size);
+  });
+
   it('writeSnapshot uploads app.db, mail.key, then manifest last; listSnapshots/readManifest/openObject round-trip; prune deletes', async () => {
     const st = await mk();
     const fs = await import('fs'); const os = await import('os'); const path = await import('path');

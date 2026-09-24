@@ -12,7 +12,7 @@ import type { MailCrypto } from '../mail/crypto';
 import { readDrive, writeDrive, type DriveConnection } from './settings';
 import type { BackupSource, BackupTarget, Manifest, SnapshotSummary } from './types';
 import { isSnapshotId } from './types';
-import { summarize } from './store';
+import { summarize, countBytes } from './store';
 
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 export const DRIVE_STATE_TYP = 'backup_drive_state';
@@ -162,10 +162,11 @@ export class DriveStore implements BackupTarget, BackupSource {
     }
   }
   async putObject(sha256: string, source: () => NodeJS.ReadableStream, size: number): Promise<void> { if (!isSha(sha256)) throw new Error('bad object id'); await this.upload(sha256, this.conn.objectsFolderId, source, size); }
-  async writeSnapshot(id: string, files: { dbPath: string; mailKeyPath: string | null; manifest: Manifest }): Promise<void> {
+  async writeSnapshot(id: string, files: { dbPath: string; mailKeyPath: string | null; manifest: Manifest; onDbBytes?: (sent: number) => void }): Promise<void> {
     const folder = await findOrCreateFolder(this.access, this.opts.fetch, id, this.conn.snapshotsFolderId);
-    const up = (name: string, p: string) => this.upload(name, folder, () => fs.createReadStream(p), fs.statSync(p).size);
-    await up('app.db', files.dbPath);
+    const up = (name: string, p: string, onBytes?: (sent: number) => void) =>
+      this.upload(name, folder, () => (onBytes ? countBytes(fs.createReadStream(p), onBytes) : fs.createReadStream(p)), fs.statSync(p).size);
+    await up('app.db', files.dbPath, files.onDbBytes);
     if (files.mailKeyPath) await up('mail.key', files.mailKeyPath);
     const m = Buffer.from(JSON.stringify(files.manifest, null, 2));
     await this.upload('manifest.json', folder, () => Readable.from([m]), m.length); // LAST

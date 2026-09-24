@@ -10,11 +10,11 @@ import type Database from 'better-sqlite3';
 import type { MailCrypto } from '../mail/crypto';
 import type { EntityChangedEvent } from '../realtime/changeFeed';
 import { LocalStore } from './store';
-import { takeSnapshot, listRuns, isRunActive, BackupRunningError, type SnapshotResult } from './snapshot';
+import { takeSnapshot, listRuns, isRunActive, BackupRunningError, type BackupProgress, type SnapshotResult } from './snapshot';
 import { streamSnapshotZip, unpackSnapshotZip } from './zip';
 import { isFreshInstall, restoreSnapshot, RestoreRefusedError, DEFAULT_ADMIN_ID } from './restore';
 import { readSchedule, writeSchedule, readKeep, writeKeep, readDrive, writeDrive, type DriveConnection } from './settings';
-import { driveAuthUrl, signDriveState, verifyDriveState, driveExchange, ensureDriveFolders } from './drive';
+import { driveAuthUrl, driveRedirectUri, signDriveState, verifyDriveState, driveExchange, ensureDriveFolders } from './drive';
 import { createVerifier, challengeOf } from '../mail/oauth';
 import { TokenSource } from '../mail/providers/tokenSource';
 import { googleRefresh } from '../mail/providers/google';
@@ -36,11 +36,13 @@ export interface BackupRouteDeps {
 export interface BackupRoutesHandle {
   startRun: (t: Target, trigger: 'manual' | 'schedule') => Promise<string>;
   runAndWait: (t: Target, trigger: 'manual' | 'schedule') => Promise<SnapshotResult>;
-  setScheduler: (s: { nextRunAt(): number | null }) => void;
+  setScheduler: (s: { nextRunAt(t: Target): number | null }) => void;
 }
 
 const TARGETS = ['local', 'drive'] as const;
 type Target = typeof TARGETS[number];
+/** A run in flight, as GET /api/backup/progress reports it. */
+export interface LiveBackupProgress extends BackupProgress { target: Target; trigger: 'manual' | 'schedule' }
 const isTarget = (v: unknown): v is Target => typeof v === 'string' && (TARGETS as readonly string[]).includes(v);
 
 export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps): BackupRoutesHandle {
@@ -52,7 +54,18 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     if (!conn || !deps.driveStore) return null;
     return deps.driveStore(conn);
   };
-  let scheduler: { nextRunAt(): number | null } | null = null;
+  let scheduler: { nextRunAt(t: Target): number | null } | null = null;
+
+  // A run lives only as long as the process that started it. A row still
+  // marked running now was cut off by a restart or crash — left alone it
+  // would read as in progress for ever and refuse every later run of that
+  // target.
+  db.prepare(`UPDATE backup_runs SET status = 'error', finishedAt = ?, error = ? WHERE status = 'running'`)
+    .run(Date.now(), 'Interrupted: the server stopped before this backup finished');
+
+  // Latest progress of each run in flight. Memory is enough: it is only
+  // meaningful while the run is, and the run cannot outlive the process.
+  const live = new Map<Target, LiveBackupProgress>();
 
   // Shared by startRun (fire-and-forget) and runAndWait (scheduler): resolve
   // the target, guard against a concurrent run, and take the snapshot.
@@ -61,7 +74,15 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     if (!target) throw new Error(t === 'drive' ? 'Google Drive is not connected' : 'no target');
     if (isRunActive(db, t)) throw new BackupRunningError();
     const keep = readKeep(db)[t];
-    return takeSnapshot(db, deps.dataDir, target, { trigger, keep, appVersion: deps.appVersion, env: deps.env });
+    let runId: string | null = null;
+    return takeSnapshot(db, deps.dataDir, target, {
+      trigger, keep, appVersion: deps.appVersion, env: deps.env,
+      onProgress: p => { runId = p.runId; live.set(t, { ...p, target: t, trigger }); },
+    }).finally(() => {
+      // Only this run's own entry: one that lost the claim to a run already
+      // going never reported, and must not wipe that run's progress.
+      if (runId && live.get(t)?.runId === runId) live.delete(t);
+    });
   };
 
   // Run in the background; the response is the run id, progress arrives via
@@ -107,8 +128,17 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
       root: deps.backupRoot, rootIsDefault: deps.backupRootIsDefault,
       lastRun: { local: lastRun('local'), drive: lastRun('drive') }, running,
       totals: { snapshots: snaps.length, objects: objects.size, bytes: snaps[0]?.counts.bytes ?? 0 },
-      nextRunAt: scheduler?.nextRunAt() ?? null,
+      nextRunAt: { local: scheduler?.nextRunAt('local') ?? null, drive: scheduler?.nextRunAt('drive') ?? null },
       schedule: readSchedule(db), keep: readKeep(db),
+      progress: [...live.values()],
+      // What the setup guide shows. The redirect URIs come from the same
+      // function the OAuth flow uses, so what an admin pastes into Google is
+      // byte-identical to what the server will send.
+      setup: {
+        publicUrl: deps.publicUrl,
+        googleClientId: !!deps.env.GOOGLE_OAUTH_CLIENT_ID, googleClientSecret: !!deps.env.GOOGLE_OAUTH_CLIENT_SECRET,
+        redirectUris: deps.publicUrl ? { backup: driveRedirectUri(deps.publicUrl, 'admin'), restore: driveRedirectUri(deps.publicUrl, 'setup') } : null,
+      },
       // `configurable` gates the Connect link, which 503s without a public URL
       // to send Google back to — so both halves have to be present.
       drive: drive ? { connected: true, email: drive.email, needsReconnect: !!drive.needsReconnect } : { connected: false, configurable: !!deps.env.GOOGLE_OAUTH_CLIENT_ID && !!deps.publicUrl },
@@ -125,6 +155,12 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     }
   });
 
+  // Polled by the Backup tab about once a second while a run is going, so it
+  // reads memory only — no disk, no Drive.
+  app.get('/api/backup/progress', authenticateToken, requireAdmin, (_req, res) => {
+    res.json([...live.values()]);
+  });
+
   app.get('/api/backup/runs', authenticateToken, requireAdmin, (_req, res) => {
     res.json(listRuns(db).map(r => ({ ...r, warnings: JSON.parse(r.warningsJson || '[]') })));
   });
@@ -136,6 +172,27 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     if (!target) return res.json([]);
     try { res.json(await target.listSnapshots()); }
     catch (e) { console.error('[backup] list snapshots failed', e); res.status(502).json({ error: (e as Error).message }); }
+  });
+
+  // The snapshot list carries only a count of warnings; the messages live in
+  // that snapshot's manifest and are read when someone asks. A warning names a
+  // file by id, so each is matched to the file's name and project while that
+  // file still exists — an id alone tells an admin nothing.
+  app.get('/api/backup/snapshots/:id/warnings', authenticateToken, requireAdmin, async (req, res) => {
+    const t = req.query.target;
+    if (!isTarget(t)) return res.status(400).json({ error: 'target must be local or drive' });
+    if (!isSnapshotId(req.params.id)) return res.status(400).json({ error: 'bad snapshot id' });
+    const target = targetFor(t);
+    if (!target) return res.status(400).json({ error: 'Google Drive is not connected' });
+    let warnings: string[];
+    try { warnings = (await target.readManifest(req.params.id)).warnings ?? []; }
+    catch (e) { console.error('[backup] read snapshot warnings failed', e); return res.status(502).json({ error: 'Could not read that snapshot' }); }
+    const lookup = db.prepare(`SELECT f.name AS fileName, p.name AS projectName FROM files f LEFT JOIN projects p ON p.id = f.projectId WHERE f.id = ?`);
+    res.json(warnings.map(message => {
+      const fileId = /^file (\S+) skipped: /.exec(message)?.[1] ?? null;
+      const row = fileId ? lookup.get(fileId) as { fileName: string | null; projectName: string | null } | undefined : undefined;
+      return { message, fileId, fileName: row?.fileName ?? null, projectName: row?.projectName ?? null };
+    }));
   });
 
   app.get('/api/backup/snapshots/:id/download', authOrQueryToken, requireAdmin, async (req, res) => {
