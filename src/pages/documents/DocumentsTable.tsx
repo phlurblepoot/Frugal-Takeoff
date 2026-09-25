@@ -114,7 +114,7 @@ export const DocumentsTable: React.FC<{
 
   const handleOpen = async (row: DocumentRow) => {
     const target = openTargetFor(row);
-    if (target.type === 'pdf' || target.type === 'sheet') navigate(target.url!);
+    if (target.type === 'edit') navigate(target.url!);
     else if (target.type === 'image') window.open(target.url!, '_blank');
     else {
       try { downloadBlob(await fetchFileBlob(row.id), row.name ?? row.id); }

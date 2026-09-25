@@ -25,8 +25,7 @@ import { ProjectSettings } from './pages/project/ProjectSettings';
 import { Login } from './pages/Login';
 import { RestorePage } from './pages/RestorePage';
 import { Settings } from './pages/Settings';
-import { PdfEditor } from './pages/PdfEditor';
-import { SpreadsheetEditor } from './pages/SpreadsheetEditor';
+import { DocumentEditor } from './pages/DocumentEditor';
 import { TasksPage } from './pages/TasksPage';
 import { TimeKeeping } from './pages/TimeKeeping';
 import { CustomersSplitView } from './pages/customers/CustomersSplitView';
@@ -98,7 +97,13 @@ export default function App() {
     fetchSettings();
   }, []);
 
-  const router = createBrowserRouter([
+  /** Old editor addresses → the document editor, keeping ?fileId=. */
+const LegacyEditorRedirect: React.FC = () => {
+  const { search } = useLocation();
+  return <Navigate to={`/tools/edit${search}`} replace />;
+};
+
+const router = createBrowserRouter([
     {
       path: '/',
       element: <Layout appName={appName} logoUrl={logoUrl} />,
@@ -153,21 +158,15 @@ export default function App() {
           element: <Settings />,
         },
         {
-          path: 'tools/pdf',
-          element: <PdfEditor />,
+          path: 'tools/edit',
+          element: <DocumentEditor />,
         },
-        {
-          path: 'tools/sheets',
-          element: <SpreadsheetEditor />,
-        },
-        {
-          path: 'pdf-editor',
-          element: <Navigate to="/tools/pdf" replace />,
-        },
-        {
-          path: 'spreadsheet-editor',
-          element: <Navigate to="/tools/sheets" replace />,
-        },
+        // The ONLYOFFICE editor replaced the separate PDF and spreadsheet
+        // editors; their old addresses (bookmarks, emailed links) still work.
+        ...['tools/pdf', 'tools/sheets', 'pdf-editor', 'spreadsheet-editor'].map(path => ({
+          path,
+          element: <LegacyEditorRedirect />,
+        })),
         {
           path: 'customers',
           element: <CustomersSplitView />,

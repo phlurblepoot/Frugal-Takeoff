@@ -12,6 +12,9 @@ export const AppShell: React.FC<{ appName: string; children: React.ReactNode }> 
   const location = useLocation();
   const isBare = isBareRoute(location.pathname);
   const isCanvasPage = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
+  // A file open in the document editor gets the same thin rail as the canvas:
+  // ONLYOFFICE's toolbar wants the width.
+  const isEditorOpen = location.pathname === '/tools/edit' && new URLSearchParams(location.search).has('fileId');
 
   const [sidebarState, setSidebarState] = useState<SidebarState>(() => {
     const saved = localStorage.getItem(SIDEBAR_STORAGE_KEY) as SidebarState | null;
@@ -45,7 +48,7 @@ export const AppShell: React.FC<{ appName: string; children: React.ReactNode }> 
 
   // Canvas is full-bleed (spec §4.3): thin rail on desktop, no sidebar on
   // mobile. The stored preference is left untouched.
-  const effectiveState: SidebarState = isCanvasPage ? 'collapsed' : sidebarState;
+  const effectiveState: SidebarState = isCanvasPage || isEditorOpen ? 'collapsed' : sidebarState;
   const showSidebar = !isBare && !(isMobile && isCanvasPage);
 
   // On mobile the sidebar never consumes horizontal space on ANY route — it

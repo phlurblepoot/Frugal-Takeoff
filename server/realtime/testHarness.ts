@@ -19,10 +19,7 @@ export function verifyTestToken(token: string) {
 
 export async function startRealtimeServer(opts: Partial<RealtimeOptions> = {}) {
   const httpServer = createServer();
-  // maxHttpBufferSize raised to match server.ts (see its comment) — otherwise
-  // the sheet-state-sync 25MB-guard tests would be killed by the transport's
-  // default 1e6-byte limit before reaching the handler.
-  const io = new Server(httpServer, { cors: { origin: '*' }, maxHttpBufferSize: 30 * 1024 * 1024 });
+  const io = new Server(httpServer, { cors: { origin: '*' } });
   const handle: RealtimeHandle = registerRealtime(io, { verifyToken: verifyTestToken, ...opts });
   const port = await new Promise<number>((resolve) => {
     httpServer.listen(0, () => resolve((httpServer.address() as { port: number }).port));

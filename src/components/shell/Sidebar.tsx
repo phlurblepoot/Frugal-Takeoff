@@ -3,7 +3,7 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Menu, PanelLeftClose, Search, FolderKanban, ListTodo, Clock,
-  FileEdit, Sheet, Settings, LogOut, Sun, Moon,
+  FileEdit, Settings, LogOut, Sun, Moon,
   FolderOpen, LayoutDashboard, Users, Mail,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
@@ -32,8 +32,7 @@ const WORKSPACE_NAV: NavEntry[] = [
 ];
 
 const TOOLS_NAV: NavEntry[] = [
-  { id: 'pdf-editor', label: 'PDF Editor', Icon: FileEdit, path: '/tools/pdf', match: p => p.startsWith('/tools/pdf') || p.startsWith('/pdf-editor') },
-  { id: 'spreadsheet-editor', label: 'Spreadsheet', Icon: Sheet, path: '/tools/sheets', match: p => p.startsWith('/tools/sheets') || p.startsWith('/spreadsheet-editor') },
+  { id: 'document-editor', label: 'Document Editor', Icon: FileEdit, path: '/tools/edit', match: p => p.startsWith('/tools/edit') },
 ];
 
 // Row used by every nav item. The active item gets the glow treatment —

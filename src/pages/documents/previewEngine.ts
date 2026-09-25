@@ -7,7 +7,7 @@
 // pdfjs config mirrors src/pages/project/proposal/shrinkPdf.ts exactly (same
 // legacy build + worker import) so the two code paths share one pdf.js
 // setup. Byte fetching reuses fetchFileBlob (src/utils/store.ts) — the same
-// authenticated fetch PdfEditor uses — rather than a raw fetch call.
+// authenticated fetch the rest of the app uses — rather than a raw fetch call.
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';

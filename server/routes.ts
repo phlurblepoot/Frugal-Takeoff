@@ -66,7 +66,6 @@ import {
 import { dashboardAttention, dashboardMoney, projectHappenings } from './dashboardStore';
 import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
-import type { SheetSessionStore } from './realtime/sheetSessions';
 import { registerProposalRoutes } from './proposalRoutes';
 import { getProposal } from './proposalStore';
 import { send as mailSend, MailSendError, type SendRequest as MailSendRequest, type SendResult } from './mail/sendService';
@@ -85,13 +84,6 @@ export interface RouteDeps {
   // headers). Returns the decoded user or null.
   verifyToken: (token: string) => unknown | null;
   broadcastChange: BroadcastChange;
-  // I6: optional so existing tests that construct RouteDeps by hand (no
-  // sheet-collab wiring) keep working untouched. When present, a version-
-  // replace or a file delete invalidates that fileId's persisted collab
-  // session (see the call sites below) — without it, a replaced file's next
-  // sheet-join would hydrate the OLD working copy over the new bytes, or a
-  // deleted file's dirty row would error-loop the flush engine forever.
-  sheetStore?: SheetSessionStore;
 }
 
 export function registerDataRoutes(app: express.Express, deps: RouteDeps): void {
@@ -1191,10 +1183,6 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           type: 'file', id: result.id, projectId: result.projectId ?? undefined,
           action: result.versioned ? 'updated' : 'created', ...requestMeta(req),
         });
-        // A regenerate (versioned or overwritten in place) replaces the bytes
-        // an open spreadsheet-editor session might still be flushing dirty
-        // edits onto — same reasoning as the delete-route clearSession below.
-        if (result.versioned) deps.sheetStore?.clearSession(result.id);
         res.json({ success: true, fileId: result.id, versioned: result.versioned });
       } catch (e) {
         console.error('Error saving file:', e);
@@ -1261,11 +1249,6 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         if (target.parentFileId) return res.status(400).json({ error: 'Cannot version a historical file row' });
         const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
         const result = saveNewVersion(db, dataDir, req.params.id, body, mime, (req as any).user?.id);
-        // I6: this route replaces the LIVE bytes out from under any sheet
-        // session the flush engine doesn't know about — clear it so the next
-        // sheet-join re-imports the new bytes instead of hydrating the stale
-        // working copy over them.
-        deps.sheetStore?.clearSession(req.params.id);
         deps.broadcastChange({ type: 'file', id: req.params.id, projectId: target.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
         res.json({ success: true, ...result });
       } catch (e) {
@@ -1388,10 +1371,6 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const before = getMeta(db, req.params.id);
       const result = deleteDocument(db, dataDir, req.params.id, isAdmin);
       if (result.ok === false) return res.status(result.status).json({ error: result.error });
-      // I6: a deleted file's dirty sheet-session row would otherwise
-      // error-loop the flush engine every 15s forever (durable across
-      // restarts) trying to patch bytes that no longer exist.
-      deps.sheetStore?.clearSession(req.params.id);
       if (before) deps.broadcastChange({ type: 'file', id: req.params.id, projectId: before.projectId ?? undefined, action: 'deleted', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) {
@@ -1614,49 +1593,6 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       sendFileById(res, share.resourceId, 3600);
     } catch {
       res.status(500).send('Server error');
-    }
-  });
-
-  // ── Editor drafts (per user, per file) ────────────────────────────────────
-
-  const DRAFT_KINDS = ['pdf', 'sheet'];
-  const MAX_DRAFT_BYTES = 20 * 1024 * 1024; // generous cap for big workbooks
-
-  app.get('/api/drafts/:fileId', authenticateToken, (req, res) => {
-    try {
-      const row = db.prepare('SELECT kind, data, updatedAt FROM drafts WHERE userId = ? AND fileId = ?')
-        .get((req as any).user.id, req.params.fileId);
-      if (!row) return res.status(404).json({ error: 'No draft' });
-      res.json(row);
-    } catch (e) {
-      res.status(500).json({ error: 'Failed to fetch draft' });
-    }
-  });
-
-  app.put('/api/drafts/:fileId', authenticateToken, (req, res) => {
-    try {
-      const { kind, data } = req.body ?? {};
-      if (!DRAFT_KINDS.includes(kind)) return res.status(400).json({ error: 'kind must be pdf or sheet' });
-      if (typeof data !== 'string' || !data) return res.status(400).json({ error: 'data must be a non-empty string' });
-      if (Buffer.byteLength(data, 'utf8') > MAX_DRAFT_BYTES) {
-        return res.status(413).json({ error: 'Draft too large' });
-      }
-      db.prepare('INSERT OR REPLACE INTO drafts (userId, fileId, kind, data, updatedAt) VALUES (?, ?, ?, ?, ?)')
-        .run((req as any).user.id, req.params.fileId, kind, data, Date.now());
-      res.json({ success: true });
-    } catch (e) {
-      console.error('Error saving draft:', e);
-      res.status(500).json({ error: 'Failed to save draft' });
-    }
-  });
-
-  app.delete('/api/drafts/:fileId', authenticateToken, (req, res) => {
-    try {
-      db.prepare('DELETE FROM drafts WHERE userId = ? AND fileId = ?')
-        .run((req as any).user.id, req.params.fileId);
-      res.json({ success: true });
-    } catch (e) {
-      res.status(500).json({ error: 'Failed to delete draft' });
     }
   });
 

@@ -28,6 +28,7 @@ import { DocumentHoverPreview } from '../pages/documents/DocumentHoverPreview';
 import { MimeIcon } from '../pages/documents/MimeIcon';
 import { CustomDocType, KIND_OPTIONS, kindLabel, kindTone } from '../pages/documents/docTypes';
 import { MultiSelectOption } from '../pages/documents/MultiSelectDropdown';
+import { OFFICE_FORMATS } from '../utils/officeFormats';
 
 const PAGE_SIZE = 100;
 const MIMES: Record<NonNullable<FilePickerModalProps['accept']>, string[] | undefined> = {
@@ -38,6 +39,7 @@ const MIMES: Record<NonNullable<FilePickerModalProps['accept']>, string[] | unde
     'application/vnd.ms-excel',
     'text/csv',
   ],
+  office: OFFICE_FORMATS.map(f => f.mime),
   any: undefined,
 };
 // Default `accept` attribute for the file input when the upload config
@@ -47,6 +49,7 @@ const INPUT_ACCEPT: Record<NonNullable<FilePickerModalProps['accept']>, string |
   pdf: 'application/pdf,.pdf',
   image: 'image/*',
   spreadsheet: '.xlsx,.xls,.csv',
+  office: OFFICE_FORMATS.map(f => `.${f.ext}`).join(','),
   any: undefined,
 };
 const fmtSize = (n: number) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
@@ -72,7 +75,7 @@ export interface FilePickerModalProps {
   onClose: () => void;
   /** Optional because a `returnBlobs` caller uses onPickBlobs instead. */
   onPick?: (rows: DocumentRow[]) => void | Promise<void>;
-  accept?: 'pdf' | 'image' | 'spreadsheet' | 'any';
+  accept?: 'pdf' | 'image' | 'spreadsheet' | 'office' | 'any';
   multi?: boolean;
   excludeFileIds?: string[];
   initialProjectIds?: string[];

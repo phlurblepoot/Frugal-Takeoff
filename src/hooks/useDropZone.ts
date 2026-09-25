@@ -5,11 +5,13 @@
 // zone's markup — the hook only owns the highlight state and the accept
 // filter.
 import { useCallback, useRef, useState } from 'react';
+import { officeFormatOf } from '../utils/officeFormats';
 
 // Same vocabulary as FilePickerModalProps['accept'] — the picker passes its
 // own `accept` straight through, so if the two unions ever drift the call
 // site fails to compile rather than silently letting the wrong files in.
-export type DropAccept = 'pdf' | 'image' | 'spreadsheet' | 'any';
+// 'office' is anything the document editor opens (utils/officeFormats.ts).
+export type DropAccept = 'pdf' | 'image' | 'spreadsheet' | 'office' | 'any';
 
 const SHEET_MIMES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -26,6 +28,7 @@ export const matchesAccept = (file: File, accept: DropAccept = 'any'): boolean =
     case 'pdf': return file.type === 'application/pdf' || name.endsWith('.pdf');
     case 'image': return file.type.startsWith('image/');
     case 'spreadsheet': return SHEET_MIMES.includes(file.type) || /\.(xlsx|xls|csv)$/.test(name);
+    case 'office': return !!officeFormatOf({ mime: file.type, name: file.name });
     default: return true;
   }
 };

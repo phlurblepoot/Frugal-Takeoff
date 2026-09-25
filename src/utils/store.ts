@@ -657,6 +657,60 @@ export const getOnlyofficeStatus = async (): Promise<OnlyofficeStatus> => {
   return res.json();
 };
 
+/** What POST /api/onlyoffice/config/:fileId answers: the signed config for
+ *  `new DocsAPI.DocEditor(...)`, where to load api.js from, and the file. */
+export interface EditorOpening {
+  publicUrl: string;
+  config: Record<string, unknown>;
+  file: { id: string; name: string | null; projectId: string | null; kind: string; ext: string; mode: 'edit' | 'view'; editable: boolean };
+}
+
+/** Why the editor couldn't open a file, with the server's reason code
+ *  ('not-configured' | 'unsupported' | 'onlyoffice-unreachable' | …). */
+export class EditorOpenError extends Error {
+  constructor(message: string, public status: number, public code?: string) {
+    super(message);
+    this.name = 'EditorOpenError';
+  }
+}
+
+export const openInEditor = async (
+  fileId: string, opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark' },
+): Promise<EditorOpening> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/config/${encodeURIComponent(fileId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(opts),
+  });
+  if (res.status === 401) await handleResponse(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new EditorOpenError(body.error || "Couldn't open the file", res.status, body.code);
+  }
+  return res.json();
+};
+
+// Recently opened documents (client-only, newest first) — the editor's
+// landing list. Same shape and idiom as recent projects above.
+export interface RecentDocument { id: string; name: string; mime: string; at: number }
+const RECENT_DOCS_KEY = 'recentDocuments';
+
+export const getRecentDocuments = (): RecentDocument[] => {
+  try { return JSON.parse(localStorage.getItem(RECENT_DOCS_KEY) || '[]'); } catch { return []; }
+};
+
+export const recordRecentDocument = (doc: { id: string; name: string; mime: string }): void => {
+  try {
+    const list = getRecentDocuments().filter(r => r.id !== doc.id);
+    list.unshift({ ...doc, at: Date.now() });
+    localStorage.setItem(RECENT_DOCS_KEY, JSON.stringify(list.slice(0, 8)));
+  } catch { /* ignore */ }
+};
+
+export const forgetRecentDocument = (id: string): void => {
+  try { localStorage.setItem(RECENT_DOCS_KEY, JSON.stringify(getRecentDocuments().filter(r => r.id !== id))); } catch { /* ignore */ }
+};
+
 // ── Fresh-install restore (the /restore screen, Task 11) ────────────────────
 
 export const getRestoreSources = async (): Promise<{
@@ -850,12 +904,6 @@ export interface ProjectFile {
   createdAt: number;
 }
 
-export interface EditorDraft {
-  kind: 'pdf' | 'sheet';
-  data: string;
-  updatedAt: number;
-}
-
 export const getProjectSummary = async (id: string): Promise<ProjectSummary | null> => {
   const res = await fetchWithRetry(`/api/projects/${encodeURIComponent(id)}/summary`, {
     headers: { ...getAuthHeaders() },
@@ -910,17 +958,6 @@ export const persistGeneratedDocument = async (
   opts: FileUploadOpts & { kind: string; name: string },
 ): Promise<UploadResult> => saveBinaryFile(uuidv4(), blob, opts);
 
-// Save-as-version: live content keeps its id; old bytes become history.
-export const saveFileVersion = async (id: string, blob: Blob): Promise<{ versionNumber: number }> => {
-  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/versions`, {
-    method: 'POST',
-    headers: { 'Content-Type': blob.type || 'application/octet-stream', ...getAuthHeaders() },
-    body: blob,
-  }, { timeoutMs: 300_000 });
-  await handleResponse(res);
-  return await res.json();
-};
-
 // Authenticated binary fetch of a file's live content.
 export const fetchFileBlob = async (id: string): Promise<Blob> => {
   const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/content`, {
@@ -928,32 +965,6 @@ export const fetchFileBlob = async (id: string): Promise<Blob> => {
   }, { timeoutMs: 300_000 });
   await handleResponse(res);
   return await res.blob();
-};
-
-export const getDraft = async (fileId: string): Promise<EditorDraft | null> => {
-  const res = await fetchWithRetry(`/api/drafts/${encodeURIComponent(fileId)}`, {
-    headers: { ...getAuthHeaders() },
-  });
-  if (res.status === 404) return null;
-  await handleResponse(res);
-  return await res.json();
-};
-
-export const putDraft = async (fileId: string, kind: 'pdf' | 'sheet', data: string): Promise<void> => {
-  const res = await fetchWithRetry(`/api/drafts/${encodeURIComponent(fileId)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ kind, data }),
-  });
-  await handleResponse(res);
-};
-
-export const deleteDraft = async (fileId: string): Promise<void> => {
-  const res = await fetchWithRetry(`/api/drafts/${encodeURIComponent(fileId)}`, {
-    method: 'DELETE',
-    headers: { ...getAuthHeaders() },
-  });
-  await handleResponse(res);
 };
 
 // ── Global Documents page (spec docs/superpowers/specs/2026-08-17-unified-documents-design.md) ──

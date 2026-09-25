@@ -3,7 +3,7 @@ import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
-  FileSpreadsheet, ListTodo, Clock, CornerDownLeft, X, Keyboard,
+  ListTodo, Clock, CornerDownLeft, X, Keyboard,
   AlertCircle, ClipboardCheck, StickyNote, DollarSign, SlidersHorizontal, LayoutGrid,
   MessageCircleQuestion, CalendarDays, Mail,
 } from 'lucide-react';
@@ -99,8 +99,7 @@ export const CommandPalette: React.FC = () => {
     { id: 'a:home', type: 'action', title: 'Dashboard', icon: <Home size={16} />, run: () => navigate('/dashboard') },
     { id: 'a:projects', type: 'action', title: 'Projects', icon: <FolderOpen size={16} />, run: () => navigate('/projects') },
     { id: 'a:settings', type: 'action', title: 'Settings', icon: <SettingsIcon size={16} />, run: () => navigate('/settings') },
-    { id: 'a:pdf', type: 'action', title: 'PDF editor', icon: <FileText size={16} />, run: () => navigate('/tools/pdf') },
-    { id: 'a:sheet', type: 'action', title: 'Spreadsheet editor', icon: <FileSpreadsheet size={16} />, run: () => navigate('/tools/sheets') },
+    { id: 'a:editor', type: 'action', title: 'Document editor', subtitle: 'Open a PDF, Word or Excel file', icon: <FileText size={16} />, run: () => navigate('/tools/edit') },
     { id: 'a:tasks', type: 'action', title: 'Tasks', icon: <ListTodo size={16} />, run: () => navigate('/tasks') },
     { id: 'a:documents', type: 'action', title: 'Documents', icon: <FolderOpen size={16} />, run: () => navigate('/documents') },
     { id: 'a:mail', type: 'action', title: 'Mail', icon: <Mail size={16} />, run: () => navigate('/mail') },

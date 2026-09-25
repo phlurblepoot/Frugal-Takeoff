@@ -12,7 +12,6 @@ import { migrations } from './migrationList';
 import { createProject, loadProject } from './projectStore';
 import { markRfiSent, setPendingReply, type RfiPendingReply } from './rfiStore';
 import { registerDataRoutes, registerEmailRoutes } from './routes';
-import { SheetSessionStore } from './realtime/sheetSessions';
 import { MailCrypto } from './mail/crypto';
 import * as accounts from './mail/accountStore';
 import type { FakeMailProvider } from './mail/providers/fake';
@@ -483,97 +482,16 @@ describe('file versions over HTTP', () => {
   });
 });
 
-// I6: version-replace and delete must invalidate any persisted sheet-collab
-// session for that fileId, or (a) the next sheet-join would hydrate the OLD
-// working copy over the replaced bytes and revert them on the next flush, or
-// (b) a deleted file's dirty row would error-loop the flush engine forever.
-describe('sheet-session invalidation on version-replace / delete (I6)', () => {
-  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-  let sheetStore: SheetSessionStore;
-  let sheetApp: express.Express;
-
-  beforeEach(() => {
-    sheetStore = new SheetSessionStore(db);
-    sheetApp = express();
-    sheetApp.use(express.json({ limit: '50mb' }));
-    registerDataRoutes(sheetApp, {
-      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
-      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
-      requireAdmin: (_req: any, _res: any, next: any) => next(),
-      verifyToken: (token: string) => (token === 'good-token' ? { id: 'u1', role: 'admin' } : null),
-      broadcastChange: () => {},
-      sheetStore,
-    });
-  });
-
-  it('POST /versions clears a pending sheet session for the replaced fileId', async () => {
-    await request(sheetApp).post('/api/files/sheet1?kind=spreadsheet&name=Book.xlsx')
-      .set('Content-Type', XLSX_MIME).send(Buffer.from('v1'));
-
-    sheetStore.join('sheet1', 's1');
-    sheetStore.setState('sheet1', '{"sheets":["stale"]}');
-    expect(sheetStore.getState('sheet1')).not.toBeNull();
-    expect(sheetStore.dirtyFiles()).toContain('sheet1');
-
-    const res = await request(sheetApp).post('/api/files/sheet1/versions')
-      .set('Content-Type', XLSX_MIME).send(Buffer.from('v2'));
-    expect(res.status).toBe(200);
-
-    expect(sheetStore.getState('sheet1')).toBeNull();
-    expect(sheetStore.dirtyFiles()).not.toContain('sheet1');
-  });
-
-  it('DELETE clears a pending sheet session for the deleted fileId', async () => {
-    await request(sheetApp).post('/api/files/sheet2?kind=spreadsheet&name=Book2.xlsx')
-      .set('Content-Type', XLSX_MIME).send(Buffer.from('v1'));
-
-    sheetStore.join('sheet2', 's1');
-    sheetStore.setState('sheet2', '{"sheets":["stale"]}');
-
-    const res = await request(sheetApp).delete('/api/files/sheet2');
-    expect(res.status).toBe(200);
-
-    expect(sheetStore.getState('sheet2')).toBeNull();
-    expect(sheetStore.dirtyFiles()).not.toContain('sheet2');
-  });
-
-  it('a route registered with no sheetStore (existing test convention) is unaffected', async () => {
-    // `app` (module-level, from the outer beforeEach) never passes sheetStore
-    // — the routes must no-op cleanly rather than throw.
-    await request(app).post('/api/files/plainf1?kind=document&name=Doc.pdf')
-      .set('Content-Type', 'application/pdf').send(Buffer.from('v1'));
-    const res = await request(app).post('/api/files/plainf1/versions')
-      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
-    expect(res.status).toBe(200);
-  });
-});
-
-describe('drafts', () => {
-  it('PUT/GET/DELETE round-trip scoped to the user', async () => {
-    const put = await request(app).put('/api/drafts/f1')
-      .send({ kind: 'pdf', data: JSON.stringify({ annotations: [] }) });
-    expect(put.status).toBe(200);
-    const get = await request(app).get('/api/drafts/f1');
-    expect(get.status).toBe(200);
-    expect(get.body.kind).toBe('pdf');
-    expect(JSON.parse(get.body.data)).toEqual({ annotations: [] });
-    expect(typeof get.body.updatedAt).toBe('number');
-    await request(app).delete('/api/drafts/f1').expect(200);
-    expect((await request(app).get('/api/drafts/f1')).status).toBe(404);
-  });
-
-  it('rejects invalid payloads', async () => {
-    expect((await request(app).put('/api/drafts/f1').send({ kind: 'pdf' })).status).toBe(400);
-    expect((await request(app).put('/api/drafts/f1').send({ kind: 'nope', data: '{}' })).status).toBe(400);
-  });
-
-  it('deleteProject removes drafts for its files', async () => {
+// The drafts API went with the old PDF editor (ONLYOFFICE Phase 1), but rows
+// it left behind still belong to their project's files.
+describe('deleteProject drafts cascade', () => {
+  it('removes leftover editor drafts for its files', async () => {
     await request(app).post('/api/projects').send(PROJECT);
     await request(app).post('/api/files/df1?projectId=p1&kind=document&name=D.pdf')
       .set('Content-Type', 'application/pdf').send(Buffer.from('x'));
-    await request(app).put('/api/drafts/df1').send({ kind: 'pdf', data: '{}' });
+    db.prepare(`INSERT INTO drafts (userId, fileId, kind, data, updatedAt) VALUES ('u1', 'df1', 'pdf', '{}', 1)`).run();
     await request(app).delete('/api/projects/p1');
-    expect((await request(app).get('/api/drafts/df1')).status).toBe(404);
+    expect(db.prepare('SELECT COUNT(*) c FROM drafts WHERE fileId = ?').get('df1')).toEqual({ c: 0 });
   });
 });
 

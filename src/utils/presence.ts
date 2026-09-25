@@ -47,7 +47,7 @@ export function humanizeSection(section: string | undefined): string {
 const PATH_LABELS: [RegExp, string][] = [
   [/^\/dashboard$/, 'Dashboard'], [/^\/projects$/, 'Projects'], [/^\/tasks$/, 'Tasks'],
   [/^\/documents$/, 'Documents'], [/^\/customers(\/|$)/, 'Customers'], [/^\/time$/, 'Time'],
-  [/^\/settings$/, 'Settings'], [/^\/tools\/pdf$/, 'PDF editor'], [/^\/tools\/sheets$/, 'Spreadsheet editor'],
+  [/^\/settings$/, 'Settings'], [/^\/tools\/edit$/, 'Document editor'],
 ];
 
 export function describeLocation(

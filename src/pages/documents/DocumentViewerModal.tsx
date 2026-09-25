@@ -1,8 +1,8 @@
 // src/pages/documents/DocumentViewerModal.tsx
 // Centered viewer opened by a Documents row click
 // (docs/superpowers/specs/2026-08-17-document-previews-design.md §Decisions).
-// The old row-click behavior (jump straight to /tools/pdf, /tools/sheets or a
-// raw image tab) is still one click away as "Open in editor" — this just puts
+// The old row-click behavior (jump straight to the document editor or a raw
+// image tab) is still one click away as "Open in editor" — this just puts
 // a look-before-you-leap step in front of it.
 //
 // Mounted only while a row is open (DocumentsTable renders it conditionally),

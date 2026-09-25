@@ -18,11 +18,9 @@ import { migrations } from './server/migrationList';
 import { registerDataRoutes, registerEmailRoutes } from './server/routes';
 import { registerAiRoutes } from './server/aiRoutes';
 import { getAiRunner } from './server/ai';
-import { registerRealtime, sheetRoom } from './server/realtime/registerRealtime';
+import { registerRealtime } from './server/realtime/registerRealtime';
 import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
-import { SheetSessionStore } from './server/realtime/sheetSessions';
-import { SheetFlushEngine } from './server/realtime/sheetFlush';
 import { loadMailCrypto } from './server/mail/crypto';
 import type { MailContext } from './server/mail/context';
 import type { MailCrypto } from './server/mail/crypto';
@@ -131,11 +129,6 @@ async function startServer() {
     cors: {
       origin: "*",
     },
-    // Default (1e6 bytes) is smaller than the sheet-state-sync size guard
-    // (25MB, see registerRealtime.ts) — without raising this, a legitimately
-    // large-but-under-guard state payload would be killed by the transport
-    // before ever reaching our handler's own size check, with no ack sent.
-    maxHttpBufferSize: 30 * 1024 * 1024,
   });
 
   // Two mail paths bring their own body parser, and this one runs first, so it
@@ -171,23 +164,6 @@ async function startServer() {
 
   const broadcastChange = createChangeFeed(io);
 
-  const sheetStore = new SheetSessionStore(db);
-  // SHEET_FLUSH_INTERVAL_MS: e2e-only override (playwright.config.ts sets it
-  // low) so autosave tests don't have to wait out the real 15s production
-  // cadence; unset in normal/production runs, which keep SheetFlushEngine's
-  // own DEFAULT_INTERVAL_MS.
-  const flushIntervalMs = process.env.SHEET_FLUSH_INTERVAL_MS ? Number(process.env.SHEET_FLUSH_INTERVAL_MS) : undefined;
-  // I5: surfaces flush failures/recoveries to the sheet's live participants
-  // (SpreadsheetEditor's autosave chip) — every failure path was previously
-  // console-only.
-  const sheetFlush = new SheetFlushEngine(db, sheetStore, DATA_DIR, {
-    intervalMs: flushIntervalMs,
-    notify: (fileId, event) => {
-      io.to(sheetRoom(fileId)).emit(event === 'failed' ? 'sheet-flush-failed' : 'sheet-flush-recovered', { fileId });
-    },
-  });
-  sheetFlush.start();
-
   // One token verifier, shared by realtime, the data routes and the mail routes
   // so a token means the same thing everywhere.
   const verifyToken = (token: string) => {
@@ -199,16 +175,14 @@ async function startServer() {
     verifyToken,
     db,
     broadcastChange,
-    sheetStore,
-    sheetFlush,
   });
 
-  // Best-effort flush-on-shutdown: a container stop (SIGTERM) or Ctrl-C
-  // (SIGINT) should not lose edits sitting in a dirty sheet session's journal
-  // waiting for the next autosave tick. Guarded against double-registration
+  // Clean shutdown: a container stop (SIGTERM) or Ctrl-C (SIGINT) stops the
+  // mail sync workers before exiting. Guarded against double-registration
   // (each signal only ever fires this handler once per process) and skipped
   // entirely in tests, which construct their own harness instead of calling
-  // startServer().
+  // startServer(). Document edits need nothing here: ONLYOFFICE holds them
+  // and retries its save callback.
   let shuttingDown = false;
   // Assigned further down (the mail subsystem needs routes/auth in place first);
   // hoisted so the shutdown handler can stop its sync workers.
@@ -216,8 +190,8 @@ async function startServer() {
   const flushAndExit = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`Received ${signal}, flushing dirty spreadsheet sessions before exit...`);
-    Promise.allSettled([mailScheduler?.stop(), sheetFlush.flushAll()]).finally(() => process.exit(0));
+    console.log(`Received ${signal}, stopping mail sync before exit...`);
+    Promise.allSettled([mailScheduler?.stop()]).finally(() => process.exit(0));
   };
   process.once('SIGTERM', () => flushAndExit('SIGTERM'));
   process.once('SIGINT', () => flushAndExit('SIGINT'));
@@ -260,7 +234,6 @@ async function startServer() {
     requireAdmin,
     verifyToken,
     broadcastChange,
-    sheetStore,
   });
 
   // The Playwright e2e harness logs in many times per run (per-worker session +

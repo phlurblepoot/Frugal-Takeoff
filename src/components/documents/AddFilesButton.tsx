@@ -17,7 +17,7 @@ import { Button } from '../ui';
 export interface AddFilesButtonProps {
   /** Also the picker's title — "Add photos" / "Add files" / "Attach files". */
   label: string;
-  accept: 'pdf' | 'image' | 'spreadsheet' | 'any';
+  accept: 'pdf' | 'image' | 'spreadsheet' | 'office' | 'any';
   multi?: boolean;
   upload?: FilePickerUploadConfig;
   defaultTab?: FilePickerTab;

@@ -517,11 +517,11 @@ test('document previews: hover shows a thumbnail card, click opens the viewer mo
   await expect(nextBtn).toBeDisabled();
   await expect(prevBtn).toBeEnabled();
 
-  // (e continued) "Open in editor" closes the modal and navigates to the pdf
-  // tool for this file (openTargetFor's pdf branch) — last step, since it
-  // leaves the Documents page.
+  // (e continued) "Open in editor" closes the modal and navigates to the
+  // document editor for this file (openTargetFor's edit branch) — last step,
+  // since it leaves the Documents page.
   await authedPage.getByTestId('doc-viewer-open-editor').click();
-  await expect(authedPage).toHaveURL(new RegExp(`/tools/pdf\\?fileId=${seeded.printoutFileId}$`));
+  await expect(authedPage).toHaveURL(new RegExp(`/tools/edit\\?fileId=${seeded.printoutFileId}$`));
 });
 
 test('document previews: right-click opens the context menu and dismisses any lingering hover card', async ({

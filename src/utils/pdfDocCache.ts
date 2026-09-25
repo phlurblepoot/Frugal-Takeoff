@@ -16,7 +16,7 @@
 //     budget (bytes), not an entry count, since canvases vary hugely in
 //     size with zoom/DPI.
 //
-// pdfjsLib is typed `any` throughout (matching PdfEditor.tsx's convention)
+// pdfjsLib is typed `any` throughout (the app's convention for pdf.js)
 // to keep this file free of pdfjs type imports.
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 

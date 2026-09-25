@@ -198,86 +198,145 @@ container next to the app, and build the extras agreed below on top of it.
 
 ## Phase 1 — Core editor (replaces the old editors)
 
-**Server** (`server/onlyoffice/`):
-- [ ] Config builder:
-  - file type → `documentType` (pdf / word / cell / slide)
-  - `key` = `${fileId}-v${versionNumber}`
+**Server** (`server/onlyoffice/`), all in `5b40b46`:
+- [x] Config builder (`editorConfig.ts`):
+  - file type → `documentType` (pdf / word / cell / slide), from the shared
+    table `src/utils/officeFormats.ts`
+  - `key` = `${fileId}-v${versionNumber}-${sha256[0..12]}`. The hash covers an
+    "overwrite" regenerate, which resets the version number to 1.
   - user = `{ id, name: username }`
-  - `permissions`: edit, comment and review (track changes) for everyone
-  - `customization.forcesave: true`
-  - `uiTheme` follows the app's light/dark theme
-  - sign with the JWT
-- [ ] `POST /api/onlyoffice/config/:fileId` (signed-in users) returns the signed
-  config. On phones it returns `type: "mobile"`, `mode: "view"`, so there's a
-  clean viewer instead of an error.
-- [ ] `GET /api/onlyoffice/file/:fileId?t=` serves the file to the Document
-  Server only. The token is short-lived and valid for that one file.
-- [ ] `POST /api/onlyoffice/callback/:fileId`:
-  - verify the Document Server's JWT
-  - on status 2/6, download `body.url` and save it using the version rule below
-  - record `users[0]` as the version's author
-  - on 3/7, log the error and flag it on the file
-  - always reply `{"error":0}`
-- [ ] Version rule: **one version per editing session**, tracked in a small
-  `editor_sessions` table.
-  - The first save archives the pre-session bytes.
-  - Later saves in the same session overwrite in place, **but only if the live
-    version is still the one this session wrote**.
-  - If anything else made a version meanwhile (regenerate, upload, restore),
-    the save becomes a new version, so nothing is ever overwritten.
-- [ ] Migration: `files.createdBy` (userId). Set it on upload, generate and
-  editor save.
-- [ ] `broadcastChange` on every save, so Documents refreshes live.
+  - `permissions`: edit, comment, review (track changes) and fill forms when
+    editing
+  - `customization.forcesave: true` and a Close button
+  - `uiTheme` follows the app's light/dark theme at open
+  - signed with the shared JWT secret
+  - titles always carry the extension (generated documents often don't)
+- [x] `POST /api/onlyoffice/config/:fileId` (signed-in users):
+  - returns the signed config
+  - phones get `type: "mobile"`, `mode: "view"`; legacy formats and old
+    versions also open view-only
+  - admin-only kinds are hidden from non-admins, as in Documents
+  - error codes: `not-configured` / `unsupported` / `onlyoffice-unreachable`
+- [x] `GET /api/onlyoffice/file/:fileId?t=`: ONLYOFFICE-only download with an
+  8-hour single-file link token.
+- [x] `POST /api/onlyoffice/callback/:fileId`:
+  - verifies ONLYOFFICE's signature (Bearer header by default, or `token` in
+    the body) and trusts only the signed fields
+  - checks the key belongs to this file
+  - saves on 2/3/6/7, as ONLYOFFICE's reference handler does; 3/7 are logged
+  - ends the session on 2/3/4
+  - saves for a file are applied one at a time
+  - downloads over `ONLYOFFICE_INTERNAL_URL` first
+  - replies `{"error":1}` on failure, so ONLYOFFICE keeps the edits and tells
+    the editors
+  - has its own 10 MB body parser
+- [x] Version rule, via `editor_sessions` (migration 37):
+  - the first save archives the pre-session bytes
+  - later saves overwrite in place only while the live file is still exactly
+    what this session wrote (version and hash); otherwise a new version
+  - identical bytes add no version
+  - everyone who opens the file during a session gets that session's key
+  - a session ONLYOFFICE no longer has (checked with the command service's
+    `info`) is dropped
+- [x] Migration 37: `files.createdBy`, set on upload, new-version upload,
+  regenerate and editor saves. Archived versions keep their author.
+  `replaceLiveContent` updates size and hash on in-place saves.
+- [x] `broadcastChange` on every save, so Documents refreshes live.
 
-**Client:**
-- [ ] New page `src/pages/DocumentEditor.tsx` at `/tools/edit?fileId=`:
-  - loads `api.js` from `ONLYOFFICE_PUBLIC_URL` (passed down from the server)
-  - mounts the editor and calls `destroyEditor` on unmount
-  - if the Document Server can't be reached, shows a friendly error with a
-    Download button
-- [ ] Redirect `/tools/pdf`, `/tools/sheets`, `/pdf-editor` and
-  `/spreadsheet-editor` to `/tools/edit`, keeping `fileId`.
-- [ ] `openTargetFor` sends PDF, Word, Excel and PowerPoint (plus old formats) to
-  `/tools/edit`. Add the docx/pptx mimes, and map docx in `kindFromMime`.
-- [ ] Update the preview modal, `FilePickerModal` type lists and
-  `DocumentViewerModal` "Open in editor" for Word files.
-- [ ] Sidebar and command palette: one "Documents editor" entry replaces
-  "PDF editor" and "Spreadsheets". Opened with no file, it shows recent files
-  plus "Open from Documents" and "Open from computer".
-- [ ] "Open from computer": pick a project and document type, upload, then open
-  in the editor.
-- [ ] Presence: `locationInfo` reports `fileId` for `/tools/edit`, so the
-  Documents "being edited" dots (`FileViewerDots`) work for every file type.
+**Client** (this commit):
+- [x] `src/pages/DocumentEditor.tsx` at `/tools/edit?fileId=`:
+  - loads `api.js` from the public URL the server returns
+  - mounts the editor into a plain placeholder node
+  - calls `destroyEditor` on unmount
+  - Close goes back
+  - errors (not set up, unreachable, `api.js` won't load, unsupported, not
+    found) get a clear message, a Settings link for admins ("ask an admin" for
+    others) and **Download instead**
+  - the sidebar collapses to the rail while a file is open, like the canvas
+- [x] `/tools/pdf`, `/tools/sheets`, `/pdf-editor` and `/spreadsheet-editor`
+  redirect to `/tools/edit`, keeping `fileId`.
+- [x] `openTargetFor` sends every office format to `/tools/edit`:
+  - known extension first, then mime
+  - `kindFromMime` maps Word, PowerPoint and OpenDocument files to `document`
+  - `MimeIcon` has Word, Excel and PowerPoint glyphs
+- [x] File pickers get an `office` accept category (`FilePickerModal`,
+  `AddFilesButton`, `useDropZone`). The preview modal's "Open in editor" now
+  opens Word/PowerPoint too; the preview itself stays a generic card for them.
+- [x] Sidebar and command palette: one **Document Editor** entry replaces "PDF
+  Editor" and "Spreadsheet". The landing page lists recently opened files
+  (client-side, like recent projects), plus **Open from Documents** and **Open
+  from computer**.
+- [x] "Open from computer" (`OpenFromComputerModal`):
+  - pick an active project (required) and a type (Document / Spreadsheet /
+    Other / custom types)
+  - uploads with the project's customer, then opens the file
+  - turns away non-editor files before uploading
+- [x] Presence: `locationInfo` reports `fileId` for `/tools/edit`, so the
+  Documents "being edited" dots work for every file type; the presence label is
+  "Document editor".
 
-**Remove the old editors:**
-- [ ] First move `removeWhiteBackground` into `src/utils/` (Phase 3 needs it).
-- [ ] Delete `PdfEditor.tsx` and `SpreadsheetEditor.tsx` (and their tests).
-- [ ] Delete `src/utils/sheetBridge.ts` (and its tests).
-- [ ] Delete `server/realtime/sheetFlush.ts` and `sheetSessions.ts` (and their
-  tests).
-- [ ] Remove the `sheet-*` socket events from `registerRealtime.ts` and their
-  client helpers in `CollaborationContext.tsx`.
-- [ ] Remove the `sheetStore.clearSession` hooks in `server/routes.ts`.
-- [ ] Remove the drafts API (`server/routes.ts:1624-1660`,
-  `src/utils/store.ts:912-930`).
-- [ ] Delete `e2e/sheets-editor.spec.ts` and `e2e/collab-sheets.spec.ts`.
-- [ ] Uninstall the `@fortune-sheet/react` dependency.
-- [ ] Leave the old `sheet_sessions`, `sheet_ops` and drafts tables in place
-  unused. Drop them later (see "Later").
+**Remove the old editors** (this commit):
+- [x] Moved `removeWhiteBackground` into `src/utils/removeWhiteBackground.ts`,
+  with its pixel rule split out and unit-tested.
+- [x] Deleted `PdfEditor.tsx` and `SpreadsheetEditor.tsx` (and their tests).
+- [x] Deleted `src/utils/sheetBridge.ts` (and its tests).
+- [x] Deleted `server/realtime/sheetFlush.ts` and `sheetSessions.ts` (and their
+  tests, and `registerRealtime.sheets.test.ts`).
+- [x] Removed the `sheet-*` socket events, sheet rooms and last-leave flush from
+  `registerRealtime.ts`, and their client helpers and tests in
+  `CollaborationContext.tsx`.
+- [x] `server.ts`:
+  - no sheet store or flush engine
+  - shutdown now only stops mail sync
+  - the socket buffer is back to socket.io's default (the 30 MB limit existed
+    only for sheet state)
+- [x] Removed the `sheetStore.clearSession` hooks in `server/routes.ts`.
+- [x] Removed the drafts API (routes and client helpers), plus the now-unused
+  client `saveFileVersion`. The `POST /api/files/:id/versions` route stays.
+- [x] Deleted `e2e/sheets-editor.spec.ts`, `e2e/collab-sheets.spec.ts` and the
+  `seedSpreadsheetFile` fixture. Dropped `SHEET_FLUSH_INTERVAL_MS` from the
+  Playwright server command.
+- [x] Uninstalled `@fortune-sheet/react`. `xlsx` and `exceljs` stay: the AIA
+  export, SOV import, takeoff export and preview use them.
+- [x] Left the old `sheet_sessions`, `sheet_ops` and `drafts` tables in place,
+  unused. The project-delete cascade and the regenerate path still clear old
+  `drafts` rows. Dropping them is in "Later".
 
 **Tests:**
-- [ ] Unit tests:
-  - config builder and JWT
-  - download-token scope and expiry
-  - the callback state machine: statuses 2/4/6/3; the one-version-per-session
-    rule; "someone else made a version mid-session" → new version
-- [ ] E2E with a stubbed `api.js` (a fake `DocsAPI` in test mode): open from
-  Documents, redirects, open from computer, error state when the Document
-  Server is down.
-- [ ] **(Nathan)** Manual check on the test container:
+- [x] Unit tests:
+  - `server/onlyoffice/editorRoutes.test.ts` (21, against a fake Document
+    Server that signs callbacks and serves saves): config contents and
+    signature; file-link scope; view-only cases; admin-only and unsupported
+    files; session joining; dead-session recovery; unreachable ONLYOFFICE;
+    unsigned, wrong-secret and wrong-file callbacks; the one-version-per-session
+    rule; an outside change mid-session → new version; unchanged bytes;
+    status 4; body-token form; internal-then-given download; failed download →
+    `{"error":1}`; status 3; deleted file; format change; back-to-back saves
+  - plus `files.test.ts` (createdBy, `replaceLiveContent`), migration 37,
+    `officeFormats`, `openTarget`, `DocumentEditor.test.tsx` (fake DocsAPI:
+    config passthrough, teardown, phone, Close, every error state, landing),
+    `OpenFromComputerModal.test.tsx`, `removeWhiteBackground`
+  - full unit suite 3174/3174 (268 files)
+- [x] E2E, `e2e/document-editor.spec.ts`, against the unconfigured e2e server
+  (instead of a stubbed `api.js`):
+  - the not-set-up error with its Settings link and a working download
+  - old-link redirects
+  - sidebar → landing
+  - "Open from computer" filing the upload into a project
+  - `e2e/documents.spec.ts` now expects `/tools/edit`
+  - full e2e suite: still running when this was committed; the result goes in
+    the next commit
+- [x] Manual run against a stand-in Document Server over real HTTP:
+  - opened from Documents → `/tools/edit` with a word/edit config
+  - the stand-in downloaded the file through its link
+  - Save → version 2; second Save → same version 2 overwritten; close →
+    overwritten and session ended; the next open got a new key
+  - the page fills the screen beside the rail
+- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
   - edit and save a PDF, an .xlsx and a .docx
   - two users editing the same file
   - phone view-only
+  - Documents shows the new version after closing
 
 ## Phase 2 — Versions and generated documents
 

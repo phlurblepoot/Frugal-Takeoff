@@ -3,7 +3,7 @@
 // (docs/superpowers/specs/2026-08-17-document-previews-design.md). pdfjs and
 // canvas are mocked — vitest's jsdom has no real canvas, and we don't want a
 // real PDF parse in unit tests. fetchFileBlob (the authenticated byte fetch
-// used elsewhere by PdfEditor) is mocked so tests can assert whether a
+// used across the app) is mocked so tests can assert whether a
 // network call happened without hitting the server.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
