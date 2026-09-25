@@ -52,22 +52,23 @@ container next to the app, and build the extras agreed below on top of it.
 | AIA pay app PDF | A **"Make PDF" button** (not automatic). |
 | Editor add-ons | **Version history + restore**, **insert images/signatures/stamps from the app**, **save copy to project**. |
 | Extras | **Word/Excel mail attachments open in the viewer**, **thumbnails in Documents**, **share links open in the viewer**. |
-| Sharing | **Any document** can be shared. Links **expire (default 30 days**; choose 7/30/90/never). You can **see and turn off** a file's active links. |
-| Testing | Nathan's **existing test container** moves to this branch. |
+| Sharing | **Any document** can be shared. New links **expire (default 30 days**; choose 7/30/90/never). You can **see and turn off** a file's active links. **Existing links keep working with no expiry** and appear in that list. |
+| Testing | Nathan's **existing test container** moves to this branch. The ONLYOFFICE test subdomain is **`docs-test.<domain>`**. |
 | Merge | **One merge into `testing` when everything is done and tested.** |
 
 ## Open questions (settle before the phase that needs them)
 
-- [ ] **Existing share links** (Phase 7): today's links never expire. Keep them
-  as never-expiring, or give them the new 30-day expiry counted from the
-  upgrade date?
+- [x] **Existing share links** (Phase 7): **keep them working with no expiry.**
+  They show up in the new active-links list, where they can be turned off.
+  (Nathan, 2026-09-25)
 - [ ] **Replies to my comments** (Phase 5): ONLYOFFICE tells the app about
   @mentions (`onRequestSendNotify`) but has no event for replies. Plugin
   comment events (`onAddComment` / `onChangeCommentData`) are documented only
   for the Word editor, and only for comments added through the API. Do a short
   test first. If replies can't be caught everywhere, fall back to: "Word files
   only", or "replies that @mention you". Ask Nathan which.
-- [ ] **Test subdomain name** for ONLYOFFICE on the test setup (Phase 0).
+- [x] **Test subdomain name** for ONLYOFFICE on the test setup (Phase 0):
+  **`docs-test.<domain>`**. (Nathan, 2026-09-25)
 - [ ] **ONLYOFFICE version to pin** (Phase 0): latest 9.4.x at the time. Never
   `latest`.
 
@@ -167,7 +168,8 @@ container next to the app, and build the extras agreed below on top of it.
 
   It shows clear fix-it messages.
 - [ ] **(Nathan)** Check the Unraid server has about 4 GB of RAM to spare.
-- [ ] **(Nathan)** Create the test subdomain in Cloudflare and Nginx Proxy Manager.
+- [ ] **(Nathan)** Create the test subdomain `docs-test.<domain>` in Cloudflare
+  and Nginx Proxy Manager.
 - [ ] **(Nathan)** Start the ONLYOFFICE test container. Point the existing test
   app container at the `:onlyoffice` image.
 
@@ -386,7 +388,8 @@ container next to the app, and build the extras agreed below on top of it.
 - [ ] Migration: add `expiresAt` and `revokedAt` to `shares`.
   - Choose 7 / **30 (default)** / 90 days / never when creating a link.
   - Public share routes return a friendly "link expired" page.
-- [ ] Apply the decision on existing links (see Open questions).
+- [ ] Existing links migrate with `expiresAt = NULL` (never expire), keep
+  working, and appear in the active-links list, where they can be turned off.
 - [ ] Creating a share no longer silently reuses an old link (`server.ts:547`)
   once expiry exists.
 - [ ] Per-file **active links list** with "Stop sharing".
