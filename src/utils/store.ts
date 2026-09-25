@@ -635,6 +635,28 @@ export const disconnectBackupDrive = async (): Promise<void> => {
 
 export const backupDriveStartUrl = (): string => `/api/backup/drive/start?${tokenParam()}`;
 
+// ── ONLYOFFICE document editor (docs/superpowers/specs/2026-09-25-onlyoffice-checklist.md) ──
+
+export type OnlyofficeCheckStatus = 'ok' | 'failed' | 'skipped';
+export interface OnlyofficeCheck { status: OnlyofficeCheckStatus; message: string }
+export interface OnlyofficeStatus {
+  configured: boolean;
+  problems: { variable: string; problem: string }[];
+  publicUrl: string | null;
+  internalUrl: string | null;
+  appInternalUrl: string | null;
+  version: string | null;
+  checks: { appToOnlyoffice: OnlyofficeCheck; onlyofficeToApp: OnlyofficeCheck };
+}
+
+/** Admin connection check. Slow by nature (it runs a conversion round trip),
+ *  so it is not retried: a retry would only repeat the same wait. */
+export const getOnlyofficeStatus = async (): Promise<OnlyofficeStatus> => {
+  const res = await fetchWithRetry('/api/onlyoffice/status', { headers: getAuthHeaders() }, { retries: 0 });
+  await handleResponse(res);
+  return res.json();
+};
+
 // ── Fresh-install restore (the /restore screen, Task 11) ────────────────────
 
 export const getRestoreSources = async (): Promise<{

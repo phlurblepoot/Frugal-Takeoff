@@ -37,6 +37,7 @@ import { registerBackupRoutes } from './server/backup/routes';
 import { createDriveStore } from './server/backup/drive';
 import { readDrive } from './server/backup/settings';
 import { BackupScheduler } from './server/backup/scheduler';
+import { registerOnlyofficeRoutes } from './server/onlyoffice/routes';
 
 dotenv.config();
 
@@ -661,6 +662,11 @@ async function startServer() {
   const backupScheduler = new BackupScheduler({ db, run: (t, trigger) => backupRoutes.runAndWait(t, trigger), hasDrive: () => !!readDrive(db, mailCrypto) });
   backupRoutes.setScheduler(backupScheduler);
   backupScheduler.start();
+
+  // ONLYOFFICE document editor (docs/onlyoffice-setup.md).
+  registerOnlyofficeRoutes(app, {
+    env: process.env, appJwtSecret: JWT_SECRET, authenticateToken, requireAdmin,
+  });
 
   // Before the first sync tick: a reply that lands in that tick must still be
   // captured against its RFI.

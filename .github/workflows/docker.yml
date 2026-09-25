@@ -2,7 +2,9 @@ name: Docker Image CI
 
 on:
   push:
-    branches: [ "main", "master", "testing", "claude/code-review-nuJ1Q" ]
+    # `onlyoffice` publishes :onlyoffice for the ONLYOFFICE test container
+    # (docs/superpowers/specs/2026-09-25-onlyoffice-checklist.md).
+    branches: [ "main", "master", "testing", "claude/code-review-nuJ1Q", "onlyoffice" ]
   pull_request:
     branches: [ "main", "master", "testing", "claude/code-review-nuJ1Q" ]
   workflow_dispatch:

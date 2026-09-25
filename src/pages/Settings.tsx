@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers, DatabaseBackup } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers, DatabaseBackup, FileText } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
 import { UsersView } from './UsersView';
 import { MailAccountsTab } from './settings/MailAccountsTab';
 import { BackupTab } from './settings/BackupTab';
+import { DocumentEditorTab } from './settings/DocumentEditorTab';
 import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
@@ -1750,13 +1751,13 @@ const DocumentTypesCard: React.FC = () => {
 // Kept as a value so a ?tab= param can be validated against it before it is
 // trusted to select a tab.
 const TAB_IDS = [
-  'preferences', 'takeoff-templates', 'general', 'mail', 'storage', 'backup', 'users', 'aia-template', 'changelog',
+  'preferences', 'takeoff-templates', 'general', 'mail', 'storage', 'backup', 'document-editor', 'users', 'aia-template', 'changelog',
 ] as const;
 type TabId = (typeof TAB_IDS)[number];
 const isTabId = (v: string | null): v is TabId => !!v && (TAB_IDS as readonly string[]).includes(v);
 // Kept alongside TAB_IDS so the two-way ?tab= derivation below can validate
 // an admin-only tab without waiting on the tabs array built later in render.
-const ADMIN_ONLY_TAB_IDS = new Set<TabId>(['general', 'storage', 'backup', 'aia-template', 'users']);
+const ADMIN_ONLY_TAB_IDS = new Set<TabId>(['general', 'storage', 'backup', 'document-editor', 'aia-template', 'users']);
 
 export const Settings: React.FC = () => {
   const { toast } = useToast();
@@ -1863,6 +1864,7 @@ export const Settings: React.FC = () => {
     { id: 'mail',        label: 'Mail',              icon: <Mail size={18} /> },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
     { id: 'backup',      label: 'Backup',            icon: <DatabaseBackup size={18} />, adminOnly: true },
+    { id: 'document-editor', label: 'Document Editor', icon: <FileText size={18} />, adminOnly: true },
     { id: 'aia-template', label: 'AIA Template',     icon: <FileSpreadsheet size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
     { id: 'changelog',   label: 'Changelog',         icon: <History size={18} /> },
@@ -2076,6 +2078,8 @@ export const Settings: React.FC = () => {
             {activeTab === 'storage' && isAdmin && <StorageTab />}
 
             {activeTab === 'backup' && isAdmin && <BackupTab />}
+
+            {activeTab === 'document-editor' && isAdmin && <DocumentEditorTab />}
 
             {activeTab === 'aia-template' && isAdmin && <AiaTemplateTab />}
 

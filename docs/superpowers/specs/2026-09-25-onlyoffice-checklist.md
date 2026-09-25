@@ -142,36 +142,56 @@ container next to the app, and build the extras agreed below on top of it.
 
 ## Phase 0 — Infrastructure and test setup
 
-- [ ] Add `onlyoffice` to the push branches in `.github/workflows/docker.yml`
+- [x] Add `onlyoffice` to the push branches in `.github/workflows/docker.yml`
   so every push builds `ghcr.io/phlurblepoot/frugal-takeoff:onlyoffice`.
-- [ ] `docker-compose.yml`:
-  - add an `onlyoffice` service (pinned 9.4.x tag, `JWT_SECRET`,
-    `ALLOW_PRIVATE_IP_ADDRESS=true`, `restart: unless-stopped`)
-  - put `app` and `onlyoffice` on the same network
-- [ ] App env vars, documented in `.env.example` and `docker-compose.yml`:
+  (this commit)
+- [x] `docker-compose.yml`: an `onlyoffice` service pinned to
+  `onlyoffice/documentserver:9.4.0.1`, with `JWT_SECRET`,
+  `ALLOW_PRIVATE_IP_ADDRESS=true` and `restart: unless-stopped`. Both services
+  share compose's default network. (this commit)
+- [x] App env vars, documented in `.env.example` and `docker-compose.yml`
+  (this commit):
   - `ONLYOFFICE_PUBLIC_URL`: what browsers use, e.g. `https://docs.<domain>`
-  - `ONLYOFFICE_INTERNAL_URL`: what the app uses for conversion and commands,
-    e.g. `http://onlyoffice`
-  - `APP_INTERNAL_URL`: what the Document Server uses to reach the app, e.g.
-    `http://plan-takeoff-app:3000`
+  - `ONLYOFFICE_INTERNAL_URL`: what the app uses for commands and
+    conversions. Defaults to the public URL.
+  - `APP_INTERNAL_URL`: what the Document Server uses to reach the app.
+    Defaults to `APP_PUBLIC_URL`.
   - `ONLYOFFICE_JWT_SECRET`
-- [ ] `docs/onlyoffice-setup.md`, a step-by-step guide covering:
-  - Unraid container settings and a custom Docker network
-  - the Nginx Proxy Manager proxy host (**WebSockets support on**, SSL,
-    forwarded proto)
-  - the Cloudflare DNS record
-  - checking `https://docs.<domain>/healthcheck`
-- [ ] Admin "Document editor" status in Settings. It checks that:
-  - the browser can load `api.js`
-  - the app can reach the Document Server
-  - the Document Server can reach the app (callback round trip)
-
-  It shows clear fix-it messages.
+- [x] `docs/onlyoffice-setup.md`: Unraid containers and a shared custom
+  network, the Nginx Proxy Manager proxy host (WebSockets on, SSL), the
+  Cloudflare record, a `/healthcheck` quick check, and a troubleshooting table
+  keyed to the Settings messages. (this commit)
+- [x] Admin **Settings → Document Editor** tab (this commit):
+  - Server: `server/onlyoffice/` has `config.ts` (reads and validates env),
+    `tokens.ts` (short-lived single-purpose link tokens, key derived from the
+    app secret so they can never pass as logins) and `client.ts` (signed
+    `/command` and `/converter` calls, reused in Phase 1/4).
+  - Routes: `GET /api/onlyoffice/status` (admin) and the token-gated
+    `GET /api/onlyoffice/selftest/:id`.
+  - The checks:
+    - app → ONLYOFFICE via the command service's `version` call (also proves
+      the secret matches)
+    - ONLYOFFICE → app via a `txt → docx` conversion that downloads a test file
+      from `APP_INTERNAL_URL`
+    - browser → ONLYOFFICE by loading `api.js` (`src/utils/onlyofficeApi.ts`,
+      reused in Phase 1)
+  - Each failure names the setting to fix.
+  - Evidence:
+    - unit tests `server/onlyoffice/*.test.ts` (18, including a fake Document
+      Server that verifies both signatures and really downloads the test file),
+      `src/utils/onlyofficeApi.test.ts` and
+      `src/pages/settings/DocumentEditorTab.test.tsx`
+    - e2e `e2e/onlyoffice-settings.spec.ts`
+    - a manual browser run against a stand-in Document Server showing both the
+      failure messages (ECONNREFUSED) and three **Working** checks
+    - full unit suite 3227/3227 (270 files)
 - [ ] **(Nathan)** Check the Unraid server has about 4 GB of RAM to spare.
 - [ ] **(Nathan)** Create the test subdomain `docs-test.<domain>` in Cloudflare
-  and Nginx Proxy Manager.
+  and Nginx Proxy Manager (guide §5).
 - [ ] **(Nathan)** Start the ONLYOFFICE test container. Point the existing test
-  app container at the `:onlyoffice` image.
+  app container at the `:onlyoffice` image with the four variables (guide §4).
+- [ ] **(Nathan)** Settings → Document Editor on the test app shows three
+  **Working** checks against the real ONLYOFFICE.
 
 ## Phase 1 — Core editor (replaces the old editors)
 
