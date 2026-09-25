@@ -7,6 +7,12 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { openDb } from '../db';
+import { runMigrations } from '../migrations';
+import { migrations } from '../migrationList';
 import { registerOnlyofficeRoutes, type OnlyofficeRouteDeps } from './routes';
 import { LinkTokens } from './tokens';
 
@@ -60,6 +66,12 @@ const fakeDocumentServer = (opts: FakeOptions = {}): typeof fetch => (async (inp
   return new Response('<html>Not Found</html>', { status: 404 });
 }) as typeof fetch;
 
+const testDb = () => {
+  const db = openDb(':memory:');
+  runMigrations(db, fs.mkdtempSync(path.join(os.tmpdir(), 'ft-oo-')), migrations);
+  return db;
+};
+
 const mkApp = (over: Partial<OnlyofficeRouteDeps> = {}, user: any = { id: 'u1', role: 'admin' }) => {
   const a = express();
   a.use(express.json());
@@ -73,6 +85,9 @@ const mkApp = (over: Partial<OnlyofficeRouteDeps> = {}, user: any = { id: 'u1', 
     },
     requireAdmin: (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' })),
     fetch: fakeDocumentServer(),
+    db: testDb(),
+    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ft-oo-')),
+    broadcastChange: () => {},
     ...over,
   });
   return a;

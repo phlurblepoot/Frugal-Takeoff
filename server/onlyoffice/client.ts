@@ -100,3 +100,43 @@ export async function convert(
   }
   return { fileUrl: body.fileUrl, fileType: String(body.fileType || req.outputtype) };
 }
+
+/** Whether ONLYOFFICE still has an editing session open for this key (the
+ *  command service's `info`: error 0 = known, 1 = no such document). */
+export async function isSessionOpen(cfg: OnlyofficeConfig, fetchImpl: Fetch, key: string, timeoutMs = 8000): Promise<boolean> {
+  const body = await postSigned(cfg, fetchImpl, '/command', { c: 'info', key }, timeoutMs);
+  if (body?.error === 0) return true;
+  if (body?.error === 1) return false;
+  if (body?.error === 6) throw new OnlyofficeError('secret-mismatch', SECRET_MISMATCH, 6);
+  throw new OnlyofficeError('failed', `ONLYOFFICE's command service returned error ${body?.error ?? 'unknown'}.`, body?.error);
+}
+
+/** The same link on the internal address, when ONLYOFFICE built it with its
+ *  public one (it uses the address the browser connected on). Downloading a
+ *  save over the Docker network beats a round trip out through Cloudflare. */
+export function internalDownloadUrl(cfg: OnlyofficeConfig, url: string): string | null {
+  let u: URL;
+  let pub: URL;
+  try { u = new URL(url); pub = new URL(cfg.publicUrl); } catch { return null; }
+  if (u.host !== pub.host) return null;
+  const prefix = pub.pathname.replace(/\/$/, '');
+  const path = prefix && u.pathname.startsWith(prefix) ? u.pathname.slice(prefix.length) : u.pathname;
+  return `${cfg.internalUrl}${path}${u.search}`;
+}
+
+/** Downloads a file ONLYOFFICE produced (a save, a conversion result): over the
+ *  internal address first, then the link exactly as ONLYOFFICE gave it. */
+export async function downloadFromOnlyoffice(cfg: OnlyofficeConfig, fetchImpl: Fetch, url: string, timeoutMs = 120_000): Promise<Buffer> {
+  const candidates = [internalDownloadUrl(cfg, url), url].filter((v, i, a): v is string => !!v && a.indexOf(v) === i);
+  let lastError = 'no usable link';
+  for (const candidate of candidates) {
+    try {
+      const res = await fetchImpl(candidate, { signal: AbortSignal.timeout(timeoutMs) });
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
+      lastError = `HTTP ${res.status} from ${new URL(candidate).origin}`;
+    } catch (e) {
+      lastError = `${networkReason(e)} from ${new URL(candidate).origin}`;
+    }
+  }
+  throw new OnlyofficeError('unreachable', `Couldn't download the saved file from ONLYOFFICE (${lastError}).`);
+}

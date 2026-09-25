@@ -38,6 +38,7 @@ import { createDriveStore } from './server/backup/drive';
 import { readDrive } from './server/backup/settings';
 import { BackupScheduler } from './server/backup/scheduler';
 import { registerOnlyofficeRoutes } from './server/onlyoffice/routes';
+import { CALLBACK_PATH_PREFIX as ONLYOFFICE_CALLBACK_PATH_PREFIX } from './server/onlyoffice/editorRoutes';
 
 dotenv.config();
 
@@ -143,9 +144,12 @@ async function startServer() {
   //     express.raw parser lives in registerMailRoutes);
   //   * the Graph and Pub/Sub webhooks are unauthenticated and open to the
   //     internet, so each takes a 256 KB express.json() of its own instead of
-  //     this 50 MB one.
+  //     this 50 MB one;
+  //   * the ONLYOFFICE save callback needs no login either (the Document
+  //     Server signs it), so it has its own smaller parser too.
   const jsonParser = express.json({ limit: "50mb" });
-  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === '/api/setup/restore/upload' || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH;
+  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === '/api/setup/restore/upload' || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH
+    || p.startsWith(ONLYOFFICE_CALLBACK_PATH_PREFIX);
   app.use((req, res, next) => (ownParser(req.path) ? next() : jsonParser(req, res, next)));
 
   // JWT secret resolution order:
@@ -666,6 +670,7 @@ async function startServer() {
   // ONLYOFFICE document editor (docs/onlyoffice-setup.md).
   registerOnlyofficeRoutes(app, {
     env: process.env, appJwtSecret: JWT_SECRET, authenticateToken, requireAdmin,
+    db, dataDir: DATA_DIR, broadcastChange,
   });
 
   // Before the first sync tick: a reply that lands in that tick must still be

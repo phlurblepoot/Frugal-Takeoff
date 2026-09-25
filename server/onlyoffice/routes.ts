@@ -1,6 +1,7 @@
-// server/onlyoffice/routes.ts — ONLYOFFICE routes. Phase 0: the admin
-// connection check behind Settings → Document Editor, plus the one-off test
-// file the Document Server downloads during that check.
+// server/onlyoffice/routes.ts — ONLYOFFICE routes: the admin connection check
+// behind Settings → Document Editor (here, with the one-off test file the
+// Document Server downloads during it), and the editor itself: opening files
+// and saving them back (editorRoutes.ts).
 //
 // The check proves both directions, because either can be broken on its own:
 //   1. this app → ONLYOFFICE: the command service's `version` call. It fails
@@ -15,6 +16,9 @@
 // ONLYOFFICE_PUBLIC_URL, can only run in the browser; the Settings tab does it.
 import express from 'express';
 import { randomUUID } from 'crypto';
+import type Database from 'better-sqlite3';
+import type { BroadcastChange } from '../realtime/changeFeed';
+import { registerOnlyofficeEditorRoutes } from './editorRoutes';
 import { readOnlyofficeConfig, type OnlyofficeConfigProblem } from './config';
 import { LinkTokens } from './tokens';
 import { OnlyofficeError, convert, getVersion } from './client';
@@ -25,6 +29,9 @@ export interface OnlyofficeRouteDeps {
   appJwtSecret: string;
   authenticateToken: express.RequestHandler;
   requireAdmin: express.RequestHandler;
+  db: Database.Database;
+  dataDir: string;
+  broadcastChange: BroadcastChange;
   fetch?: typeof fetch;
 }
 
@@ -52,6 +59,11 @@ export function registerOnlyofficeRoutes(app: express.Express, deps: OnlyofficeR
   // Test ids the Document Server actually downloaded, so a failed conversion
   // can still say whether it reached us. Entries live only for one check.
   const selftestHits = new Set<string>();
+
+  registerOnlyofficeEditorRoutes(app, {
+    env: deps.env, db: deps.db, dataDir: deps.dataDir, tokens, authenticateToken,
+    broadcastChange: deps.broadcastChange, fetch: fetchImpl,
+  });
 
   // Public by necessity (the Document Server has no user session), but only
   // with a two-minute token for this one test id, and it serves a fixed

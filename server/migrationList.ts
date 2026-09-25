@@ -1674,4 +1674,32 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 37,
+    name: 'onlyoffice-editor',
+    // ADDITIVE (ONLYOFFICE Phase 1, docs/superpowers/specs/2026-09-25-onlyoffice-checklist.md):
+    //   * files.createdBy — who produced each version (upload, generate or an
+    //     editor save). NULL on every existing row: history from before this
+    //     migration has no known author.
+    //   * editor_sessions — one row per file while an ONLYOFFICE editing
+    //     session is open, so everyone who opens the file joins that session
+    //     (same document key) and its saves follow the one-version-per-session
+    //     rule. Rows go when ONLYOFFICE reports the session closed.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(files)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('createdBy')) db.exec(`ALTER TABLE files ADD COLUMN createdBy TEXT;`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS editor_sessions (
+          fileId             TEXT PRIMARY KEY,
+          docKey             TEXT NOT NULL,
+          baseVersionNumber  INTEGER NOT NULL,
+          savedVersionNumber INTEGER,
+          savedSha256        TEXT,
+          startedAt          INTEGER NOT NULL,
+          lastSavedAt        INTEGER,
+          lastSavedBy        TEXT
+        );
+      `);
+    },
+  },
 ];

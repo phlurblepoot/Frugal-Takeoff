@@ -1185,6 +1185,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           sourceType: str(q.sourceType),
           sourceId: str(q.sourceId),
           mode: str(q.mode) === 'overwrite' ? 'overwrite' : undefined,
+          createdBy: (req as any).user?.id,
         });
         deps.broadcastChange({
           type: 'file', id: result.id, projectId: result.projectId ?? undefined,
@@ -1259,7 +1260,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         if (!target) return res.status(404).json({ error: 'File not found' });
         if (target.parentFileId) return res.status(400).json({ error: 'Cannot version a historical file row' });
         const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
-        const result = saveNewVersion(db, dataDir, req.params.id, body, mime);
+        const result = saveNewVersion(db, dataDir, req.params.id, body, mime, (req as any).user?.id);
         // I6: this route replaces the LIVE bytes out from under any sheet
         // session the flush engine doesn't know about — clear it so the next
         // sheet-join re-imports the new bytes instead of hydrating the stale

@@ -1123,3 +1123,22 @@ describe('migration 36: backup-runs', () => {
     db.close();
   });
 });
+
+describe('migration 37: onlyoffice-editor', () => {
+  it('adds files.createdBy (NULL on existing rows) and editor_sessions, and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 36));
+    db.prepare(`INSERT INTO files (id, mime, size, sha256, kind, versionNumber, createdAt) VALUES ('old', 'application/pdf', 1, 'x', 'document', 1, 1)`).run();
+    runMigrations(db, dir, migrations);
+    expect(columnNames(db, 'files')).toContain('createdBy');
+    expect((db.prepare('SELECT createdBy FROM files WHERE id = ?').get('old') as any).createdBy).toBeNull();
+    expect(tableNames(db)).toContain('editor_sessions');
+    for (const c of ['fileId', 'docKey', 'baseVersionNumber', 'savedVersionNumber', 'savedSha256', 'startedAt', 'lastSavedAt', 'lastSavedBy']) {
+      expect(columnNames(db, 'editor_sessions'), `missing ${c}`).toContain(c);
+    }
+    const m37 = migrations.find(m => m.version === 37)!;
+    expect(() => m37.up({ db, dataDir: dir } as any)).not.toThrow();
+    db.close();
+  });
+});

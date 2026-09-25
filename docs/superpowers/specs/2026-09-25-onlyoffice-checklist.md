@@ -187,13 +187,14 @@ container next to the app, and build the extras agreed below on top of it.
     - full unit suite 3227/3227 (270 files)
     - full e2e suite: 102 passed, 1 skipped (the conditional fresh-install
       restore spec, skipped before this work too)
-- [ ] **(Nathan)** Check the Unraid server has about 4 GB of RAM to spare.
-- [ ] **(Nathan)** Create the test subdomain `docs-test.<domain>` in Cloudflare
-  and Nginx Proxy Manager (guide §5).
-- [ ] **(Nathan)** Start the ONLYOFFICE test container. Point the existing test
+- [x] **(Nathan)** Check the Unraid server has about 4 GB of RAM to spare. (2026-09-25)
+- [x] **(Nathan)** Create the test subdomain `docs-test.<domain>` in Cloudflare
+  and Nginx Proxy Manager (guide §5). (2026-09-25)
+- [x] **(Nathan)** Start the ONLYOFFICE test container. Point the existing test
   app container at the `:onlyoffice` image with the four variables (guide §4).
-- [ ] **(Nathan)** Settings → Document Editor on the test app shows three
-  **Working** checks against the real ONLYOFFICE.
+  (2026-09-25)
+- [x] **(Nathan)** Settings → Document Editor on the test app shows three
+  **Working** checks against the real ONLYOFFICE. (2026-09-25)
 
 ## Phase 1 — Core editor (replaces the old editors)
 

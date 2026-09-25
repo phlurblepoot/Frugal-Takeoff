@@ -12,6 +12,7 @@ import { registerDataRoutes } from './routes';
 import {
   putDataUrl, putBuffer, getMeta, getDataUrlString, removeFile, saveNewVersion, listVersions,
   setFileFlags, isDirectUploadKind, DIRECT_UPLOAD_KINDS, SYSTEM_KINDS, MULTI_INSTANCE_KINDS,
+  replaceLiveContent,
 } from './files';
 import { readFileContent } from './fileStore';
 
@@ -173,6 +174,57 @@ describe('file versioning', () => {
     const nums = listVersions(db, 'f1').map(v => v.versionNumber).sort((a, b) => a - b);
     expect(nums).toEqual([1, 2, 3]);
     expect(new Set(nums).size).toBe(nums.length);
+  });
+});
+
+describe('version authors (createdBy)', () => {
+  it('records the uploader, and each version keeps its own author', async () => {
+    app = buildApp('admin', 'alice');
+    const id = await upload('doc-a', { projectId: 'p1', kind: 'document', name: 'Scope.docx' }, 'v1');
+    expect(getMeta(db, id)!.createdBy).toBe('alice');
+
+    app = buildApp('user', 'bob');
+    const r = await request(app).post(`/api/files/${id}/versions`).set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    expect(r.status).toBe(200);
+    const [live, v1] = listVersions(db, id);
+    expect(live.createdBy).toBe('bob');
+    expect(v1.createdBy).toBe('alice');
+  });
+
+  it('a regenerate (upsert-by-source) stamps the regenerating user on the new version', async () => {
+    app = buildApp('admin', 'alice');
+    const id = await upload('inv-1', { projectId: 'p1', kind: 'invoice', sourceType: 'invoice', sourceId: 'i1' }, 'first');
+    app = buildApp('admin', 'carol');
+    expect(await upload('inv-2', { projectId: 'p1', kind: 'invoice', sourceType: 'invoice', sourceId: 'i1' }, 'second')).toBe(id);
+    const [live, v1] = listVersions(db, id);
+    expect(live.createdBy).toBe('carol');
+    expect(v1.createdBy).toBe('alice');
+  });
+
+  it('a version saved with no known author is not credited to the previous one', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('v1'), 'application/pdf', { createdBy: 'alice' });
+    saveNewVersion(db, dir, 'f1', Buffer.from('v2'), 'application/pdf');
+    expect(getMeta(db, 'f1')!.createdBy).toBeNull();
+  });
+});
+
+describe('replaceLiveContent', () => {
+  it('swaps the live bytes in place: same version number, history kept, size and hash updated', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('v1'), 'application/pdf', { name: 'Bid.pdf', createdBy: 'alice' });
+    saveNewVersion(db, dir, 'f1', Buffer.from('v2'), 'application/pdf', 'bob');
+    const before = getMeta(db, 'f1')!;
+    const after = replaceLiveContent(db, dir, 'f1', Buffer.from('v2 with more edits'), 'application/pdf', 'carol');
+    expect(after.versionNumber).toBe(before.versionNumber);
+    expect(after.size).toBe('v2 with more edits'.length);
+    expect(after.sha256).not.toBe(before.sha256);
+    expect(after.createdBy).toBe('carol');
+    expect(after.name).toBe('Bid.pdf');
+    expect(readFileContent(dir, 'f1')!.toString()).toBe('v2 with more edits');
+    expect(listVersions(db, 'f1').map(v => v.versionNumber)).toEqual([2, 1]);
+  });
+
+  it('throws for unknown files', () => {
+    expect(() => replaceLiveContent(db, dir, 'nope', Buffer.from('x'), 'text/plain')).toThrow();
   });
 });
 
