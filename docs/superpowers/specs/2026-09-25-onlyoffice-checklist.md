@@ -144,13 +144,13 @@ container next to the app, and build the extras agreed below on top of it.
 
 - [x] Add `onlyoffice` to the push branches in `.github/workflows/docker.yml`
   so every push builds `ghcr.io/phlurblepoot/frugal-takeoff:onlyoffice`.
-  (this commit)
+  (`b66a8d1`; first image built green in Actions run #543)
 - [x] `docker-compose.yml`: an `onlyoffice` service pinned to
   `onlyoffice/documentserver:9.4.0.1`, with `JWT_SECRET`,
   `ALLOW_PRIVATE_IP_ADDRESS=true` and `restart: unless-stopped`. Both services
-  share compose's default network. (this commit)
+  share compose's default network. (`b66a8d1`)
 - [x] App env vars, documented in `.env.example` and `docker-compose.yml`
-  (this commit):
+  (`b66a8d1`):
   - `ONLYOFFICE_PUBLIC_URL`: what browsers use, e.g. `https://docs.<domain>`
   - `ONLYOFFICE_INTERNAL_URL`: what the app uses for commands and
     conversions. Defaults to the public URL.
@@ -160,8 +160,8 @@ container next to the app, and build the extras agreed below on top of it.
 - [x] `docs/onlyoffice-setup.md`: Unraid containers and a shared custom
   network, the Nginx Proxy Manager proxy host (WebSockets on, SSL), the
   Cloudflare record, a `/healthcheck` quick check, and a troubleshooting table
-  keyed to the Settings messages. (this commit)
-- [x] Admin **Settings → Document Editor** tab (this commit):
+  keyed to the Settings messages. (`b66a8d1`)
+- [x] Admin **Settings → Document Editor** tab (`b66a8d1`):
   - Server: `server/onlyoffice/` has `config.ts` (reads and validates env),
     `tokens.ts` (short-lived single-purpose link tokens, key derived from the
     app secret so they can never pass as logins) and `client.ts` (signed
@@ -185,6 +185,8 @@ container next to the app, and build the extras agreed below on top of it.
     - a manual browser run against a stand-in Document Server showing both the
       failure messages (ECONNREFUSED) and three **Working** checks
     - full unit suite 3227/3227 (270 files)
+    - full e2e suite: 102 passed, 1 skipped (the conditional fresh-install
+      restore spec, skipped before this work too)
 - [ ] **(Nathan)** Check the Unraid server has about 4 GB of RAM to spare.
 - [ ] **(Nathan)** Create the test subdomain `docs-test.<domain>` in Cloudflare
   and Nginx Proxy Manager (guide §5).
