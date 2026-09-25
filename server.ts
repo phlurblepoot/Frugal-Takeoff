@@ -33,11 +33,16 @@ import { WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './server/mail/push';
 import { BodyCache } from './server/mail/sync/bodyCache';
 import { sweepUploads } from './server/mail/uploads';
 import { installInboundHooks } from './server/mail/inboundHooks';
+import { registerBackupRoutes } from './server/backup/routes';
+import { createDriveStore } from './server/backup/drive';
+import { readDrive } from './server/backup/settings';
+import { BackupScheduler } from './server/backup/scheduler';
 
 dotenv.config();
 
 const DATA_DIR = process.env.STORAGE_PATH || path.join(process.cwd(), "data");
 const DB_FILE = path.join(DATA_DIR, "app.db");
+const APP_VERSION = JSON.parse(fsSync.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')).version as string;
 
 let db: Database.Database;
 // Loaded (or generated) once in initDb, then shared by migration 31 and the
@@ -139,7 +144,7 @@ async function startServer() {
   //     internet, so each takes a 256 KB express.json() of its own instead of
   //     this 50 MB one.
   const jsonParser = express.json({ limit: "50mb" });
-  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH;
+  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === '/api/setup/restore/upload' || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH;
   app.use((req, res, next) => (ownParser(req.path) ? next() : jsonParser(req, res, next)));
 
   // JWT secret resolution order:
@@ -472,7 +477,7 @@ async function startServer() {
   // nextInvoiceNumber) — internal bookkeeping, not a user setting. Withholding
   // it from GET keeps it out of the client's settings object, so the Settings
   // page can never round-trip a stale copy back and roll the counter backwards.
-  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.', 'invoiceNumber'];
+  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.', 'invoiceNumber', 'backup.'];
   const isPrivateSettingKey = (key: string) => SETTINGS_PRIVATE_PREFIXES.some(p => key.startsWith(p));
   app.get("/api/settings", (req, res) => {
     try {
@@ -644,6 +649,18 @@ async function startServer() {
     broadcastChange,
     mailCtx,
   });
+
+  const BACKUP_PATH = process.env.BACKUP_PATH || path.join(DATA_DIR, 'backup-store');
+  const backupRoutes = registerBackupRoutes(app, {
+    db, dataDir: DATA_DIR, backupRoot: BACKUP_PATH, backupRootIsDefault: !process.env.BACKUP_PATH,
+    appVersion: APP_VERSION, env: process.env, publicUrl: process.env.APP_PUBLIC_URL || null, jwtSecret: JWT_SECRET,
+    mailCrypto, authenticateToken, requireAdmin, verifyToken, broadcastChange,
+    closeDb: () => db.close(), exit: code => process.exit(code),
+    driveStore: conn => createDriveStore(conn, { db, env: process.env, mailCrypto, fetch: globalThis.fetch }),
+  });
+  const backupScheduler = new BackupScheduler({ db, run: (t, trigger) => backupRoutes.runAndWait(t, trigger), hasDrive: () => !!readDrive(db, mailCrypto) });
+  backupRoutes.setScheduler(backupScheduler);
+  backupScheduler.start();
 
   // Before the first sync tick: a reply that lands in that tick must still be
   // captured against its RFI.

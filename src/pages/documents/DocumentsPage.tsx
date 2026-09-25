@@ -240,6 +240,19 @@ export const DocumentsPage: React.FC = () => {
     }
   };
 
+  // Bulk re-type: the bulk bar only ever hands over selectionPolicy.retypeable
+  // rows, so a system-kind row is never sent (the server would 409 it). Same
+  // allSettled + partial-failure toast shape as archiveRows/deleteRows.
+  const changeKindBulk = async (targets: DocumentRow[], kind: string) => {
+    if (targets.length === 0) return;
+    const results = await Promise.allSettled(targets.map(r => patchFile(r.id, { kind })));
+    const failed = results.filter(r => r.status === 'rejected').length;
+    if (failed === targets.length) toast('Failed to change type', { type: 'error' });
+    else if (failed) toast(`Changed type of ${targets.length - failed} of ${targets.length}`, { type: 'warning' });
+    else toast(`Changed type of ${targets.length} document${targets.length === 1 ? '' : 's'}`, { type: 'success' });
+    await refresh(Math.max(rows.length, PAGE_SIZE));
+  };
+
   const bulkDownload = async (targets: DocumentRow[]) => {
     let ok = 0;
     for (const row of targets) {
@@ -343,10 +356,12 @@ export const DocumentsPage: React.FC = () => {
 
       <DocumentsBulkBar
         selected={selectedRows}
+        customTypes={customTypes}
         archivedView={archived}
         onClear={clearSelection}
         onDownload={bulkDownload}
         onArchive={archiveRows}
+        onChangeKind={changeKindBulk}
         onDelete={deleteRows}
       />
 

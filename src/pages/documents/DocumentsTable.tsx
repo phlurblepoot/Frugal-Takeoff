@@ -218,6 +218,10 @@ export const DocumentsTable: React.FC<{
     }
   };
 
+  // `block truncate` + title: inside the fixed-layout desktop table the
+  // Source column has a set width, so a long subject line (mail-sourced rows
+  // carry the email's subject as the label) ellipsizes instead of widening
+  // the column. In the mobile cards the enclosing div is min-w-0 already.
   const SourceCell: React.FC<{ row: DocumentRow }> = ({ row }) => {
     if (!row.source) return <span className="text-ink-faint">—</span>;
     if (row.source.href) {
@@ -225,24 +229,34 @@ export const DocumentsTable: React.FC<{
         <Link
           to={row.source.href}
           onClick={e => e.stopPropagation()}
-          className="text-accent-600 hover:underline dark:text-accent-400"
+          title={row.source.label}
+          className="block truncate text-accent-600 hover:underline dark:text-accent-400"
         >
           {row.source.label}
         </Link>
       );
     }
-    return <span>{row.source.label}</span>;
+    return <span className="block truncate" title={row.source.label}>{row.source.label}</span>;
   };
 
   const allSelected = rows.length > 0 && rows.every(r => selected.has(r.id));
 
   return (
     <>
+      {/* Fixed table layout: every column but Name has an explicit width, so
+          Name gets whatever is left and its `truncate` actually bites. With
+          automatic layout a long unbreakable file name made the Name column
+          as wide as the name, the table overflowed its wrapper and only the
+          first two columns stayed on screen. The fixed widths are trimmed at
+          md (a 768px tablet next to the 208px sidebar leaves <500px) and the
+          Source column only appears from lg and the Date column from xl —
+          below those the date rides in the Name cell's subline, and a
+          sourced row still reaches its record through the row menu. */}
       <div className="hidden md:block">
-        <Table>
+        <Table className="table-fixed">
           <THead>
             <TR>
-              <TH className="w-8">
+              <TH className="w-10">
                 <input
                   type="checkbox"
                   className="size-4 rounded border-edge-strong accent-accent-600"
@@ -252,11 +266,11 @@ export const DocumentsTable: React.FC<{
                 />
               </TH>
               <TH>Name</TH>
-              <TH>Type</TH>
-              <TH>Project</TH>
-              <TH>Source</TH>
-              <TH>Date</TH>
-              <TH className="text-right">Actions</TH>
+              <TH className="w-24 lg:w-28">Type</TH>
+              <TH className="w-24 lg:w-36">Project</TH>
+              <TH className="hidden w-40 lg:table-cell">Source</TH>
+              <TH className="hidden w-28 xl:table-cell">Date</TH>
+              <TH className="w-20 text-right">Actions</TH>
             </TR>
           </THead>
           <TBody>
@@ -278,7 +292,7 @@ export const DocumentsTable: React.FC<{
                     onMouseLeave: () => setHover(null),
                   } : {})}
                 >
-                  <TD className="w-8" onClick={e => e.stopPropagation()}>
+                  <TD className="w-10" onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       data-testid="doc-row-select"
@@ -289,19 +303,22 @@ export const DocumentsTable: React.FC<{
                     />
                   </TD>
                   <TD className="font-medium text-ink">
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
                       <MimeIcon mime={row.mime} />
-                      <span className="truncate">{row.name ?? row.id}</span>
+                      <span className="truncate" title={row.name ?? row.id}>{row.name ?? row.id}</span>
                       <FileViewerDots fileId={row.id} />
                     </div>
-                    <div className="ml-[23px] text-xs font-normal text-ink-faint">
+                    <div className="ml-[23px] truncate text-xs font-normal text-ink-faint">
                       {formatBytes(row.size)}{row.versionNumber > 1 ? ` · v${row.versionNumber}` : ''}
+                      <span className="xl:hidden"> · {new Date(row.createdAt).toLocaleDateString()}</span>
                     </div>
                   </TD>
-                  <TD><StatusPill tone={kindTone(row.kind)}>{kindLabel(row.kind, customTypes)}</StatusPill></TD>
-                  <TD className="text-ink-soft">{row.projectName ?? '—'}</TD>
-                  <TD><SourceCell row={row} /></TD>
-                  <TD className="text-ink-soft">{new Date(row.createdAt).toLocaleDateString()}</TD>
+                  <TD className="overflow-hidden"><StatusPill tone={kindTone(row.kind)}>{kindLabel(row.kind, customTypes)}</StatusPill></TD>
+                  <TD className="text-ink-soft">
+                    <span className="block truncate" title={row.projectName ?? undefined}>{row.projectName ?? '—'}</span>
+                  </TD>
+                  <TD className="hidden lg:table-cell"><SourceCell row={row} /></TD>
+                  <TD className="hidden text-ink-soft xl:table-cell">{new Date(row.createdAt).toLocaleDateString()}</TD>
                   <TD className="text-right" onClick={e => e.stopPropagation()}>
                     <RowActions row={row} onHistory={() => handleHistory(row)} />
                   </TD>

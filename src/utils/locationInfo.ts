@@ -26,3 +26,12 @@ export function locationFromPath(pathname: string, search: string, label?: strin
   }
   return { path: pathname, projectId, section, pageId, fileId, label };
 }
+
+/** Routes that render on their own, with no app chrome around them: the sign-in
+ *  page and the fresh-install restore screen. Both run before there is an
+ *  account or any data to navigate to. Kept in one place because the layout,
+ *  the shell and the sidebar each have to agree — they drifted apart once
+ *  already when /restore was added. */
+export function isBareRoute(pathname: string): boolean {
+  return pathname === '/login' || pathname === '/restore';
+}

@@ -51,9 +51,10 @@ import {
   NotFoundError as TaskNotFoundError,
 } from './taskStore';
 import {
-  listSovLines, getSovLine, createSovLine, saveSovLine, deleteSovLine, seedSovLines, syncChangeOrders,
+  listSovLines, getSovLine, createSovLine, saveSovLine, deleteSovLine, seedSovLines, syncChangeOrders, reorderSovLines, splitSovLine,
   listPayApps, createPayApp, getPayApp, savePayAppLines, setPayApp, deletePayApp,
   computeG703, computeG702,
+  getSovLock, lockSov, unlockSov, requireProject as requireAiaProject, SovLockedError,
   ValidationError as AiaValidationError,
   ConflictError as AiaConflictError,
   NotFoundError as AiaNotFoundError,
@@ -276,6 +277,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   // ── Billing (admin only, spec §4.1/§4.3) ──────────────────────────────────
   const billingErr = (e: unknown, res: express.Response) => {
+    if (e instanceof SovLockedError) return res.status(409).json({ error: e.message, code: 'sov_locked' });
     if (e instanceof BillingNotFoundError) return res.status(404).json({ error: e.message });
     if (e instanceof BillingConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
     if (e instanceof BillingValidationError) return res.status(400).json({ error: e.message });
@@ -456,6 +458,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   // ── AIA progress billing — G702/G703 (admin-only, like billing) ───────────
   const aiaErr = (e: unknown, res: express.Response) => {
+    if (e instanceof SovLockedError) return res.status(409).json({ error: e.message, code: 'sov_locked' });
     if (e instanceof AiaNotFoundError) return res.status(404).json({ error: e.message });
     if (e instanceof AiaConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
     if (e instanceof AiaValidationError) return res.status(400).json({ error: e.message });
@@ -491,6 +494,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json({ success: true });
     } catch (e) { aiaErr(e, res); }
   });
+  app.post('/api/aia/sov/:lineId/split', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const r = splitSovLine(db, req.params.lineId, req.body ?? {});
+      const header = getSovLine(db, r.headerId);
+      deps.broadcastChange({ type: 'aiaSov', id: header.projectId, projectId: header.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ header, children: r.childIds.map(cid => getSovLine(db, cid)) });
+    } catch (e) { aiaErr(e, res); }
+  });
   app.post('/api/projects/:id/aia/sov/seed', authenticateToken, requireAdmin, (req, res) => {
     try {
       const r = seedSovLines(db, req.params.id, req.body?.lines);
@@ -505,6 +516,47 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const r = syncChangeOrders(db, req.params.id);
       deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
       res.json(r);
+    } catch (e) { aiaErr(e, res); }
+  });
+
+  // SOV lock (spec 2026-09-11). Reported shape is stable for the client chip;
+  // the locker's name is resolved here so the client never joins users.
+  const sovLockState = (projectId: string) => {
+    requireAiaProject(db, projectId);
+    const payAppCount = (db.prepare('SELECT COUNT(*) c FROM aia_pay_apps WHERE projectId = ?').get(projectId) as { c: number }).c;
+    const lock = getSovLock(db, projectId);
+    if (!lock) return { locked: false, payAppCount };
+    const user = lock.lockedByUserId
+      ? db.prepare('SELECT username FROM users WHERE id = ?').get(lock.lockedByUserId) as { username: string } | undefined
+      : undefined;
+    return {
+      locked: true, lockedAt: lock.lockedAt, lockedByUserId: lock.lockedByUserId,
+      lockedByName: user?.username ?? null, reason: lock.reason, payAppCount,
+    };
+  };
+  app.get('/api/projects/:id/aia/sov/lock', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(sovLockState(req.params.id)); } catch (e) { aiaErr(e, res); }
+  });
+  app.post('/api/projects/:id/aia/sov/lock', authenticateToken, requireAdmin, (req: any, res) => {
+    try {
+      lockSov(db, req.params.id, { userId: req.user?.id ?? null, reason: 'manual' });
+      deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
+      res.json(sovLockState(req.params.id));
+    } catch (e) { aiaErr(e, res); }
+  });
+  app.delete('/api/projects/:id/aia/sov/lock', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      unlockSov(db, req.params.id);
+      deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
+      res.json(sovLockState(req.params.id));
+    } catch (e) { aiaErr(e, res); }
+  });
+
+  app.put('/api/projects/:id/aia/sov/order', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      reorderSovLines(db, req.params.id, req.body?.ids);
+      deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
     } catch (e) { aiaErr(e, res); }
   });
 
@@ -527,6 +579,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const r = createPayApp(db, req.params.id, input);
       const row = getPayApp(db, r.id);
       deps.broadcastChange({ type: 'aiaPayApp', id: r.id, projectId: req.params.id, version: row?.version, action: 'created', ...requestMeta(req) });
+      // createPayApp auto-locks the SOV on the FIRST pay app — the SOV editor
+      // listens for 'aiaSov', not 'aiaPayApp', so an open tab would otherwise
+      // never see the lock without a manual refresh.
+      deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
       res.json(r);
     } catch (e) { aiaErr(e, res); }
   });

@@ -23,6 +23,7 @@ import { ProposalsList } from './pages/project/proposal/ProposalsList';
 import { ProposalEditor } from './pages/project/proposal/ProposalEditor';
 import { ProjectSettings } from './pages/project/ProjectSettings';
 import { Login } from './pages/Login';
+import { RestorePage } from './pages/RestorePage';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
 import { SpreadsheetEditor } from './pages/SpreadsheetEditor';
@@ -43,10 +44,12 @@ import { CommandPalette } from './components/CommandPalette';
 import { AppShell } from './components/shell/AppShell';
 import ProjectConflictListener from './components/ProjectConflictListener';
 import { getSettings } from './utils/store';
+import { isBareRoute } from './utils/locationInfo';
 
 const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   const location = useLocation();
-  const isLoginPage = location.pathname === '/login';
+  // /restore is the fresh-install twin of /login: same chrome-free treatment.
+  const isBare = isBareRoute(location.pathname);
 
   return (
     <ToastProvider>
@@ -55,7 +58,7 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
         <ShareProvider>
           <CollaborationProvider>
             <NotesProvider>
-              {!isLoginPage && <CommandPalette />}
+              {!isBare && <CommandPalette />}
               <AppShell appName={appName}>
                 <FollowPill />
                 <ThemeWipe />
@@ -103,6 +106,10 @@ export default function App() {
         {
           path: 'login',
           element: <Login />,
+        },
+        {
+          path: 'restore',
+          element: <RestorePage />,
         },
         {
           index: true,

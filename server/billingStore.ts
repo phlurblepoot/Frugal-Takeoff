@@ -1,7 +1,7 @@
 // server/billingStore.ts
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
-import { listPayAppRows, computeG702 } from './aiaStore';
+import { listPayAppRows, computeG702, assertSovEditable } from './aiaStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -532,6 +532,16 @@ export function removeChangeOrderPhoto(db: Database.Database, changeOrderId: str
 
 export function deleteChangeOrder(db: Database.Database, id: string): void {
   const tx = db.transaction(() => {
+    // A synced SOV line is a row a finalized pay app has already computed
+    // from — deleting it out from under a locked SOV would change history.
+    // A CO with no synced line (never synced, or synced only pre-lock and
+    // since removed) is not load-bearing for any locked computation, so it
+    // still deletes freely.
+    const co = db.prepare('SELECT projectId FROM change_orders WHERE id = ?').get(id) as { projectId: string } | undefined;
+    if (co) {
+      const syncedLine = db.prepare('SELECT id FROM aia_sov_lines WHERE changeOrderId = ?').get(id);
+      if (syncedLine) assertSovEditable(db, co.projectId);
+    }
     db.prepare('DELETE FROM change_order_lines WHERE changeOrderId = ?').run(id);
     db.prepare('DELETE FROM change_order_photos WHERE changeOrderId = ?').run(id);
     // Remove the synced AIA SOV line for this CO so deleting a CO never leaves an
@@ -565,7 +575,7 @@ export function billingSummary(db: Database.Database, projectId: string, billedD
 
   // SOV original (non-CO) lines drive the base when an SOV exists.
   const sovOriginalCents = (db.prepare(
-    'SELECT COALESCE(SUM(scheduledValueCents), 0) v FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 0'
+    "SELECT COALESCE(SUM(scheduledValueCents), 0) v FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 0 AND lineType = 'item'"
   ).get(projectId) as { v: number }).v;
   const sovCount = (db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE projectId = ?').get(projectId) as { c: number }).c;
   const hasSov = sovCount > 0;

@@ -16,7 +16,7 @@ import { getWebhookSecret, getGooglePushSecret, handleGraphWebhook, handleGoogle
 import { putBuffer } from '../files';
 import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
-import type { AttachmentMeta, Addr, MailProvider, MoveResult } from './providers/types';
+import type { AttachmentMeta, AttachmentHint, Addr, MailProvider, MoveResult } from './providers/types';
 import { AuthExpiredError, ProviderNotFoundError } from './providers/types';
 import { getFakeProvider } from './providers/fakeRegistry';
 import type { Seeded } from './providers/fake';
@@ -143,6 +143,20 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
    *  item, and so only the first recovery writes and broadcasts. */
   interface FreshParts { list: AttachmentMeta[] | null }
 
+  /** The entry in a freshly read part list that is the same file as `want`:
+   *  by name AND size, or failing that by the position the stale entry held
+   *  (`at`), still requiring the name to agree. */
+  const sameFile = (fresh: AttachmentMeta[], want: AttachmentMeta | null, at: number): AttachmentMeta | undefined =>
+    want
+      ? (fresh.find(f => f.name === want.name && f.size === want.size)
+        ?? (at >= 0 && at < fresh.length && fresh[at]?.name === want.name ? fresh[at] : undefined))
+      : undefined;
+
+  /** What we can tell the provider about a part so it need not read the
+   *  message to learn it (see AttachmentHint). */
+  const hintOf = (meta: AttachmentMeta | null | undefined): AttachmentHint | undefined =>
+    meta ? { name: meta.name, mime: meta.mime || 'application/octet-stream' } : undefined;
+
   /**
    * getAttachment, but tolerant of an attachment id that has gone stale.
    *
@@ -153,8 +167,16 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
    * fails" looked like against a real mailbox.
    *
    * On a 404 (and only a 404), re-read the message for a fresh part list, find
-   * the same file in it — by name AND size, or failing that by the position the
-   * stale entry held, still requiring the name to agree — and retry.
+   * the same file in it (sameFile) and retry.
+   *
+   * Two rules keep a multi-item batch to ONE message read in total, which is
+   * what makes it work at all: every read mints new ids, so a second read
+   * anywhere strands whatever the first one returned.
+   *  - The provider is always given the part's name and MIME type, so it never
+   *    reads the message on its own to look an unknown id up.
+   *  - Once a batch has paid for its read (`cache.list`), every later item is
+   *    resolved against that list FIRST and fetched under its live id — the
+   *    stale id is not even tried.
    *
    * `wanted` is resolved by the CALLER from a snapshot of the indexed list
    * taken before the batch began, and deliberately not re-read from the row
@@ -169,8 +191,10 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   ): Promise<{ att: Awaited<ReturnType<MailProvider['getAttachment']>>; attId: string }> => {
     const provider = providerFor(m.accountId);
     const { attId, meta: want, index: at } = wanted;
+    const known = cache.list && sameFile(cache.list, want, at);
+    if (known) return { att: await provider.getAttachment(m.providerMessageId, known.attId, hintOf(known)), attId: known.attId };
     try {
-      return { att: await provider.getAttachment(m.providerMessageId, attId), attId };
+      return { att: await provider.getAttachment(m.providerMessageId, attId, hintOf(want)), attId };
     } catch (e) {
       if (!(e instanceof ProviderNotFoundError)) throw e;
       let fresh = cache.list;
@@ -182,21 +206,32 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         // The broadcast is what makes an OPEN client drop the dead ids it is
         // still rendering chips for.
         if (fresh.length) {
-          db.prepare('UPDATE mail_messages SET attachmentsJson = ? WHERE id = ?').run(JSON.stringify(withPriorIds(m, fresh)), m.id);
+          reindexAttachments(m, fresh);
           const owner = accounts.getAccountAny(db, m.accountId);
           if (owner) ctx.broadcastChange({ type: 'mailThread', id: m.threadKey, action: 'updated', byUserId: owner.userId });
         }
       }
-      const match = want
-        && (fresh.find(f => f.name === want.name && f.size === want.size)
-          ?? (at >= 0 && at < fresh.length && fresh[at]?.name === want.name ? fresh[at] : undefined));
+      const match = sameFile(fresh, want, at);
       // No confident match (or the provider handed back the same dead id):
       // the original 404 is the honest answer.
       if (!match || match.attId === attId) throw e;
       console.warn(`[mail] attachment id went stale on message=${m.id} account=${m.accountId}; retrying ${attId} as ${match.attId}`);
-      return { att: await provider.getAttachment(m.providerMessageId, match.attId), attId: match.attId };
+      return { att: await provider.getAttachment(m.providerMessageId, match.attId, hintOf(match)), attId: match.attId };
     }
   };
+
+  /** Writes the provider's CURRENT part list into the row, each entry still
+   *  answering to the id it replaced (withPriorIds). */
+  const reindexAttachments = (m: MessageRowRaw, fresh: AttachmentMeta[]): void => {
+    db.prepare('UPDATE mail_messages SET attachmentsJson = ? WHERE id = ?').run(JSON.stringify(withPriorIds(m, fresh)), m.id);
+  };
+
+  const indexedAttachments = (m: MessageRowRaw): AttachmentMeta[] => {
+    try { return JSON.parse(m.attachmentsJson || '[]') as AttachmentMeta[]; } catch { return []; }
+  };
+
+  const sameIds = (a: AttachmentMeta[], b: AttachmentMeta[]): boolean =>
+    a.length === b.length && a.every((x, i) => x.attId === b[i].attId);
 
   /**
    * Carries each stale attachment id forward onto the fresh part that replaced
@@ -217,8 +252,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
    * so a long-lived message's row cannot grow without bound.
    */
   const withPriorIds = (m: MessageRowRaw, fresh: AttachmentMeta[]): AttachmentMeta[] => {
-    let prev: AttachmentMeta[] = [];
-    try { prev = JSON.parse(m.attachmentsJson || '[]') as AttachmentMeta[]; } catch { prev = []; }
+    const prev = indexedAttachments(m);
     if (!prev.length) return fresh;
     const taken = new Set<number>();
     return fresh.map((f, i) => {
@@ -650,6 +684,12 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     if (hit) return res.json(hit);
     try {
       const raw = await providerFor(m.accountId).getBody(m.providerMessageId);
+      // This read is the one that hands the client its attachment ids (the
+      // payload below, and the inline-image URLs built from it), so the row
+      // has to know them too: the download route resolves an id against the
+      // row, and until this was written a Gmail id minted by THIS read was
+      // "not on this message" there — every inline image 404'd.
+      if (raw.attachments.length && !sameIds(indexedAttachments(m), raw.attachments)) reindexAttachments(m, raw.attachments);
       const attachmentUrl = (cid: string) => {
         const att = raw.attachments.find(x => (x.contentId || '').replace(/^<|>$/g, '') === cid);
         return att ? `/api/mail/messages/${m.id}/attachments/${encodeURIComponent(att.attId)}?inline=1` : null;
@@ -688,7 +728,14 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     if (!m) return res.status(404).json({ error: 'Message not found' });
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!items.length) return res.status(400).json({ error: 'items required' });
-    const metas: AttachmentMeta[] = JSON.parse(m.attachmentsJson);
+    // 200 with every item failed, not a 4xx: the client's save modal only
+    // understands the {saved, failed} shape, and a per-item reason is what it
+    // puts in the toast. Asking the provider would 404 on the user's own message.
+    if (isPending(m)) {
+      const error = 'This message is still being filed by the mail server — try again in a minute';
+      return res.json({ fileIds: [], saved: [], failed: items.map((it: { attId?: unknown }) => ({ attId: String(it?.attId ?? ''), error })) });
+    }
+    const metas = indexedAttachments(m);
     const providerKind = accounts.getAccountAny(db, m.accountId)?.provider ?? 'unknown';
     // Per item, not all-or-nothing: one bad attachment used to abort the whole
     // request with a 502, leaving the items already written to Documents saved

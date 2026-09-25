@@ -9,10 +9,11 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   getSovLine, listSovLines, createSovLine, saveSovLine, deleteSovLine,
-  seedSovLines, syncChangeOrders,
+  seedSovLines, syncChangeOrders, reorderSovLines, splitSovLine,
   createPayApp, listPayApps, getPayApp, savePayAppLines, setPayApp, deletePayApp,
   computeG703, computeG702, remainingReleasablePoints,
-  ValidationError, ConflictError, NotFoundError,
+  getSovLock, lockSov, unlockSov, assertSovEditable,
+  ValidationError, ConflictError, NotFoundError, SovLockedError,
 } from './aiaStore';
 import { recordPayment, listBilledDocuments } from './billingStore';
 
@@ -390,6 +391,7 @@ describe('savePayAppLines', () => {
   it('inserts a pay_app_line that did not exist yet', () => {
     setupTwoLines();
     const a = createPayApp(db, 'p1', {});
+    unlockSov(db, 'p1');
     // a SOV line added AFTER the app was created has no seeded pay_app_line
     const { id: line3 } = createSovLine(db, 'p1', { description: 'Late', scheduledValueCents: 1000 });
     savePayAppLines(db, a.id, [{ sovLineId: line3, percentComplete: 10, storedMaterialsCents: 0 }], 1);
@@ -1000,6 +1002,7 @@ describe('SOV edits stamp the project pay apps', () => {
   it('createSovLine, saveSovLine, deleteSovLine and seedSovLines each stamp them', () => {
     const app = createPayApp(db, 'p1', {});
     const other = createPayApp(db, 'p2', {});
+    unlockSov(db, 'p1');
 
     reset(app.id); reset(other.id);
     const { id: lineId } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
@@ -1048,5 +1051,247 @@ describe('SOV edits stamp the project pay apps', () => {
     // Earlier applications are already certified against their own period —
     // nothing about #1 changed.
     expect(stampOf(a1.id)).toBe(1);
+  });
+});
+
+describe('SOV lock', () => {
+  it('lockSov / getSovLock / unlockSov round-trip; lock is idempotent and keeps the first cause', () => {
+    expect(getSovLock(db, 'p1')).toBeNull();
+    const first = lockSov(db, 'p1', { userId: 'u1', reason: 'manual' });
+    expect(first.reason).toBe('manual');
+    expect(first.lockedByUserId).toBe('u1');
+    const again = lockSov(db, 'p1', { userId: null, reason: 'pay-app' });
+    expect(again.reason).toBe('manual'); // untouched
+    expect(getSovLock(db, 'p1')!.lockedAt).toBe(first.lockedAt);
+    unlockSov(db, 'p1');
+    expect(getSovLock(db, 'p1')).toBeNull();
+  });
+
+  it('lockSov rejects an unknown project', () => {
+    expect(() => lockSov(db, 'nope', { userId: null, reason: 'manual' })).toThrow(NotFoundError);
+  });
+
+  it('every SOV mutator throws SovLockedError while locked; sync of approved COs still appends', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 1000 });
+    lockSov(db, 'p1', { userId: 'u1', reason: 'manual' });
+    expect(() => assertSovEditable(db, 'p1')).toThrow(SovLockedError);
+    expect(() => createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 1 })).toThrow(SovLockedError);
+    expect(() => saveSovLine(db, id, { description: 'Y', scheduledValueCents: 2, version: 1 })).toThrow(SovLockedError);
+    expect(() => deleteSovLine(db, id)).toThrow(SovLockedError);
+    expect(() => seedSovLines(db, 'p1', [{ description: 'Z', scheduledValueCents: 3 }])).toThrow(SovLockedError);
+    // nothing changed
+    expect(listSovLines(db, 'p1').map(l => l.description)).toEqual(['Framing']);
+    insertChangeOrder('co1', 'p1', '1', 'Extra', 250, 'approved');
+    expect(syncChangeOrders(db, 'p1').added).toBe(1);
+    expect(listSovLines(db, 'p1').length).toBe(2);
+  });
+
+  it('unlock stamps the project pay apps so exports read out of date', () => {
+    createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 1000 });
+    const { id: appId } = createPayApp(db, 'p1', {});
+    const before = (db.prepare('SELECT updatedAt FROM aia_pay_apps WHERE id = ?').get(appId) as any).updatedAt;
+    db.prepare('UPDATE aia_pay_apps SET updatedAt = ? WHERE id = ?').run(before - 10_000, appId);
+    unlockSov(db, 'p1');
+    const after = (db.prepare('SELECT updatedAt FROM aia_pay_apps WHERE id = ?').get(appId) as any).updatedAt;
+    expect(after).toBeGreaterThan(before - 10_000);
+  });
+
+  it('creating the first pay application locks the SOV with reason pay-app, and does not overwrite a manual lock', () => {
+    createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 1000 });
+    expect(getSovLock(db, 'p1')).toBeNull();
+    createPayApp(db, 'p1', {});
+    expect(getSovLock(db, 'p1')!.reason).toBe('pay-app');
+    expect(getSovLock(db, 'p1')!.lockedByUserId).toBeNull();
+
+    createSovLine(db, 'p2', { description: 'Roof', scheduledValueCents: 500 });
+    lockSov(db, 'p2', { userId: 'u9', reason: 'manual' });
+    createPayApp(db, 'p2', {});
+    expect(getSovLock(db, 'p2')!.reason).toBe('manual');
+    expect(getSovLock(db, 'p2')!.lockedByUserId).toBe('u9');
+  });
+});
+
+describe('SOV ordering', () => {
+  const descs = () => listSovLines(db, 'p1').map(l => l.description);
+
+  it('reorderSovLines assigns 0..n-1 in the given order and keeps CO lines after the contract block', () => {
+    const a = createSovLine(db, 'p1', { description: 'A', scheduledValueCents: 1 }).id;
+    const b = createSovLine(db, 'p1', { description: 'B', scheduledValueCents: 1 }).id;
+    insertChangeOrder('co1', 'p1', '1', 'Extra', 10, 'approved');
+    syncChangeOrders(db, 'p1');
+    const c = createSovLine(db, 'p1', { description: 'C', scheduledValueCents: 1 }).id;
+    reorderSovLines(db, 'p1', [c, a, b]);
+    expect(descs()).toEqual(['C', 'A', 'B', 'Extra']);
+    expect(listSovLines(db, 'p1').map(l => l.sortOrder)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('reorderSovLines rejects a partial, duplicate, or foreign id list', () => {
+    const a = createSovLine(db, 'p1', { description: 'A', scheduledValueCents: 1 }).id;
+    const b = createSovLine(db, 'p1', { description: 'B', scheduledValueCents: 1 }).id;
+    const other = createSovLine(db, 'p2', { description: 'Z', scheduledValueCents: 1 }).id;
+    expect(() => reorderSovLines(db, 'p1', [a])).toThrow(ValidationError);
+    expect(() => reorderSovLines(db, 'p1', [a, a, b])).toThrow(ValidationError);
+    expect(() => reorderSovLines(db, 'p1', [a, other])).toThrow(ValidationError);
+    expect(descs()).toEqual(['A', 'B']);
+  });
+
+  it('reorderSovLines is refused while locked', () => {
+    const a = createSovLine(db, 'p1', { description: 'A', scheduledValueCents: 1 }).id;
+    lockSov(db, 'p1', { userId: null, reason: 'manual' });
+    expect(() => reorderSovLines(db, 'p1', [a])).toThrow(SovLockedError);
+  });
+
+  it('createSovLine with insertBeforeId places the new line in front of the target and shifts the rest', () => {
+    createSovLine(db, 'p1', { description: 'A', scheduledValueCents: 1 });
+    const b = createSovLine(db, 'p1', { description: 'B', scheduledValueCents: 1 }).id;
+    createSovLine(db, 'p1', { description: 'C', scheduledValueCents: 1 });
+    createSovLine(db, 'p1', { lineType: 'header', description: 'Section', insertBeforeId: b });
+    expect(descs()).toEqual(['A', 'Section', 'B', 'C']);
+  });
+
+  it('createSovLine rejects insertBeforeId that is a CO line or belongs to another project', () => {
+    insertChangeOrder('co1', 'p1', '1', 'Extra', 10, 'approved');
+    syncChangeOrders(db, 'p1');
+    const co = listSovLines(db, 'p1')[0].id;
+    const other = createSovLine(db, 'p2', { description: 'Z', scheduledValueCents: 1 }).id;
+    expect(() => createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 1, insertBeforeId: co })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 1, insertBeforeId: other })).toThrow(ValidationError);
+  });
+});
+
+describe('SOV line types (header / blank)', () => {
+  it('creates a header with zero value and null retainage; rejects money on a header or blank', () => {
+    const { id } = createSovLine(db, 'p1', { lineType: 'header', description: 'Drywall', itemNo: '5' });
+    const h = getSovLine(db, id)!;
+    expect(h.lineType).toBe('header');
+    expect(h.scheduledValueCents).toBe(0);
+    expect(h.retainagePercent).toBeNull();
+    expect(h.itemNo).toBe('5');
+    expect(() => createSovLine(db, 'p1', { lineType: 'header', description: 'H', scheduledValueCents: 100 })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { lineType: 'header', description: 'H', retainagePercent: 5 })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { lineType: 'header', description: '   ' })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { lineType: 'blank', scheduledValueCents: 1 })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { lineType: 'bogus' as any, description: 'x', scheduledValueCents: 0 })).toThrow(ValidationError);
+  });
+
+  it('creates a blank with empty fields; default lineType is item', () => {
+    const { id } = createSovLine(db, 'p1', { lineType: 'blank' });
+    const b = getSovLine(db, id)!;
+    expect(b.lineType).toBe('blank');
+    expect(b.description).toBe('');
+    expect(b.itemNo).toBeNull();
+    expect(b.scheduledValueCents).toBe(0);
+    const { id: itemId } = createSovLine(db, 'p1', { description: 'Item', scheduledValueCents: 10 });
+    expect(getSovLine(db, itemId)!.lineType).toBe('item');
+  });
+
+  it('saveSovLine keeps the type when omitted, can convert item → header (value dropped to 0 only if sent as 0)', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 1000 });
+    saveSovLine(db, id, { description: 'Framing', scheduledValueCents: 2000, version: 1 });
+    expect(getSovLine(db, id)!.lineType).toBe('item');
+    expect(() => saveSovLine(db, id, { lineType: 'header', description: 'Framing', scheduledValueCents: 2000, version: 2 })).toThrow(ValidationError);
+    saveSovLine(db, id, { lineType: 'header', description: 'Framing', scheduledValueCents: 0, version: 2 });
+    const h = getSovLine(db, id)!;
+    expect(h.lineType).toBe('header');
+    expect(h.scheduledValueCents).toBe(0);
+  });
+
+  it('header and blank rows stay in position in G703 with zero money, and every G702 line is unchanged by them', () => {
+    createSovLine(db, 'p1', { itemNo: '1', description: 'Mobilization', scheduledValueCents: 100000 });
+    createSovLine(db, 'p1', { lineType: 'header', description: 'Interior' });
+    createSovLine(db, 'p1', { itemNo: '2', description: 'Framing', scheduledValueCents: 500000 });
+    createSovLine(db, 'p1', { lineType: 'blank' });
+    const { id: appId } = createPayApp(db, 'p1', { retainagePercent: 10 });
+    const app = getPayApp(db, appId)!;
+    // pay-app lines are seeded for items only
+    expect(app.lines.length).toBe(2);
+    const items = listSovLines(db, 'p1').filter(l => l.lineType === 'item');
+    savePayAppLines(db, appId, [
+      { sovLineId: items[0].id, percentComplete: 100, storedMaterialsCents: 0 },
+      { sovLineId: items[1].id, percentComplete: 50, storedMaterialsCents: 20000 },
+    ], 1);
+    const g703 = computeG703(db, appId);
+    expect(g703.map(r => r.lineType)).toEqual(['item', 'header', 'item', 'blank']);
+    expect(g703[1].description).toBe('Interior');
+    expect(g703[1].scheduledValueCents).toBe(0);
+    expect(g703[1].totalToDateCents).toBe(0);
+    expect(g703[1].retainageCents).toBe(0);
+    const g702 = computeG702(db, appId);
+    expect(g702.L1originalContractCents).toBe(600000);
+    expect(g702.L4totalCompletedStoredCents).toBe(100000 + 250000 + 20000);
+    expect(g702.L5aRetainageWorkCents).toBe(10000 + 25000);
+    expect(g702.L5bRetainageStoredCents).toBe(2000);
+  });
+
+  it('savePayAppLines ignores input for non-item lines', () => {
+    createSovLine(db, 'p1', { itemNo: '1', description: 'Work', scheduledValueCents: 100000 });
+    const { id: headerId } = createSovLine(db, 'p1', { lineType: 'header', description: 'H' });
+    const { id: appId } = createPayApp(db, 'p1', {});
+    savePayAppLines(db, appId, [{ sovLineId: headerId, percentComplete: 100, storedMaterialsCents: 5 }], 1);
+    expect(db.prepare('SELECT COUNT(*) c FROM aia_pay_app_lines WHERE payAppId = ? AND sovLineId = ?').get(appId, headerId)).toEqual({ c: 0 });
+    expect(computeG702(db, appId).L4totalCompletedStoredCents).toBe(0);
+  });
+});
+
+describe('splitSovLine', () => {
+  it('60/40 of $10,000.00 → header + $6,000.00 + $4,000.00, item numbers 5.1/5.2, retainage copied, later lines shifted', () => {
+    const { id } = createSovLine(db, 'p1', { itemNo: '5', description: 'Drywall', scheduledValueCents: 1000000, retainagePercent: 5 });
+    createSovLine(db, 'p1', { itemNo: '6', description: 'Paint', scheduledValueCents: 100 });
+    const r = splitSovLine(db, id, { version: 1, parts: [{ description: 'Level 1', percent: 60 }, { description: 'Level 2', percent: 40 }] });
+    expect(r.headerId).toBe(id);
+    expect(r.childIds.length).toBe(2);
+    const lines = listSovLines(db, 'p1');
+    expect(lines.map(l => [l.description, l.lineType, l.scheduledValueCents, l.itemNo])).toEqual([
+      ['Drywall', 'header', 0, '5'],
+      ['Level 1', 'item', 600000, '5.1'],
+      ['Level 2', 'item', 400000, '5.2'],
+      ['Paint', 'item', 100, '6'],
+    ]);
+    expect(lines.map(l => l.sortOrder)).toEqual([0, 1, 2, 3]);
+    expect(lines[0].retainagePercent).toBeNull();
+    expect(lines[1].retainagePercent).toBe(5);
+    expect(lines[2].retainagePercent).toBe(5);
+    expect(lines[0].version).toBe(2);
+  });
+
+  it('three-way split of $100.01 gives 33.34 / 33.33 / 33.34 — the last child absorbs the remainder', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'Odd', scheduledValueCents: 10001 });
+    splitSovLine(db, id, { version: 1, parts: [
+      { description: 'a', percent: 33.34 }, { description: 'b', percent: 33.33 }, { description: 'c', percent: 33.33 },
+    ] });
+    const cents = listSovLines(db, 'p1').filter(l => l.lineType === 'item').map(l => l.scheduledValueCents);
+    expect(cents).toEqual([3334, 3333, 3334]);
+    expect(cents.reduce((a, b) => a + b, 0)).toBe(10001);
+  });
+
+  it('no item number on the parent → children have none', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'NoNo', scheduledValueCents: 100 });
+    splitSovLine(db, id, { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] });
+    expect(listSovLines(db, 'p1').map(l => l.itemNo)).toEqual([null, null, null]);
+  });
+
+  it('rejects: percents not 100, one part, empty description, non-positive percent', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 100 });
+    const bad = (parts: any[]) => expect(() => splitSovLine(db, id, { version: 1, parts })).toThrow(ValidationError);
+    bad([{ description: 'a', percent: 60 }, { description: 'b', percent: 39.99 }]);
+    bad([{ description: 'a', percent: 60 }, { description: 'b', percent: 40.01 }]);
+    bad([{ description: 'a', percent: 100 }]);
+    bad([{ description: '', percent: 50 }, { description: 'b', percent: 50 }]);
+    bad([{ description: 'a', percent: 0 }, { description: 'b', percent: 100 }]);
+    expect(listSovLines(db, 'p1').length).toBe(1);
+  });
+
+  it('rejects: header target, CO target, stale version, locked SOV', () => {
+    const { id: h } = createSovLine(db, 'p1', { lineType: 'header', description: 'H' });
+    expect(() => splitSovLine(db, h, { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(ValidationError);
+    insertChangeOrder('co1', 'p1', '1', 'Extra', 10, 'approved');
+    syncChangeOrders(db, 'p1');
+    const co = listSovLines(db, 'p1').find(l => l.isChangeOrder)!.id;
+    expect(() => splitSovLine(db, co, { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(ValidationError);
+    const { id } = createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 100 });
+    expect(() => splitSovLine(db, id, { version: 7, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(ConflictError);
+    lockSov(db, 'p1', { userId: null, reason: 'manual' });
+    expect(() => splitSovLine(db, id, { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(SovLockedError);
+    expect(() => splitSovLine(db, 'missing', { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(NotFoundError);
   });
 });

@@ -414,6 +414,105 @@ describe('mail routes', () => {
     expect(two.body.failed).toEqual([{ attId: 'a2', error: 'Could not save this attachment' }]);
   });
 
+  // BUG (real Gmail, production logs 2026-09-11): picking several attachments
+  // and saving them in ONE request saved the first and failed every later one
+  // with ProviderNotFoundError. Gmail mints new attachment ids on every message
+  // read, and both the provider (looking an unknown id up) and the route
+  // (recovering from the 404) re-read the body — each read invalidating the
+  // ids the other side was holding. A batch must cost ONE body read, and the
+  // provider must never read the body on its own during it.
+  it('saves a whole batch of attachments whose ids Gmail has rotated, paying for ONE body read', async () => {
+    const atts = [
+      { attId: 'a1', name: 'plan.pdf', mime: 'application/pdf', size: 4 },
+      { attId: 'a2', name: 'site-1.jpg', mime: 'image/jpeg', size: 3 },
+      { attId: 'a3', name: 'site-2.png', mime: 'image/png', size: 3 },
+    ];
+    const bytes = { a1: Buffer.from('%PDF'), a2: Buffer.from('JPG'), a3: Buffer.from('PNG') };
+    provider.seed([env('m1', { attachments: atts, attachmentBytes: bytes })]);
+    upsertEnvelopes(ctx, acct, [env('m1', { attachments: atts })]);
+    const id = firstMessageId();
+    provider.gmailAttachmentIds = true;
+    // The ids the row carries are the ones sync saw; the mailbox has moved on.
+    provider.rotateAttachmentIds('m1', a => `${a}-stale`);
+    const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`)
+      .send({ items: atts.map(a => ({ attId: a.attId, kind: 'document', projectId: 'p1' })) });
+    expect(s.status).toBe(200);
+    expect(s.body.failed).toEqual([]);
+    // Every item was served under the id the batch's ONE read minted.
+    expect(s.body.saved.map((x: { attId: string }) => x.attId)).toEqual(['a1-stale-gen1', 'a2-stale-gen1', 'a3-stale-gen1']);
+    expect(provider.bodyReads).toBe(1);
+    const live = db.prepare('SELECT name, mime FROM files WHERE parentFileId IS NULL ORDER BY name').all();
+    expect(live).toEqual([
+      { name: 'plan.pdf', mime: 'application/pdf' },
+      { name: 'site-1.jpg', mime: 'image/jpeg' },
+      { name: 'site-2.png', mime: 'image/png' },
+    ]);
+    // The row now carries the live ids, each still answering to the id it replaced.
+    const row = JSON.parse((db.prepare('SELECT attachmentsJson FROM mail_messages WHERE id = ?').get(id) as { attachmentsJson: string }).attachmentsJson);
+    expect(row.map((a: { attId: string; priorIds?: string[] }) => [a.attId, a.priorIds])).toEqual([['a1-stale-gen1', ['a1']], ['a2-stale-gen1', ['a2']], ['a3-stale-gen1', ['a3']]]);
+  });
+
+  // The body route hands the client the ids of the read it just did (and
+  // builds inline-image URLs from them), but never wrote them into the row —
+  // so the download route, resolving against the row, 404'd on the very id
+  // the body had just given out. Production: "Failed to load attachment …
+  // ProviderNotFoundError" for every inline image.
+  it('downloads an attachment under the id the body route returned, even when Gmail rotated it', async () => {
+    const atts = [
+      { attId: 'a1', name: 'cor.pdf', mime: 'application/pdf', size: 4 },
+      { attId: 'a2', name: 'logo.png', mime: 'image/png', size: 3, contentId: 'logo@x' },
+    ];
+    provider.seed([env('m1', { attachments: atts, attachmentBytes: { a1: Buffer.from('%PDF'), a2: Buffer.from('PNG') }, html: '<p>Hi <img src="cid:logo@x"></p>' })]);
+    upsertEnvelopes(ctx, acct, [env('m1', { attachments: atts })]);
+    const id = firstMessageId();
+    provider.gmailAttachmentIds = true;
+    const b = await request(app).get(`/api/mail/messages/${id}/body`);
+    expect(b.status).toBe(200);
+    expect(b.body.attachments.map((a: { attId: string }) => a.attId)).toEqual(['a1-gen1', 'a2-gen1']);
+    // The inline image's URL carries the fresh id …
+    const src = b.body.html.match(/src="([^"]+)"/)![1];
+    expect(src).toBe(`/api/mail/messages/${id}/attachments/a2-gen1?inline=1`);
+    // … and both that URL and the fresh attachment id resolve.
+    const img = await request(app).get(src).query({ token: 'tok' });
+    expect(img.status).toBe(200);
+    expect(img.headers['content-type']).toContain('image/png');
+    const pdf = await request(app).get(`/api/mail/messages/${id}/attachments/a1-gen1`).query({ token: 'tok' });
+    expect(pdf.status).toBe(200);
+    // The id the row held before still works too, for a client that rendered
+    // its chips from the thread list rather than the body.
+    expect((await request(app).get(`/api/mail/messages/${id}/attachments/a1`).query({ token: 'tok' })).status).toBe(200);
+    // All of that on the single read the body route did.
+    expect(provider.bodyReads).toBe(1);
+    const row = JSON.parse((db.prepare('SELECT attachmentsJson FROM mail_messages WHERE id = ?').get(id) as { attachmentsJson: string }).attachmentsJson);
+    expect(row.map((a: { attId: string; priorIds?: string[] }) => [a.attId, a.priorIds])).toEqual([['a1-gen1', ['a1']], ['a2-gen1', ['a2']]]);
+  });
+
+  it('the body route leaves the row alone when the provider returned the ids it already holds', async () => {
+    const id = firstMessageId();
+    const before = (db.prepare('SELECT attachmentsJson FROM mail_messages WHERE id = ?').get(id) as { attachmentsJson: string }).attachmentsJson;
+    expect((await request(app).get(`/api/mail/messages/${id}/body`)).status).toBe(200);
+    expect((db.prepare('SELECT attachmentsJson FROM mail_messages WHERE id = ?').get(id) as { attachmentsJson: string }).attachmentsJson).toBe(before);
+  });
+
+  it('saving from a message the provider has not filed yet fails readably per item, without asking the provider', async () => {
+    upsertEnvelopes(ctx, acct, [env('sent:out-9@bb.com', { messageIdHeader: 'out-9@bb.com', from: { addr: 'me@bb.com' }, subject: 'Pending one' })], { sentFromApp: true });
+    const id = (db.prepare('SELECT id FROM mail_messages WHERE providerMessageId = ?').get('sent:out-9@bb.com') as { id: string }).id;
+    const getAttachment = vi.spyOn(provider, 'getAttachment');
+    const getBody = vi.spyOn(provider, 'getBody');
+    const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1', kind: 'document' }, { attId: 'a2' }] });
+    // 200 with every item failed, not a 4xx: the client's save modal only
+    // understands the {saved, failed} shape — anything else throws past its toast.
+    expect(s.status).toBe(200);
+    expect(s.body.saved).toEqual([]);
+    expect(s.body.fileIds).toEqual([]);
+    expect(s.body.failed).toEqual([
+      { attId: 'a1', error: 'This message is still being filed by the mail server — try again in a minute' },
+      { attId: 'a2', error: 'This message is still being filed by the mail server — try again in a minute' },
+    ]);
+    expect(getAttachment).not.toHaveBeenCalled();
+    expect(getBody).not.toHaveBeenCalled();
+  });
+
   it('attachment save is per item: one failure does not discard the others', async () => {
     const twoAtts = [{ attId: 'a1', name: 'one.pdf', mime: 'application/pdf', size: 4 }, { attId: 'a2', name: 'two.pdf', mime: 'application/pdf', size: 4 }];
     provider.seed([env('m1', { attachments: twoAtts, attachmentBytes: { a1: Buffer.from('%PDF'), a2: Buffer.from('%PDF') } })]);

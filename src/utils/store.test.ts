@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   resolveRetainageMode, AiaSovLine,
   saveBinaryFile, uploadProjectFile, persistGeneratedDocument,
+  restoreSnapshot, RestoreRunningError,
 } from './store';
 
 const line = (retainagePercent: number | null): Pick<AiaSovLine, 'retainagePercent'> => ({ retainagePercent });
@@ -115,5 +116,34 @@ describe('upload helpers', () => {
     await expect(persistGeneratedDocument(new Blob(['x']), {
       projectId: 'p1', kind: 'invoice', name: 'inv.pdf',
     })).rejects.toThrow('Failed to save file');
+  });
+});
+
+// A restore is the one request that does all its work before answering: every
+// file copied and hash-checked, then the database staged. On real data that is
+// minutes. The shared one-minute request timeout used to abort it, so the
+// screen reported a failure while the server was still working.
+describe('restoreSnapshot', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  it('does not abort a restore that runs far past the default request timeout', async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (_u: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal;
+      return new Promise<Response>(() => { /* the server is still restoring */ });
+    }));
+    void restoreSnapshot({ source: 'local', snapshotId: '20260912-020000' }).catch(() => { /* never settles */ });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal).toBeDefined();
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(signal!.aborted).toBe(false);
+  });
+
+  it('turns the server 409 into RestoreRunningError rather than a generic failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false, status: 409, json: async () => ({ error: 'A restore is already running', code: 'restore_running' }),
+    }) as unknown as Response));
+    await expect(restoreSnapshot({ source: 'local', snapshotId: '20260912-020000' })).rejects.toBeInstanceOf(RestoreRunningError);
   });
 });

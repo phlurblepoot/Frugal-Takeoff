@@ -12,7 +12,7 @@
 // that came from a sync back to its draft.
 import { Readable } from 'stream';
 import type {
-  MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, AttachmentMeta, FolderRole, Addr, MoveResult,
+  MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, AttachmentMeta, AttachmentHint, FolderRole, Addr, MoveResult,
 } from './types';
 import { AuthExpiredError, RateLimitedError, ProviderNotFoundError } from './types';
 import type { TokenSource } from './tokenSource';
@@ -530,18 +530,34 @@ export class GmailProvider implements MailProvider {
     return { html, text, attachments };
   }
 
-  async getAttachment(providerMessageId: string, attId: string): Promise<{ stream: NodeJS.ReadableStream; mime: string; size?: number; name: string }> {
+  async getAttachment(providerMessageId: string, attId: string, hint?: AttachmentHint): Promise<{ stream: NodeJS.ReadableStream; mime: string; size?: number; name: string }> {
     // attachments.get answers with bytes and a length — the name and MIME type
-    // live in the message's part list, so make sure we have it.
-    let meta = this.partCache.get(providerMessageId)?.find(a => a.attId === attId);
+    // live in the message's part list, so make sure we have it. The order
+    // matters: the part list from the LAST read is authoritative; failing that
+    // the caller's hint; and only with neither is the message re-read. That
+    // re-read is a last resort because Gmail mints a fresh set of attachment
+    // ids on every messages.get, so doing it here invalidates every id the
+    // caller is still holding for this message's OTHER parts — which is how
+    // saving several attachments at once used to fail on all but the first.
+    let meta: { name: string; mime: string } | undefined = this.partCache.get(providerMessageId)?.find(a => a.attId === attId);
+    if (!meta && hint) meta = hint;
     if (!meta) {
       const parts = (await this.getBody(providerMessageId)).attachments;
       meta = parts.find(a => a.attId === attId);
     }
     if (!meta) throw new ProviderNotFoundError(attId);
-    const r = await this.api<GmailAttachment>(
-      `messages/${encodeURIComponent(await this.underlyingMessageId(providerMessageId))}/attachments/${encodeURIComponent(attId)}`,
-    );
+    let r: GmailAttachment;
+    try {
+      r = await this.api<GmailAttachment>(
+        `messages/${encodeURIComponent(await this.underlyingMessageId(providerMessageId))}/attachments/${encodeURIComponent(attId)}`,
+      );
+    } catch (e) {
+      // A stale attachment id comes back from attachments.get as 400 "Invalid
+      // attachment token", not as a 404 — same meaning: nothing lives under
+      // this id any more, and the caller's stale-id recovery is the answer.
+      if ((e as { status?: number }).status === 400) throw Object.assign(new ProviderNotFoundError(attId), { status: 404 });
+      throw e;
+    }
     const buf = fromB64url(r.data ?? '');
     return { stream: Readable.from(buf), mime: meta.mime, size: buf.length, name: meta.name };
   }

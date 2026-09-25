@@ -4,7 +4,7 @@
 // from files.ts: files.ts owns storage primitives (policy-free), this module
 // owns the Documents-page-specific policy (visibility, labels, guards).
 import type Database from 'better-sqlite3';
-import { getMeta, setFileFlags, removeFile, listVersions, isDirectUploadKind, FileMeta } from './files';
+import { getMeta, setFileFlags, removeFile, listVersions, isDirectUploadKind, isContainerSourceType, FileMeta } from './files';
 
 // Always hidden regardless of role: per-page plan assets and the AIA template.
 const ALWAYS_EXCLUDED_KINDS = ['plan', 'settings-asset'] as const;
@@ -485,12 +485,20 @@ export function patchDocument(
 
 // Loose, never-sourced direct uploads are deletable (spec §Safe deletion
 // tiers), and so are takeoff prints/exports, which are generated but have no
-// owning record to delete them at (DELETABLE_GENERATED_KINDS). Everything else
-// with a source is archived here and deleted at its source entity instead.
+// owning record to delete them at (DELETABLE_GENERATED_KINDS). A row under a
+// CONTAINER source (files.ts CONTAINER_SOURCE_TYPES — an email message) is a
+// copy of an attachment the message still holds, so it's deletable too as
+// long as its kind is one a person could have picked when saving it
+// (direct-upload kinds + the 'email-attachment' default); a system kind
+// under that source keeps the generated-document rule. Everything else with
+// a source is archived here and deleted at its source entity instead.
 // Wipes the live row AND every version row's bytes (listVersions returns
 // [live, ...history]). Deletable rows are never a billing kind, so the role
 // gate below is vacuously true today — kept for uniformity with patchDocument
 // and as a guard against a future kind ever landing in both sets.
+const isContainerCopy = (meta: FileMeta) =>
+  isContainerSourceType(meta.sourceType) && (isDirectUploadKind(meta.kind) || meta.kind === 'email-attachment');
+
 export function deleteDocument(
   db: Database.Database,
   dataDir: string,
@@ -509,10 +517,11 @@ export function deleteDocument(
     UNION SELECT 1 FROM proposals WHERE fileId = ? OR signedFileId = ?
     LIMIT 1`).get(id, id, id, id);
   if (proposalRef) return { ok: false, status: 409, error: 'This file is attached to a proposal — remove it from the proposal first' };
-  if (current.sourceType && !isDeletableGeneratedKind(current.kind)) {
+  const containerCopy = isContainerCopy(current);
+  if (current.sourceType && !isDeletableGeneratedKind(current.kind) && !containerCopy) {
     return { ok: false, status: 409, error: 'This file is generated from another record — archive it here, or delete it at the source' };
   }
-  if (!isDirectUploadKind(current.kind) && !isDeletableGeneratedKind(current.kind)) {
+  if (!isDirectUploadKind(current.kind) && !isDeletableGeneratedKind(current.kind) && !containerCopy) {
     return { ok: false, status: 409, error: 'This file type cannot be deleted directly' };
   }
   for (const v of listVersions(db, id)) removeFile(db, dataDir, v.id);

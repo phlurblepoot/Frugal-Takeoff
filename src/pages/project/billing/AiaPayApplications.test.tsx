@@ -14,12 +14,14 @@ import type { AiaPayAppListItem } from '../../../utils/store';
 const h = vi.hoisted(() => ({
   getPayApps: vi.fn(),
   getDocumentsBySource: vi.fn(),
+  getSovLock: vi.fn(async () => ({ locked: true, payAppCount: 1 })),
 }));
 
 vi.mock('../../../utils/store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../utils/store')>()),
   getPayApps: h.getPayApps,
   getDocumentsBySource: h.getDocumentsBySource,
+  getSovLock: h.getSovLock,
   getDocumentTypes: vi.fn(async () => []),
   fetchFileBlob: vi.fn(async () => new Blob(['xlsx'])),
 }));
@@ -134,5 +136,25 @@ describe('AiaPayApplications — draft completion bar (Wave 3 Task 11)', () => {
     mount(0);
     await screen.findByText('#1');
     expect(screen.getAllByText('this draft = 0% of contract')).toHaveLength(2);
+  });
+});
+
+describe('AiaPayApplications — first application finalizes the SOV', () => {
+  it('shows the note in the create form while the SOV is unlocked', async () => {
+    h.getPayApps.mockResolvedValue([]);
+    h.getDocumentsBySource.mockResolvedValue({});
+    h.getSovLock.mockResolvedValueOnce({ locked: false, payAppCount: 0 });
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /new application/i }));
+    expect(await screen.findByText(/finalizes the schedule of values/i)).toBeInTheDocument();
+  });
+
+  it('shows no note once the SOV is locked', async () => {
+    h.getPayApps.mockResolvedValue([]);
+    h.getDocumentsBySource.mockResolvedValue({});
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /new application/i }));
+    await screen.findByLabelText('Period to');
+    expect(screen.queryByText(/finalizes the schedule of values/i)).toBeNull();
   });
 });

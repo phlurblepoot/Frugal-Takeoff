@@ -5,8 +5,9 @@
 // the sidebar clips (overflow-hidden).
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCollaboration } from '../../context/CollaborationContext';
+import { useCollaboration, type SessionView } from '../../context/CollaborationContext';
 import { groupSessionsByUser, describeLocation } from '../../utils/presence';
 import { getProjectsSummary } from '../../utils/store';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
@@ -16,6 +17,7 @@ import { useSoftZoom } from '../../hooks/useSoftZoom';
 export const SidebarPresence: React.FC<{ expanded: boolean }> = ({ expanded }) => {
   const { sessions, mySessionId, followedSessionId, setFollowedSessionId, updateUser } = useCollaboration();
   const { reducedMotion } = useTheme();
+  const navigate = useNavigate();
   const softZoomRef = useSoftZoom<HTMLButtonElement>();
   const [open, setOpen] = useState(false);
   const [projectNames, setProjectNames] = useState<Record<string, string>>({});
@@ -62,6 +64,17 @@ export const SidebarPresence: React.FC<{ expanded: boolean }> = ({ expanded }) =
     updateUser(user.username || 'User', hex);
   };
 
+  // Click-to-jump: any session with a known path is a jump target, EXCEPT
+  // this very tab (jumping to where you already are is a no-op). Your own
+  // OTHER tabs stay jumpable — harmless, and handy on a second device.
+  const jumpPath = (s: SessionView): string | null =>
+    s.sessionId !== mySessionId && s.location?.path ? s.location.path : null;
+  const jumpTo = (path: string) => {
+    setOpen(false);
+    navigate(path);
+  };
+  const sessionLine = (s: SessionView) => `${describeLocation(s.location, projectNames)} · ${s.device}`;
+
   return (
     <>
       <button
@@ -103,42 +116,96 @@ export const SidebarPresence: React.FC<{ expanded: boolean }> = ({ expanded }) =
                   Online now — {count}
                 </p>
                 <div className="max-h-72 overflow-y-auto pb-2">
-                  {groups.map(g => (
-                    <div key={g.userId} className="px-4 py-2 flex items-start gap-2.5">
-                      <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: g.sessions[0]?.color }} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-ink truncate">{g.isMe ? `${g.name} (you)` : g.name}</p>
-                        {g.sessions.map(s => (
-                          <p key={s.sessionId} className="text-[11px] text-ink-faint truncate">
-                            {describeLocation(s.location, projectNames)} · {s.device}
-                          </p>
-                        ))}
-                        {g.isMe && (
-                          <label className="mt-1 flex items-center gap-2 text-[11px] text-ink-soft">
-                            Cursor color
+                  {groups.map(g => {
+                    // Single-session user: the whole row is the jump target.
+                    // Multi-session user: each session line is its own jump
+                    // target (and carries its own Follow), the row itself is inert.
+                    const single = g.sessions.length === 1;
+                    const rowJump = single ? jumpPath(g.sessions[0]) : null;
+                    return (
+                      <div key={g.userId} className="px-4 py-2 flex items-start gap-2.5">
+                        <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: g.sessions[0]?.color }} />
+                        {rowJump ? (
+                          <button
+                            type="button"
+                            data-testid="presence-user-jump"
+                            title={`Go to ${g.name}'s page`}
+                            onClick={() => jumpTo(rowJump)}
+                            className="min-w-0 flex-1 -mx-1 -my-0.5 px-1 py-0.5 rounded-md text-left hover:bg-hover transition-colors"
+                          >
+                            <span className="block text-sm font-medium text-ink truncate">{g.isMe ? `${g.name} (you)` : g.name}</span>
+                            <span className="block text-[11px] text-ink-faint truncate">{sessionLine(g.sessions[0])}</span>
+                          </button>
+                        ) : (
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-ink truncate">{g.isMe ? `${g.name} (you)` : g.name}</p>
+                            {g.sessions.map(s => {
+                              const path = single ? null : jumpPath(s);
+                              return (
+                                <p key={s.sessionId} className="flex items-center gap-2 text-[11px] text-ink-faint">
+                                  {path ? (
+                                    <button
+                                      type="button"
+                                      data-testid="presence-session-jump"
+                                      title={`Go to ${g.name}'s ${s.device} page`}
+                                      onClick={() => jumpTo(path)}
+                                      className="min-w-0 flex-1 -mx-1 px-1 rounded text-left truncate hover:bg-hover hover:text-ink transition-colors"
+                                    >
+                                      {sessionLine(s)}
+                                    </button>
+                                  ) : (
+                                    <span className="min-w-0 flex-1 truncate">{sessionLine(s)}</span>
+                                  )}
+                                  {!single && !g.isMe && (
+                                    <label
+                                      data-testid="presence-session-follow"
+                                      className="flex items-center gap-1 text-ink-soft shrink-0"
+                                      onClick={e => e.stopPropagation()}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        aria-label={`Follow ${g.name} (${s.device})`}
+                                        className="accent-accent-600"
+                                        checked={followedSessionId === s.sessionId}
+                                        onChange={e => setFollowedSessionId(e.target.checked ? s.sessionId : null)}
+                                      />
+                                      Follow
+                                    </label>
+                                  )}
+                                </p>
+                              );
+                            })}
+                            {g.isMe && (
+                              <label className="mt-1 flex items-center gap-2 text-[11px] text-ink-soft">
+                                Cursor color
+                                <input
+                                  type="color"
+                                  value={color}
+                                  onChange={e => pickColor(e.target.value)}
+                                  className="h-5 w-8 cursor-pointer rounded border border-edge bg-transparent"
+                                />
+                              </label>
+                            )}
+                          </div>
+                        )}
+                        {!g.isMe && single && (
+                          <label
+                            className="flex items-center gap-1 text-[11px] text-ink-soft shrink-0"
+                            onClick={e => e.stopPropagation()}
+                          >
                             <input
-                              type="color"
-                              value={color}
-                              onChange={e => pickColor(e.target.value)}
-                              className="h-5 w-8 cursor-pointer rounded border border-edge bg-transparent"
+                              type="checkbox"
+                              aria-label={`Follow ${g.name}`}
+                              className="accent-accent-600"
+                              checked={followedSessionId === g.sessions[0].sessionId}
+                              onChange={e => setFollowedSessionId(e.target.checked ? g.sessions[0].sessionId : null)}
                             />
+                            Follow
                           </label>
                         )}
                       </div>
-                      {!g.isMe && g.sessions.length === 1 && (
-                        <label className="flex items-center gap-1 text-[11px] text-ink-soft shrink-0">
-                          <input
-                            type="checkbox"
-                            aria-label={`Follow ${g.name}`}
-                            className="accent-accent-600"
-                            checked={followedSessionId === g.sessions[0].sessionId}
-                            onChange={e => setFollowedSessionId(e.target.checked ? g.sessions[0].sessionId : null)}
-                          />
-                          Follow
-                        </label>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </motion.div>
             </>

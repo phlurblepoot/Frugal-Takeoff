@@ -22,7 +22,23 @@ export interface SelectionPolicy {
   downloadable: DocumentRow[];
   archivable: DocumentRow[];
   deletable: DocumentRow[];
+  // Rows whose kind may be changed via "Change type" (row menu + bulk bar):
+  // direct-upload kinds only — the server (patchDocument) refuses re-typing
+  // into or out of a system kind, so those are never offered or sent.
+  retypeable: DocumentRow[];
 }
+
+// A document saved out of an email is a COPY of an attachment the message
+// still holds (server/files.ts CONTAINER_SOURCE_TYPES), so it's deletable
+// when its kind is one a person could have picked on save — the
+// direct-upload kinds or the 'email-attachment' default. Mirrors
+// server/documents.ts isContainerCopy; a system kind (rfi, invoice, …)
+// under the same source keeps the generated-document rule.
+const CONTAINER_SOURCE_TYPES = ['mailMessage'] as const;
+const isContainerCopy = (r: DocumentRow): boolean =>
+  !!r.source
+  && (CONTAINER_SOURCE_TYPES as readonly string[]).includes(r.source.type)
+  && (isDirectUploadKind(r.kind) || r.kind === 'email-attachment');
 
 // plan-source rows are view-only (spec: "managed in plan-set management") —
 // the server doesn't block archiving them (nothing about plan-source is
@@ -33,5 +49,8 @@ export const selectionPolicy = (rows: DocumentRow[]): SelectionPolicy => ({
   // Takeoff prints/exports are generated (so they always have a `source`) but
   // no record owns them — there is nowhere else to delete them from, so they
   // are deletable here. Mirrors server/documents.ts DELETABLE_GENERATED_KINDS.
-  deletable: rows.filter(r => (!r.source && isDirectUploadKind(r.kind)) || isDeletableGeneratedKind(r.kind)),
+  deletable: rows.filter(r =>
+    (!r.source && isDirectUploadKind(r.kind)) || isDeletableGeneratedKind(r.kind) || isContainerCopy(r)
+  ),
+  retypeable: rows.filter(r => isDirectUploadKind(r.kind)),
 });

@@ -11,7 +11,7 @@ import {
   Archive, ArchiveRestore, Download, ExternalLink, Link as LinkIcon, Tag, Trash2,
 } from 'lucide-react';
 import { DocumentRow } from '../../utils/store';
-import { CustomDocType, DIRECT_UPLOAD_KINDS, isDeletableGeneratedKind, isDirectUploadKind, kindLabel } from './docTypes';
+import { CustomDocType, isDeletableGeneratedKind, retypeOptions } from './docTypes';
 import { selectionPolicy } from './documentsPolicy';
 import { clampToViewport } from './previewPosition';
 
@@ -39,10 +39,10 @@ export const RowContextMenu: React.FC<{
   const [pos, setPos] = useState({ left: state.x, top: state.y });
   const [changeTypeOpen, setChangeTypeOpen] = useState(false);
 
-  const { archivable, deletable } = selectionPolicy([row]);
+  const { archivable, deletable, retypeable } = selectionPolicy([row]);
   const archivableRow = archivable.length > 0;
   const deletableRow = deletable.length > 0;
-  const directUpload = isDirectUploadKind(row.kind);
+  const directUpload = retypeable.length > 0;
   // Public share links exist for takeoff prints/exports only — they're the one
   // generated document a customer or GC is handed directly, and the old
   // Proposal tab's per-printout Share button was the way to do it before this
@@ -82,10 +82,7 @@ export const RowContextMenu: React.FC<{
     };
   }, [onClose]);
 
-  const typeOptions = [
-    ...DIRECT_UPLOAD_KINDS.map(k => ({ id: k, label: kindLabel(k) })),
-    ...customTypes.map(t => ({ id: `custom:${t.id}`, label: t.label })),
-  ];
+  const typeOptions = retypeOptions(customTypes);
 
   return (
     <div

@@ -514,6 +514,192 @@ export const formatBytes = (bytes: number): string => {
   return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 };
 
+// ── Backup & restore (spec docs/superpowers/specs/2026-09-12-backup-restore-design.md) ──
+//
+// Every read goes through fetchWithRetry so a backup page left open on a flaky
+// LAN keeps refreshing; the writes (run / settings / disconnect) are POSTs and
+// PUTs that fetchWithRetry deliberately never retries.
+export interface BackupRun { id: string; target: 'local' | 'drive'; trigger: 'manual' | 'schedule'; startedAt: number; finishedAt: number | null; status: 'running' | 'ok' | 'error'; snapshotId: string | null; objectsAdded: number; bytesWritten: number; warnings: string[]; error: string | null }
+export interface BackupSnapshot { id: string; createdAt: number; appVersion: string; schemaVersion: number; counts: { files: number; bytes: number }; warnings: number }
+export interface BackupSchedule { enabled: boolean; hour: number; minute: number }
+/** A run in flight. `percent` is 0–100 and only ever goes up. */
+export interface BackupProgress {
+  runId: string; target: 'local' | 'drive'; trigger: 'manual' | 'schedule';
+  phase: 'database' | 'scanning' | 'files' | 'snapshot' | 'pruning';
+  percent: number; filesDone: number; filesTotal: number; bytesDone: number; bytesTotal: number;
+}
+export interface BackupStatus {
+  root: string; rootIsDefault: boolean;
+  lastRun: { local: BackupRun | null; drive: BackupRun | null }; running: BackupRun | null;
+  totals: { snapshots: number; objects: number; bytes: number };
+  nextRunAt: { local: number | null; drive: number | null };
+  schedule: { local: BackupSchedule; drive: BackupSchedule }; keep: { local: number; drive: number };
+  progress: BackupProgress[];
+  drive: { connected: true; email: string; needsReconnect: boolean } | { connected: false; configurable: boolean };
+  /** What the setup guide shows; redirect URIs are null until APP_PUBLIC_URL is set. */
+  setup: { publicUrl: string | null; googleClientId: boolean; googleClientSecret: boolean; redirectUris: { backup: string; restore: string } | null };
+}
+/** One warning from a snapshot's manifest, matched to the file it names while that file still exists. */
+export interface BackupSnapshotWarning { message: string; fileId: string | null; fileName: string | null; projectName: string | null }
+
+/** Thrown for the server's 409 `backup_running` so the UI can say "already
+ *  running" instead of showing a generic failure for a harmless collision. */
+export class BackupRunningError extends Error {
+  constructor() { super('A backup is already running'); this.name = 'BackupRunningError'; }
+}
+
+const backupJson = (method: string, url: string, body?: unknown, opts?: { timeoutMs?: number }) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  }, opts);
+
+// The download and OAuth-start routes are followed by the browser itself (a
+// link or a redirect), which cannot carry an Authorization header — those
+// routes accept the token as a query param, like the mail attachment routes.
+const tokenParam = () => `token=${encodeURIComponent(localStorage.getItem('token') ?? '')}`;
+
+export const getSetupState = async (): Promise<{ fresh: boolean }> => {
+  // Unauthenticated on purpose: the login page asks before anyone can sign in.
+  // An unreachable server is not a fresh install, so failures read as "not fresh".
+  try {
+    const res = await fetch('/api/setup/state');
+    return res.ok ? await res.json() : { fresh: false };
+  } catch {
+    return { fresh: false };
+  }
+};
+
+/** The same read, but honest about failure: it throws when the server cannot
+ *  be reached or answers badly, instead of folding that into `fresh: false`.
+ *  The restore screen needs that distinction — while the container restarts
+ *  onto the restored database the server is simply gone, and a swallowed
+ *  error would read as "the restore is finished". */
+export const getSetupStateStrict = async (): Promise<{ fresh: boolean }> => {
+  const r = await fetch('/api/setup/state');
+  if (!r.ok) throw new Error(`setup state ${r.status}`);
+  return r.json();
+};
+
+export const getBackupStatus = async (): Promise<BackupStatus> => {
+  const res = await fetchWithRetry('/api/backup/status', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const runBackup = async (target: 'local' | 'drive'): Promise<{ runId: string }> => {
+  const res = await backupJson('POST', '/api/backup/run', { target });
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    if (body?.code === 'backup_running') throw new BackupRunningError();
+  }
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getBackupRuns = async (): Promise<BackupRun[]> => {
+  const res = await fetchWithRetry('/api/backup/runs', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getBackupSnapshots = async (target: 'local' | 'drive'): Promise<BackupSnapshot[]> => {
+  const res = await fetchWithRetry(`/api/backup/snapshots?target=${target}`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getBackupProgress = async (): Promise<BackupProgress[]> => {
+  const res = await fetchWithRetry('/api/backup/progress', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getBackupSnapshotWarnings = async (target: 'local' | 'drive', id: string): Promise<BackupSnapshotWarning[]> => {
+  const res = await fetchWithRetry(`/api/backup/snapshots/${encodeURIComponent(id)}/warnings?target=${target}`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const backupDownloadUrl = (id: string): string =>
+  `/api/backup/snapshots/${encodeURIComponent(id)}/download?${tokenParam()}`;
+
+export const saveBackupSettings = async (s: { schedule?: Partial<BackupStatus['schedule']>; keep?: BackupStatus['keep'] }): Promise<void> => {
+  await handleResponse(await backupJson('PUT', '/api/backup/settings', s));
+};
+
+export const disconnectBackupDrive = async (): Promise<void> => {
+  await handleResponse(await backupJson('DELETE', '/api/backup/drive'));
+};
+
+export const backupDriveStartUrl = (): string => `/api/backup/drive/start?${tokenParam()}`;
+
+// ── Fresh-install restore (the /restore screen, Task 11) ────────────────────
+
+export const getRestoreSources = async (): Promise<{
+  root: string;
+  local: BackupSnapshot[];
+  drive: { configurable: boolean; connected: boolean; email: string | null };
+}> => {
+  const res = await fetchWithRetry('/api/setup/restore/sources', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getRestoreDriveSnapshots = async (): Promise<BackupSnapshot[]> => {
+  const res = await fetchWithRetry('/api/setup/restore/drive/snapshots', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const restoreDriveStartUrl = (): string => `/api/setup/restore/drive/start?${tokenParam()}`;
+
+/** Thrown for the server's 409 `restore_running`. Not a failure: a restore is
+ *  already under way on this server, so the screen keeps waiting for the
+ *  restart instead of reporting an error. */
+export class RestoreRunningError extends Error {
+  constructor() { super('A restore is already running'); this.name = 'RestoreRunningError'; }
+}
+
+export const restoreSnapshot = async (p: { source: 'local' | 'upload' | 'drive'; snapshotId: string; uploadId?: string }): Promise<{ restarting: true; files: number; bytes: number }> => {
+  // This one request does the whole restore before it answers: every file
+  // copied and hash-checked, then the database staged. On a real data set
+  // that is minutes. fetchWithRetry's one-minute default aborted it and the
+  // screen claimed a failure while the server was still busy — so give it
+  // hours, and let the server's own in-flight guard handle a second attempt.
+  const res = await backupJson('POST', '/api/setup/restore', p, { timeoutMs: 6 * 60 * 60_000 });
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    if (body?.code === 'restore_running') throw new RestoreRunningError();
+  }
+  await handleResponse(res);
+  return res.json();
+};
+
+/** XMLHttpRequest rather than fetch: a restore zip can be gigabytes and the
+ *  upload progress bar is the only sign the browser is still working. */
+export const uploadRestoreZip = (file: File, onProgress: (pct: number) => void): Promise<{ uploadId: string; snapshotId: string; summary: BackupSnapshot }> =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/setup/restore/upload');
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    const token = localStorage.getItem('token');
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(Math.round((100 * e.loaded) / e.total)); };
+    xhr.onload = () => {
+      try {
+        const body = JSON.parse(xhr.responseText);
+        if (xhr.status < 300) resolve(body);
+        else reject(new Error(body.error || `Upload failed (${xhr.status})`));
+      } catch {
+        reject(new Error('Upload failed'));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Upload failed'));
+    xhr.send(file);
+  });
+
 // ── Phase 3a: summaries, granular patches, activity, time ────────────────────
 
 export interface ProjectSummary {
@@ -1628,11 +1814,16 @@ export const removeTaskPhoto = async (taskId: string, fileId: string): Promise<v
 // ── Phase 7: AIA progress billing (G702/G703 — Schedule of Values) ─────────────
 // Money is INTEGER CENTS end-to-end; formatting/division happens in the UI.
 
+export type SovLineType = 'item' | 'header' | 'blank';
+// Absent = item: fixtures and payloads from before migration 35 carry no type.
+export const lineTypeOf = (l: { lineType?: SovLineType | null }): SovLineType => l.lineType ?? 'item';
+
 export interface AiaSovLine {
   id: string; projectId: string; itemNo: string | null; description: string;
   scheduledValueCents: number; retainagePercent: number | null;
   isChangeOrder: number; changeOrderId: string | null;
   sortOrder: number; version: number; createdAt: number;
+  lineType?: SovLineType;
 }
 export interface AiaPayApp {
   id: string; projectId: string; number: number;
@@ -1660,7 +1851,7 @@ export interface AiaPayAppLine {
 // Mirrors server/aiaStore.ts G703Row.
 export interface AiaG703Row {
   sovLineId: string; itemNo: string | null; description: string;
-  isChangeOrder: number; scheduledValueCents: number;
+  isChangeOrder: number; lineType?: SovLineType; scheduledValueCents: number;
   previousCents: number; thisPeriodCents: number; storedCents: number;
   totalToDateCents: number; percentComplete: number;
   balanceToFinishCents: number; retainageCents: number;
@@ -1710,6 +1901,22 @@ export const resolveRetainageMode = (
 ): 'uniform' | 'perLine' =>
   mode ?? (lines.some(l => l.retainagePercent != null) ? 'perLine' : 'uniform');
 
+export interface SovLockState {
+  locked: boolean; payAppCount: number;
+  lockedAt?: number; lockedByUserId?: string | null; lockedByName?: string | null;
+  reason?: 'manual' | 'pay-app';
+}
+export class SovLockedError extends Error { constructor() { super('Schedule of values is finalized'); this.name = 'SovLockedError'; } }
+// 409s on SOV routes carry a code: sov_locked (finalized) vs version_conflict.
+const handleSovResponse = async (res: Response, id: string) => {
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    if (body?.code === 'sov_locked') throw new SovLockedError();
+    throw new ConflictError(id);
+  }
+  await handleResponse(res);
+};
+
 const aiaJson = (method: string, url: string, body?: unknown) =>
   fetchWithRetry(url, {
     method,
@@ -1722,25 +1929,49 @@ export const getSov = async (projectId: string): Promise<AiaSovLine[]> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/aia/sov`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const createSovLine = async (projectId: string, input: { itemNo?: string | null; description: string; scheduledValueCents: number; retainagePercent?: number | null }): Promise<{ id: string }> => {
-  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov`, input);
+export const getSovLock = async (projectId: string): Promise<SovLockState> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/aia/sov/lock`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
+};
+export const lockSov = async (projectId: string): Promise<SovLockState> => {
+  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov/lock`, {});
+  await handleResponse(res); return res.json();
+};
+export const unlockSov = async (projectId: string): Promise<SovLockState> => {
+  const res = await aiaJson('DELETE', `/api/projects/${projectId}/aia/sov/lock`);
+  await handleResponse(res); return res.json();
+};
+export interface SovLineCreateInput {
+  lineType?: SovLineType; itemNo?: string | null; description?: string;
+  scheduledValueCents?: number; retainagePercent?: number | null; insertBeforeId?: string | null;
+}
+export const createSovLine = async (projectId: string, input: SovLineCreateInput): Promise<{ id: string }> => {
+  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov`, input);
+  await handleSovResponse(res, projectId); return res.json();
 };
 export const saveSovLine = async (id: string, line: AiaSovLine): Promise<{ version: number }> => {
   const res = await aiaJson('PUT', `/api/aia/sov/${id}`, {
-    itemNo: line.itemNo, description: line.description,
+    lineType: lineTypeOf(line), itemNo: line.itemNo, description: line.description,
     scheduledValueCents: line.scheduledValueCents, retainagePercent: line.retainagePercent,
     version: line.version,
   });
-  if (res.status === 409) throw new ConflictError(id);
-  await handleResponse(res); return res.json();
+  await handleSovResponse(res, id); return res.json();
 };
 export const deleteSovLine = async (id: string): Promise<void> => {
-  const res = await aiaJson('DELETE', `/api/aia/sov/${id}`); await handleResponse(res);
+  const res = await aiaJson('DELETE', `/api/aia/sov/${id}`); await handleSovResponse(res, id);
+};
+export const reorderSov = async (projectId: string, ids: string[]): Promise<void> => {
+  const res = await aiaJson('PUT', `/api/projects/${projectId}/aia/sov/order`, { ids });
+  await handleSovResponse(res, projectId);
+};
+export interface SovSplitPart { description: string; percent: number }
+export const splitSovLine = async (lineId: string, version: number, parts: SovSplitPart[]): Promise<{ header: AiaSovLine; children: AiaSovLine[] }> => {
+  const res = await aiaJson('POST', `/api/aia/sov/${lineId}/split`, { version, parts });
+  await handleSovResponse(res, lineId); return res.json();
 };
 export const seedSov = async (projectId: string, lines: { description: string; scheduledValueCents: number; itemNo?: string }[]): Promise<{ count: number }> => {
   const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov/seed`, { lines });
-  await handleResponse(res); return res.json();
+  await handleSovResponse(res, projectId); return res.json();
 };
 export const syncChangeOrders = async (projectId: string): Promise<{ added: number }> => {
   const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov/sync-change-orders`);

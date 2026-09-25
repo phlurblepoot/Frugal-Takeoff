@@ -23,6 +23,14 @@ export class FakeMailProvider implements MailProvider {
   /** When set, send() reports this back as the Message-ID the provider actually used
    *  (mirrors Gmail/Graph rewriting the header we supplied). */
   sendMessageIdHeader: string | null = null;
+  /** Gmail-like attachment ids. Gmail mints a NEW set of attachment ids on
+   *  EVERY message read, so with this on each getBody() rotates the ids
+   *  (`<base>-gen<n>`), and getAttachment() with an unknown id and no hint
+   *  re-reads the body to look it up — exactly what GmailProvider does — which
+   *  rotates them again and so can never find it. `bodyReads` counts every
+   *  read, including those, so a test can prove a batch paid for ONE. */
+  gmailAttachmentIds = false;
+  bodyReads = 0;
 
   seed(list: Seeded[]): void { this.msgs.clear(); this.log = []; list.forEach(m => this.msgs.set(m.providerMessageId, m)); }
   injectInbound(m: Seeded): void { this.msgs.set(m.providerMessageId, m); this.log.push({ seq: ++this.seq, upsert: m.providerMessageId }); }
@@ -60,10 +68,16 @@ export class FakeMailProvider implements MailProvider {
   }
   async getBody(id: string) {
     this.guard(); const m = this.msgs.get(id); if (!m) throw new ProviderNotFoundError(id);
+    this.bodyReads++;
+    if (this.gmailAttachmentIds) this.rotateAttachmentIds(id, a => `${a.replace(/-gen\d+$/, '')}-gen${this.bodyReads}`);
     return { html: m.html, text: m.text, attachments: m.attachments };
   }
-  async getAttachment(id: string, attId: string) {
-    this.guard(); const m = this.msgs.get(id); const meta = m?.attachments.find(a => a.attId === attId);
+  async getAttachment(id: string, attId: string, hint?: { name: string; mime: string }) {
+    this.guard(); const m = this.msgs.get(id);
+    let meta = m?.attachments.find(a => a.attId === attId);
+    // Mirrors GmailProvider: an id it has no metadata for is looked up in a
+    // fresh body read UNLESS the caller supplied the name/mime itself.
+    if (!meta && m && this.gmailAttachmentIds && !hint) meta = (await this.getBody(id)).attachments.find(a => a.attId === attId);
     if (!m || !meta) throw new ProviderNotFoundError(attId);
     const buf = m.attachmentBytes?.[attId] ?? Buffer.from('fake-bytes');
     return { stream: Readable.from(buf), mime: meta.mime, size: buf.length, name: meta.name };

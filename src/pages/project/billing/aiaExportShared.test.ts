@@ -77,4 +77,14 @@ describe('buildBlankSovContext', () => {
     expect(g702.retainage.mode).toBe('perLine');
     expect(g702.retainage.effectiveWorkPercent).toBeNull();
   });
+
+  it('buildBlankSovContext carries lineType through and sums only items into L1', () => {
+    const lines: AiaSovLine[] = [
+      { id: 'a', projectId: 'p', itemNo: '1', description: 'Work', scheduledValueCents: 1000, retainagePercent: null, isChangeOrder: 0, changeOrderId: null, sortOrder: 0, version: 1, createdAt: 0, lineType: 'item' },
+      { id: 'h', projectId: 'p', itemNo: null, description: 'Section', scheduledValueCents: 0, retainagePercent: null, isChangeOrder: 0, changeOrderId: null, sortOrder: 1, version: 1, createdAt: 0, lineType: 'header' },
+    ];
+    const blank = buildBlankSovContext(lines, {}, 'p');
+    expect(blank.g703.map(r => r.lineType)).toEqual(['item', 'header']);
+    expect(blank.g702.L1originalContractCents).toBe(1000);
+  });
 });

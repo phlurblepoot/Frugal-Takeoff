@@ -191,6 +191,43 @@ describe('GmailProvider', () => {
     await expect(provider(f).getAttachment('m1', 'nope')).rejects.toBeInstanceOf(ProviderNotFoundError);
   });
 
+  // Gmail mints new attachment ids on every message read, so a provider that
+  // re-reads the body to look an unknown id up invalidates every other id the
+  // caller is holding. Given the name and MIME type, it must go straight to
+  // attachments.get and let Gmail say whether the id is alive.
+  it('getAttachment with a hint fetches the bytes directly without reading the message', async () => {
+    const f = fakeFetch([
+      [/\/messages\/m1\?/, () => fx('gmail-message-full.json')],
+      [/\/attachments\//, () => fx('gmail-attachment.json')],
+    ]);
+    const a = await provider(f).getAttachment('m1', 'ANGjdJ9x7QdVpk', { name: 'COR-4.pdf', mime: 'application/pdf' });
+    expect(a.name).toBe('COR-4.pdf');
+    expect(a.mime).toBe('application/pdf');
+    expect(a.size).toBe(4);
+    expect(f.calls.map(c => c.url)).toEqual([expect.stringMatching(/\/messages\/m1\/attachments\/ANGjdJ9x7QdVpk$/)]);
+  });
+
+  it('getAttachment with a hint reports a dead id as not found, whether Gmail says 404 or "Invalid attachment token"', async () => {
+    const notFound = fakeFetch([[/\/attachments\//, () => new Response('{"error":{"message":"Not Found"}}', { status: 404 })]]);
+    await expect(provider(notFound).getAttachment('m1', 'dead', { name: 'x.pdf', mime: 'application/pdf' })).rejects.toBeInstanceOf(ProviderNotFoundError);
+    const badToken = fakeFetch([[/\/attachments\//, () => new Response('{"error":{"code":400,"message":"Invalid attachment token"}}', { status: 400 })]]);
+    await expect(provider(badToken).getAttachment('m1', 'dead', { name: 'x.pdf', mime: 'application/pdf' })).rejects.toBeInstanceOf(ProviderNotFoundError);
+    // Neither attempt fell back to reading the message.
+    expect([...notFound.calls, ...badToken.calls].some(c => /\/messages\/m1\?/.test(c.url))).toBe(false);
+  });
+
+  it('getAttachment prefers the cached part list over the hint', async () => {
+    const f = fakeFetch([
+      [/\/messages\/m1\?/, () => fx('gmail-message-full.json')],
+      [/\/attachments\//, () => fx('gmail-attachment.json')],
+    ]);
+    const p = provider(f);
+    await p.getBody('m1');
+    const a = await p.getAttachment('m1', 'ANGjdJ9x7QdVpk', { name: 'wrong.bin', mime: 'application/octet-stream' });
+    expect(a.name).toBe('COR-4.pdf');
+    expect(a.mime).toBe('application/pdf');
+  });
+
   it('flags/archive/trash/move use batchModify and the trash endpoint', async () => {
     const f = fakeFetch([[/batchModify$/, () => ({})], [/\/trash$/, () => ({})]]);
     const p = provider(f);

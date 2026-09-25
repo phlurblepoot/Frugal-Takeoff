@@ -16,7 +16,7 @@ import type { SetupInfo } from './types';
 const canCopy = (): boolean =>
   typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function';
 
-const CopyValue: React.FC<{ label: string; value: string | null; unavailable?: string }> = ({
+export const CopyValue: React.FC<{ label: string; value: string | null; unavailable?: string }> = ({
   label, value, unavailable = 'Set APP_PUBLIC_URL to see this',
 }) => {
   const [copied, setCopied] = useState(false);
@@ -55,7 +55,7 @@ const CopyValue: React.FC<{ label: string; value: string | null; unavailable?: s
   );
 };
 
-const EnvRow: React.FC<{ name: string; set: boolean; note?: string }> = ({ name, set, note }) => (
+export const EnvRow: React.FC<{ name: string; set: boolean; note?: string }> = ({ name, set, note }) => (
   <div data-testid={`env-${name}`} className="flex flex-wrap items-center gap-2 py-1.5">
     <code className="font-mono text-xs text-ink">{name}</code>
     <StatusPill tone={set ? 'green' : 'slate'}>{set ? 'set' : 'not set'}</StatusPill>
@@ -63,7 +63,7 @@ const EnvRow: React.FC<{ name: string; set: boolean; note?: string }> = ({ name,
   </div>
 );
 
-const Step: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+export const Step: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <li className="text-sm text-ink-soft [&>code]:font-mono [&>code]:text-xs">{children}</li>
 );
 

@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { useNavigate, useOutletContext } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { Lock, User, Loader2, FolderOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTheme } from '../context/ThemeContext';
 import { useSoftZoom } from '../hooks/useSoftZoom';
+import { getSetupState } from '../utils/store';
 
 export const Login: React.FC = () => {
   const { appName } = useOutletContext<{ appName: string; logoUrl: string }>();
@@ -13,7 +14,16 @@ export const Login: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  // A server with no data yet offers the restore screen: the only moment
+  // restoring a backup is allowed, and the only screen that can reach it.
+  const [isFresh, setIsFresh] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    let cancelled = false;
+    void getSetupState().then(s => { if (!cancelled) setIsFresh(s.fresh); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -140,6 +150,12 @@ export const Login: React.FC = () => {
               {isLoading ? <Loader2 size={18} className="animate-spin" /> : 'Sign In'}
             </button>
           </form>
+
+          {isFresh && (
+            <p className="mt-6 text-center text-sm text-ink-faint">
+              New server? <Link to="/restore" className="text-accent-600 hover:underline">Restore from backup</Link>
+            </p>
+          )}
         </div>
       </motion.div>
     </div>

@@ -859,6 +859,102 @@ describe('AIA billing routes (admin-gated)', () => {
     expect(stale.body.code).toBe('version_conflict');
   });
 
+  it('SOV lock: GET state, POST locks (manual, by caller), mutations 409 sov_locked, DELETE reopens', async () => {
+    const line = await request(app).post('/api/projects/p1/aia/sov').send({ description: 'D', scheduledValueCents: 1000 });
+    const unlocked = await request(app).get('/api/projects/p1/aia/sov/lock');
+    expect(unlocked.status).toBe(200);
+    expect(unlocked.body).toEqual({ locked: false, payAppCount: 0 });
+
+    const lock = await request(app).post('/api/projects/p1/aia/sov/lock').send({});
+    expect(lock.status).toBe(200);
+    expect(lock.body.locked).toBe(true);
+    expect(lock.body.reason).toBe('manual');
+    expect(lock.body.lockedByUserId).toBe('u1');
+    expect(lock.body.lockedByName).toBeNull(); // no users row in this harness
+
+    const blocked = await request(app).put(`/api/aia/sov/${line.body.id}`).send({ description: 'E', scheduledValueCents: 1, version: 1 });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe('sov_locked');
+    expect((await request(app).post('/api/projects/p1/aia/sov').send({ description: 'X', scheduledValueCents: 1 })).status).toBe(409);
+    expect((await request(app).delete(`/api/aia/sov/${line.body.id}`)).status).toBe(409);
+    expect((await request(app).post('/api/projects/p1/aia/sov/seed').send({ lines: [] })).status).toBe(409);
+
+    const reopen = await request(app).delete('/api/projects/p1/aia/sov/lock');
+    expect(reopen.status).toBe(200);
+    expect(reopen.body.locked).toBe(false);
+    expect((await request(app).put(`/api/aia/sov/${line.body.id}`).send({ description: 'E', scheduledValueCents: 1, version: 1 })).status).toBe(200);
+  });
+
+  it('SOV lock: creating the first pay app locks it and payAppCount is reported', async () => {
+    await request(app).post('/api/projects/p1/aia/sov').send({ description: 'D', scheduledValueCents: 1000 });
+    await request(app).post('/api/projects/p1/aia/pay-apps').send({});
+    const state = await request(app).get('/api/projects/p1/aia/sov/lock');
+    expect(state.body.locked).toBe(true);
+    expect(state.body.reason).toBe('pay-app');
+    expect(state.body.payAppCount).toBe(1);
+  });
+
+  it('SOV lock: 404 for an unknown project', async () => {
+    expect((await request(app).get('/api/projects/nope/aia/sov/lock')).status).toBe(404);
+  });
+
+  it('creating the first pay app also broadcasts aiaSov so an open SOV tab sees the auto-lock', async () => {
+    await request(app).post('/api/projects/p1/aia/sov').send({ description: 'D', scheduledValueCents: 1000 });
+    const events: any[] = [];
+    const adminApp = express();
+    adminApp.use(express.json());
+    registerDataRoutes(adminApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: (e: any) => events.push(e),
+    });
+    await request(adminApp).post('/api/projects/p1/aia/pay-apps').send({}).expect(200);
+    const sovEvent = events.find(e => e.type === 'aiaSov' && e.action === 'updated' && e.projectId === 'p1');
+    expect(sovEvent).toBeTruthy();
+  });
+
+  it('DELETE change-order on a locked SOV with a synced SOV line is blocked 409 sov_locked', async () => {
+    const co = await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', lumpSumAmount: 300 });
+    await request(app).patch(`/api/change-orders/${co.body.id}`).send({ status: 'approved' });
+    await request(app).post('/api/projects/p1/aia/sov/sync-change-orders').send({});
+    await request(app).post('/api/projects/p1/aia/sov/lock').send({});
+    const del = await request(app).delete(`/api/change-orders/${co.body.id}`);
+    expect(del.status).toBe(409);
+    expect(del.body.code).toBe('sov_locked');
+    expect((await request(app).get(`/api/change-orders/${co.body.id}`)).status).toBe(200);
+  });
+
+  it('PUT /aia/sov/order reorders contract lines; 400 on an incomplete list', async () => {
+    const a = (await request(app).post('/api/projects/p1/aia/sov').send({ description: 'A', scheduledValueCents: 1 })).body.id;
+    const b = (await request(app).post('/api/projects/p1/aia/sov').send({ description: 'B', scheduledValueCents: 1 })).body.id;
+    expect((await request(app).put('/api/projects/p1/aia/sov/order').send({ ids: [b, a] })).status).toBe(200);
+    expect((await request(app).get('/api/projects/p1/aia/sov')).body.map((l: any) => l.description)).toEqual(['B', 'A']);
+    expect((await request(app).put('/api/projects/p1/aia/sov/order').send({ ids: [a] })).status).toBe(400);
+  });
+
+  it('POST /aia/sov/:id/split returns the header and children; 400 on bad percents; 409 version_conflict on stale', async () => {
+    const id = (await request(app).post('/api/projects/p1/aia/sov').send({ itemNo: '1', description: 'Drywall', scheduledValueCents: 1000 })).body.id;
+    const bad = await request(app).post(`/api/aia/sov/${id}/split`).send({ version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 49 }] });
+    expect(bad.status).toBe(400);
+    const stale = await request(app).post(`/api/aia/sov/${id}/split`).send({ version: 3, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('version_conflict');
+    const ok = await request(app).post(`/api/aia/sov/${id}/split`).send({ version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] });
+    expect(ok.status).toBe(200);
+    expect(ok.body.header.lineType).toBe('header');
+    expect(ok.body.children.map((c: any) => c.scheduledValueCents)).toEqual([500, 500]);
+    expect((await request(app).get('/api/projects/p1/aia/sov')).body.length).toBe(3);
+  });
+
+  it('POST /aia/sov with insertBeforeId inserts in front of the target', async () => {
+    await request(app).post('/api/projects/p1/aia/sov').send({ description: 'A', scheduledValueCents: 1 });
+    const b = (await request(app).post('/api/projects/p1/aia/sov').send({ description: 'B', scheduledValueCents: 1 })).body.id;
+    expect((await request(app).post('/api/projects/p1/aia/sov').send({ lineType: 'header', description: 'H', insertBeforeId: b })).status).toBe(200);
+    expect((await request(app).get('/api/projects/p1/aia/sov')).body.map((l: any) => l.description)).toEqual(['A', 'H', 'B']);
+  });
+
   it('pay app create → get returns app, lines, g702, g703', async () => {
     await request(app).post('/api/projects/p1/aia/sov')
       .send({ description: 'Work', scheduledValueCents: 100000 });

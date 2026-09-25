@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers, DatabaseBackup } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
 import { UsersView } from './UsersView';
 import { MailAccountsTab } from './settings/MailAccountsTab';
+import { BackupTab } from './settings/BackupTab';
 import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
@@ -22,6 +23,41 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '3.3.0',
+    date: 'September 25, 2026',
+    changes: [
+      'Backups, managed by the app: Settings → Backup takes a complete snapshot (database, every file and document, and the mail encryption key) into a backup folder, and after the first one only new or changed files are copied. Set BACKUP_PATH to a second volume; back up on demand or on a schedule; keep as many snapshots as you like; download any snapshot as one zip.',
+      'Google Drive backup: connect a Google account once (Drive access only) and snapshots are pushed to a "Frugal Takeoff Backups" folder on Drive, incrementally.',
+      'Local and Google Drive backups have separate daily schedules and keep counts — each can be on or off, at its own time.',
+      'A running backup shows a progress bar with its percentage, what it is doing, and how much has been copied.',
+      'Setup guide on the Backup page (collapsible): the backup folder and connecting Google Drive step by step, with this server\'s own redirect addresses to copy and fixes for the common Google errors.',
+      'Snapshot warnings open to show each one — which file and project it is about, and what it means; run history lists them too. A backup cut off by a server restart is recorded as failed and never blocks the next one.',
+      'Disaster recovery: on a fresh install the login page offers "Restore from backup" — pick a snapshot from the backup folder, upload a snapshot zip, or connect Google Drive, and the server rebuilds itself from it and restarts.',
+    ],
+  },
+  {
+    version: '3.2.0',
+    date: 'September 12, 2026',
+    changes: [
+      'Schedule of values can be finalized: from the SOV tab, or automatically when the first pay application is created. A finalized SOV refuses line edits (server-enforced) so earlier pay applications never change under you; approved change orders can still be synced in. Admins can reopen it with a warning. A change order already synced into a finalized SOV cannot be deleted.',
+      'SOV supports header lines (label-only section titles) and blank spacer lines. They show in the SOV editor, the pay-app G703, and the Excel export, and never count toward any total.',
+      'Split an SOV line by percentage: the original becomes a header and each part becomes an item line under it (e.g. 60/40), with item numbers like 5.1, 5.2. Cents always add up to the original. On a project that already has pay applications, the split warns that the new lines start with no billed progress.',
+      'SOV editor: contract lines and change-order lines are now separate sections; move lines up/down, insert a header or blank above any line.',
+    ],
+  },
+  {
+    version: '3.1.1',
+    date: 'September 11, 2026',
+    changes: [
+      'Mail: saving several attachments from one Gmail message now saves all of them — previously only the first one landed because Gmail hands out new attachment ids on every read. Inline images in a message body load reliably for the same reason.',
+      'Documents saved from an email can now be deleted from the Documents page (they are copies; the email keeps the original).',
+      'Documents: a "Change type" button in the selection bar re-types several files at once. Files locked to a type by the record they belong to are left alone.',
+      'Documents: a very long file name no longer pushes the other columns off the screen — names truncate and show in full on hover.',
+      'Canvas: Backspace only removes the last point while drawing; Delete is the only key that deletes the selected measurement.',
+      'Online users: click a user to jump to the page they are on. Someone with several tabs open shows each one, and each has its own Follow.',
+    ],
+  },
   {
     version: '3.1.0',
     date: 'September 9, 2026',
@@ -1714,13 +1750,13 @@ const DocumentTypesCard: React.FC = () => {
 // Kept as a value so a ?tab= param can be validated against it before it is
 // trusted to select a tab.
 const TAB_IDS = [
-  'preferences', 'takeoff-templates', 'general', 'mail', 'storage', 'users', 'aia-template', 'changelog',
+  'preferences', 'takeoff-templates', 'general', 'mail', 'storage', 'backup', 'users', 'aia-template', 'changelog',
 ] as const;
 type TabId = (typeof TAB_IDS)[number];
 const isTabId = (v: string | null): v is TabId => !!v && (TAB_IDS as readonly string[]).includes(v);
 // Kept alongside TAB_IDS so the two-way ?tab= derivation below can validate
 // an admin-only tab without waiting on the tabs array built later in render.
-const ADMIN_ONLY_TAB_IDS = new Set<TabId>(['general', 'storage', 'aia-template', 'users']);
+const ADMIN_ONLY_TAB_IDS = new Set<TabId>(['general', 'storage', 'backup', 'aia-template', 'users']);
 
 export const Settings: React.FC = () => {
   const { toast } = useToast();
@@ -1826,6 +1862,7 @@ export const Settings: React.FC = () => {
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
     { id: 'mail',        label: 'Mail',              icon: <Mail size={18} /> },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
+    { id: 'backup',      label: 'Backup',            icon: <DatabaseBackup size={18} />, adminOnly: true },
     { id: 'aia-template', label: 'AIA Template',     icon: <FileSpreadsheet size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
     { id: 'changelog',   label: 'Changelog',         icon: <History size={18} /> },
@@ -2037,6 +2074,8 @@ export const Settings: React.FC = () => {
             {activeTab === 'mail' && <MailAccountsTab isAdmin={isAdmin} />}
 
             {activeTab === 'storage' && isAdmin && <StorageTab />}
+
+            {activeTab === 'backup' && isAdmin && <BackupTab />}
 
             {activeTab === 'aia-template' && isAdmin && <AiaTemplateTab />}
 

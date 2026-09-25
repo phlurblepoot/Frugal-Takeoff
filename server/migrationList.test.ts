@@ -1068,3 +1068,58 @@ describe('migration 34: invoice-photos-attachments', () => {
     db.close();
   });
 });
+
+describe('migration 35: sov-line-types-and-locks', () => {
+  it('adds lineType (default item) and creates aia_sov_locks; re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 34));
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('p1', 'Job', 1, 1, 1, '{}')`).run();
+    db.prepare(`INSERT INTO aia_sov_lines (id, projectId, itemNo, description, scheduledValueCents, retainagePercent, isChangeOrder, changeOrderId, sortOrder, version, createdAt)
+                VALUES ('s1', 'p1', '1', 'Framing', 1000, NULL, 0, NULL, 0, 1, 1)`).run();
+    runMigrations(db, dir, migrations.filter(m => m.version <= 35));
+    expect(columnNames(db, 'aia_sov_lines')).toContain('lineType');
+    expect((db.prepare('SELECT lineType FROM aia_sov_lines WHERE id = ?').get('s1') as any).lineType).toBe('item');
+    expect(tableNames(db)).toContain('aia_sov_locks');
+    // replay is a no-op
+    const m35 = migrations.find(m => m.version === 35)!;
+    expect(() => m35.up({ db, dataDir: dir } as any)).not.toThrow();
+    expect(columnNames(db, 'aia_sov_lines').filter(c => c === 'lineType').length).toBe(1);
+    db.close();
+  });
+
+  it('locks every project that already has a pay application, and leaves the rest unlocked', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 34));
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('billed', 'Billed', 1, 1, 1, '{}')`).run();
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('fresh', 'Fresh', 1, 1, 1, '{}')`).run();
+    db.prepare(`INSERT INTO aia_pay_apps (id, projectId, number, periodTo, applicationDate, retainagePercent, storedRetainagePercent, status, version, createdAt, updatedAt)
+                VALUES ('pa2', 'billed', 2, NULL, NULL, 10, 10, 'draft', 1, 5000, 5000)`).run();
+    db.prepare(`INSERT INTO aia_pay_apps (id, projectId, number, periodTo, applicationDate, retainagePercent, storedRetainagePercent, status, version, createdAt, updatedAt)
+                VALUES ('pa1', 'billed', 1, NULL, NULL, 10, 10, 'finalized', 1, 4000, 4000)`).run();
+    runMigrations(db, dir, migrations.filter(m => m.version <= 35));
+    const lock = db.prepare('SELECT * FROM aia_sov_locks WHERE projectId = ?').get('billed') as any;
+    expect(lock).toBeTruthy();
+    expect(lock.reason).toBe('pay-app');
+    expect(lock.lockedByUserId).toBeNull();
+    expect(lock.lockedAt).toBe(4000); // earliest pay app's createdAt
+    expect(db.prepare('SELECT * FROM aia_sov_locks WHERE projectId = ?').get('fresh')).toBeUndefined();
+    db.close();
+  });
+});
+
+describe('migration 36: backup-runs', () => {
+  it('creates backup_runs with the expected columns and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 36));
+    expect(tableNames(db)).toContain('backup_runs');
+    for (const c of ['id', 'target', 'trigger', 'startedAt', 'finishedAt', 'status', 'snapshotId', 'objectsAdded', 'bytesWritten', 'warningsJson', 'error']) {
+      expect(columnNames(db, 'backup_runs'), `missing ${c}`).toContain(c);
+    }
+    const m36 = migrations.find(m => m.version === 36)!;
+    expect(() => m36.up({ db, dataDir: dir } as any)).not.toThrow();
+    db.close();
+  });
+});

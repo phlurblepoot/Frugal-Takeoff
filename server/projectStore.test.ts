@@ -312,6 +312,15 @@ describe('createProject / listProjects / deleteProject', () => {
     expect((db.prepare(`SELECT COUNT(*) as c FROM aia_pay_app_lines WHERE id = 'pl1'`).get() as any).c).toBe(0);
   });
 
+  it('delete removes the SOV lock row too', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    db.prepare(
+      `INSERT INTO aia_sov_locks (projectId, lockedAt, lockedByUserId, reason) VALUES ('proj1', 1, NULL, 'manual')`
+    ).run();
+    deleteProject(db, dir, 'proj1');
+    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_sov_locks WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
+  });
+
   it('delete cascades polymorphic payments for both invoices and pay-apps', () => {
     seedLegacyAndNormalize(LEGACY_PROJECT);
     db.prepare(`INSERT INTO invoices (id, projectId, status, version, createdAt) VALUES ('inv1', 'proj1', 'draft', 1, 1)`).run();

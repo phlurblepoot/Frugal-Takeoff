@@ -18,6 +18,7 @@
 // exports. Types are imported type-only (erased at build time).
 import type ExcelJS from 'exceljs';
 import type { AiaSettings, AiaPayApp, AiaSovLine, AiaG702, AiaG703Row } from '../../../utils/store';
+import { lineTypeOf } from '../../../utils/store';
 import { downloadBlob } from '../../../utils/download';
 
 export interface AiaExportCtx {
@@ -263,6 +264,19 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
 
   // ── Per-row writer: inputs C/D/E/F, formulas G/H/I/J ──────────────────────
   const writeItemRow = (rowNum: number, row: AiaG703Row, seq: number): void => {
+    const type = lineTypeOf(row);
+    if (type === 'blank') {
+      for (const col of G703_COLS) setCell(ws, `${col}${rowNum}`, '', { border: true });
+      return;
+    }
+    if (type === 'header') {
+      // Label only: description in bold, every money/formula column empty.
+      // The section SUMs skip empty cells, so anchors and G702 refs are unchanged.
+      setCell(ws, `A${rowNum}`, row.itemNo ?? '', { border: true, align: 'center' });
+      setCell(ws, `B${rowNum}`, row.description, { border: true, wrap: true, bold: true });
+      for (const col of ['C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']) setCell(ws, `${col}${rowNum}`, '', { border: true });
+      return;
+    }
     setCell(ws, `A${rowNum}`, row.itemNo ?? seq, { border: true, align: 'center' });
     setCell(ws, `B${rowNum}`, row.description, { border: true, wrap: true });
     setCell(ws, `C${rowNum}`, dollars(row.scheduledValueCents), { money: true, border: true });
@@ -295,7 +309,8 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
 
   // ── Contract section ──────────────────────────────────────────────────────
   const contractStart = 11;
-  contract.forEach((row, i) => writeItemRow(contractStart + i, row, i + 1));
+  let itemSeq = 0;
+  contract.forEach((row, i) => writeItemRow(contractStart + i, row, lineTypeOf(row) === 'item' ? ++itemSeq : 0));
   const contractTotalRow = contractStart + contract.length;
   writeSectionTotals(contractTotalRow, contractStart, contractTotalRow - 1);
 
@@ -307,7 +322,8 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
   const coHeaderTop = coLetterRow + 1;
   writeColumnHeader(coHeaderTop);
   const coStart = coHeaderTop + 4;
-  cos.forEach((row, i) => writeItemRow(coStart + i, row, i + 1));
+  itemSeq = 0;
+  cos.forEach((row, i) => writeItemRow(coStart + i, row, lineTypeOf(row) === 'item' ? ++itemSeq : 0));
   const coTotalRow = coStart + cos.length;
   writeSectionTotals(coTotalRow, coStart, coTotalRow - 1);
 
@@ -584,6 +600,15 @@ export async function buildAiaWorkbookFromTemplate(
     const pct = row.scheduledValueCents > 0
       ? row.totalToDateCents / row.scheduledValueCents
       : (row.percentComplete || 0) / 100;
+
+    if (lineTypeOf(row) !== 'item') {
+      setMapped(g703ws, at(cols.itemNo), row.itemNo ?? '');
+      setMapped(g703ws, at(cols.description), lineTypeOf(row) === 'header' ? row.description : '');
+      for (const key of ['scheduledValue', 'previous', 'thisPeriod', 'stored', 'total', 'percent', 'balance', 'retainage'] as const) {
+        setMapped(g703ws, at(cols[key]), '');
+      }
+      return;
+    }
 
     setMapped(g703ws, at(cols.itemNo), row.itemNo ?? '');
     setMapped(g703ws, at(cols.description), row.description);

@@ -17,7 +17,7 @@ import {
   deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
   listBilledDocuments,
 } from './billingStore';
-import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
+import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp, lockSov, SovLockedError } from './aiaStore';
 
 let db: Database.Database;
 let dir: string;
@@ -510,6 +510,35 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
     expect((db.prepare('SELECT COUNT(*) c FROM change_order_photos WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
     expect((db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
   });
+
+  it('deleteChangeOrder throws SovLockedError when the SOV is locked and this CO has a synced SOV line, leaving everything intact', () => {
+    const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0, lines: [{ description: 'A', qty: 1, unitPrice: 10 }] });
+    db.prepare(
+      'INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, isChangeOrder, changeOrderId, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, 1, ?, 0, 1, 1)'
+    ).run('sov-co', 'p1', 'CO', 1000, id);
+    lockSov(db, 'p1', { userId: null, reason: 'manual' });
+    expect(() => deleteChangeOrder(db, id)).toThrow(SovLockedError);
+    expect(getChangeOrder(db, id)).not.toBeNull();
+    expect((db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE id = ?').get('sov-co') as any).c).toBe(1);
+    expect((db.prepare('SELECT COUNT(*) c FROM change_order_lines WHERE changeOrderId = ?').get(id) as any).c).toBe(1);
+  });
+
+  it('deleteChangeOrder still deletes when the SOV is locked but this CO has no synced SOV line', () => {
+    const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0, lines: [{ description: 'A', qty: 1, unitPrice: 10 }] });
+    lockSov(db, 'p1', { userId: null, reason: 'manual' });
+    expect(() => deleteChangeOrder(db, id)).not.toThrow();
+    expect(getChangeOrder(db, id)).toBeNull();
+  });
+
+  it('deleteChangeOrder deletes the CO and its synced SOV line when the SOV is unlocked', () => {
+    const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0, lines: [{ description: 'A', qty: 1, unitPrice: 10 }] });
+    db.prepare(
+      'INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, isChangeOrder, changeOrderId, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, 1, ?, 0, 1, 1)'
+    ).run('sov-co2', 'p1', 'CO', 1000, id);
+    expect(() => deleteChangeOrder(db, id)).not.toThrow();
+    expect(getChangeOrder(db, id)).toBeNull();
+    expect((db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE id = ?').get('sov-co2') as any).c).toBe(0);
+  });
 });
 
 describe('billingSummary — SOV-derived contract total', () => {
@@ -573,6 +602,13 @@ describe('billingSummary — SOV-derived contract total', () => {
     expect(s.invoiceTotalCents).toBe(500000);
     expect(s.invoiceOutstandingCents).toBe(300000); // 500000 - 200000
     expect(s.outstandingCents).toBe(300000);
+  });
+
+  it('contract base from the SOV counts item lines only (headers/blanks are zero and excluded)', () => {
+    createSovLine(db, 'p1', { description: 'Work', scheduledValueCents: 100000 });
+    createSovLine(db, 'p1', { lineType: 'header', description: 'Section' });
+    createSovLine(db, 'p1', { lineType: 'blank' });
+    expect(billingSummary(db, 'p1').contractTotalCents).toBe(100000);
   });
 });
 

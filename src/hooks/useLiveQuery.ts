@@ -6,7 +6,7 @@ export type EntityType =
   | 'project' | 'task' | 'issue' | 'rfi' | 'dailyReport' | 'punch'
   | 'invoice' | 'changeOrder' | 'payment' | 'aiaSov' | 'aiaPayApp'
   | 'file' | 'note' | 'customer' | 'user' | 'timeEntry' | 'template' | 'proposal'
-  | 'mailThread' | 'mailAccount';
+  | 'mailThread' | 'mailAccount' | 'backupRun';
 
 export interface EntityChangedEvent {
   type: EntityType; id: string; projectId?: string; version?: number;
