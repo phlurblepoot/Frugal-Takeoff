@@ -163,8 +163,7 @@ in **Settings → Backup → Setup guide**. Two things the steps above do not sa
   screen's Drive tab will not see the old snapshots.
 
 Local and Drive backups are scheduled separately (Settings → Backup →
-Schedule & retention). A schedule saved before they were split keeps driving
-both until one of them is changed.
+Schedule & retention).
 
 ---
 

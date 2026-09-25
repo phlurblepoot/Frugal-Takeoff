@@ -25,24 +25,24 @@ interface ChangelogEntry {
 const CHANGELOG: ChangelogEntry[] = [
   {
     version: '3.3.0',
-    date: 'September 12, 2026',
+    date: 'September 25, 2026',
     changes: [
-      'Backups, managed by the app: Settings → Backup takes a complete snapshot (database, every file and document, and the mail encryption key) into a backup folder, and after the first one only new or changed files are copied. Set BACKUP_PATH to a second volume; run on a daily schedule or on demand; keep as many snapshots as you like; download any snapshot as one zip.',
-      'Google Drive backup: connect a Google account once (Drive access only) and the same snapshots are pushed to a "Frugal Takeoff Backups" folder on Drive, incrementally.',
+      'Backups, managed by the app: Settings → Backup takes a complete snapshot (database, every file and document, and the mail encryption key) into a backup folder, and after the first one only new or changed files are copied. Set BACKUP_PATH to a second volume; back up on demand or on a schedule; keep as many snapshots as you like; download any snapshot as one zip.',
+      'Google Drive backup: connect a Google account once (Drive access only) and snapshots are pushed to a "Frugal Takeoff Backups" folder on Drive, incrementally.',
+      'Local and Google Drive backups have separate daily schedules and keep counts — each can be on or off, at its own time.',
+      'A running backup shows a progress bar with its percentage, what it is doing, and how much has been copied.',
+      'Setup guide on the Backup page (collapsible): the backup folder and connecting Google Drive step by step, with this server\'s own redirect addresses to copy and fixes for the common Google errors.',
+      'Snapshot warnings open to show each one — which file and project it is about, and what it means; run history lists them too. A backup cut off by a server restart is recorded as failed and never blocks the next one.',
       'Disaster recovery: on a fresh install the login page offers "Restore from backup" — pick a snapshot from the backup folder, upload a snapshot zip, or connect Google Drive, and the server rebuilds itself from it and restarts.',
-      'Local and Google Drive backups each have their own daily schedule — on or off, and at their own time. A schedule saved before this keeps running both at the same time until it is changed.',
-      'A backup in progress shows a progress bar with its percentage, what it is doing, and how much has been copied.',
-      'Settings → Backup has a collapsible setup guide for the backup folder and for connecting Google Drive, with this server\'s own redirect addresses to copy.',
-      'A snapshot with warnings can be opened to see each one: which file (and project) it is about, and what it means. A backup interrupted by a server restart is now marked as failed instead of blocking every later backup.',
     ],
   },
   {
     version: '3.2.0',
     date: 'September 12, 2026',
     changes: [
-      'Schedule of values can be finalized: from the SOV tab, or automatically when the first pay application is created. A finalized SOV refuses line edits (server-enforced) so earlier pay applications never change under you; approved change orders can still be synced in. Admins can reopen it with a warning.',
+      'Schedule of values can be finalized: from the SOV tab, or automatically when the first pay application is created. A finalized SOV refuses line edits (server-enforced) so earlier pay applications never change under you; approved change orders can still be synced in. Admins can reopen it with a warning. A change order already synced into a finalized SOV cannot be deleted.',
       'SOV supports header lines (label-only section titles) and blank spacer lines. They show in the SOV editor, the pay-app G703, and the Excel export, and never count toward any total.',
-      'Split an SOV line by percentage: the original becomes a header and each part becomes an item line under it (e.g. 60/40), with item numbers like 5.1, 5.2. Cents always add up to the original.',
+      'Split an SOV line by percentage: the original becomes a header and each part becomes an item line under it (e.g. 60/40), with item numbers like 5.1, 5.2. Cents always add up to the original. On a project that already has pay applications, the split warns that the new lines start with no billed progress.',
       'SOV editor: contract lines and change-order lines are now separate sections; move lines up/down, insert a header or blank above any line.',
     ],
   },
