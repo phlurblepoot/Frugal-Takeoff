@@ -256,7 +256,7 @@ container next to the app, and build the extras agreed below on top of it.
   - renders nothing in PageTransition's outgoing copy (`useIsPresent`): that
     wrapper briefly renders a newly entered route a second time, which started
     ONLYOFFICE twice on every in-app "Open" and dropped a dialog opened in that
-    first moment. The e2e test asserts one config request. (follow-up commit)
+    first moment. The e2e test asserts one config request. (`051352f`)
 - [x] `/tools/pdf`, `/tools/sheets`, `/pdf-editor` and `/spreadsheet-editor`
   redirect to `/tools/edit`, keeping `fileId`.
 - [x] `openTargetFor` sends every office format to `/tools/edit`:
@@ -328,8 +328,10 @@ container next to the app, and build the extras agreed below on top of it.
   - sidebar → landing
   - "Open from computer" filing the upload into a project
   - `e2e/documents.spec.ts` now expects `/tools/edit`
-  - full e2e suite: still running when this was committed; the result goes in
-    the next commit
+  - full e2e suite at `051352f`: 102 passed, 1 skipped (a conditional spec,
+    skipped before this work too)
+  - an earlier full run that overlapped a smoke test found the Settings-spec
+    name clash and the transition double-mount, both fixed in `051352f`
 - [x] Manual run against a stand-in Document Server over real HTTP:
   - opened from Documents → `/tools/edit` with a word/edit config
   - the stand-in downloaded the file through its link
