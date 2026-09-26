@@ -575,20 +575,44 @@ container next to the app, and build the extras agreed below on top of it.
     Options: `region`, `spreadsheetLayout`, `thumbnail`.
   - `services.ts` makes the conversion and thumbnail services once at startup
     and shares them with the upload route and the editor routes.
-- [ ] **Old formats on upload** (.xls, .doc, .rtf, .odt, .ods, .pages,
+- [x] **Old formats on upload** (.xls, .doc, .rtf, .odt, .ods, .pages,
   .numbers…):
   - the original is saved first
   - the converted .docx/.xlsx is saved as a new version with the extension
     updated
   - if conversion fails, keep the original and show a warning
-- [ ] **AIA pay app "Make PDF" button**:
+  - Done in `POST /api/files/:id` itself, so every upload path gets it
+    (Documents upload, file pickers, "Open from computer"), for people's own
+    uploads only (not generated documents). Presentations (.ppt, .odp,
+    Keynote) become .pptx too. The list lives in `src/utils/officeFormats.ts`
+    so "Open from computer" accepts those files as well.
+  - The version history tags the converted version "converted"
+    (`versionOrigin = 'convert'`). The upload shows a notice either way:
+    "converted, the original is kept as version 1", or "Kept as .xls: <why>"
+    (including when the editor isn't set up).
+- [x] **AIA pay app "Make PDF" button**:
   - converts xlsx → pdf with `region: en-US`
   - saved as a PDF linked to the pay app
   - offered as an attachment when emailing the pay app
-- [ ] **Thumbnails in Documents**:
+  - In the pay app editor, beside the document bar. It saves unsaved changes
+    and regenerates a missing or out-of-date workbook first, so the PDF always
+    matches the pay app. Stored as kind `payapp-pdf` (admin-only, like the
+    workbook), a new version each time. No page layout is forced: the
+    workbook's own sheets set Letter and fit-to-width.
+  - Pay apps had no Email before. They now have one like the other records
+    (`POST /api/aia/pay-apps/:id/send`, admin-only, same recipients as
+    invoices); the PDF is pre-attached when it matches the pay app.
+- [x] **Thumbnails in Documents**:
   - first-page PNG (`thumbnail.first`), cached per file version (sha256)
   - generated in the background after upload or save
   - shown in the Documents list and grid, with an icon fallback
+  - `server/onlyoffice/thumbnails.ts`: `<dataDir>/thumbnails/<sha256>.png`,
+    320 px, one at a time; also made on demand when the list asks (202 while
+    pending); a file ONLYOFFICE can't render isn't retried for an hour.
+    Swept of stale pictures after start and daily; not backed up (rebuilt on
+    demand).
+  - Shown in the Documents table and the phone cards (loaded as rows scroll
+    into view), and in the hover card for Word/Excel files.
 - [ ] Tests: conversion client (mocked Document Server), upload conversion keeps
   the original, thumbnail cache.
 

@@ -17,10 +17,12 @@ const persistGeneratedDocument = vi.hoisted(() => vi.fn());
 const getDocumentBySource = vi.hoisted(() => vi.fn());
 const buildAiaXlsxBlob = vi.hoisted(() => vi.fn());
 const resolveAiaExportEnv = vi.hoisted(() => vi.fn());
+const makePayAppPdf = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/store', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../utils/store')>();
   return {
-    ...actual, getPayApp, setPayApp, savePayAppLines, persistGeneratedDocument, getDocumentBySource,
+    ...actual, getPayApp, setPayApp, savePayAppLines, persistGeneratedDocument, getDocumentBySource, makePayAppPdf,
+    getProject: vi.fn(async () => ({ id: 'p1', name: 'Test Project' })),
     getDocumentsBySource: vi.fn(async () => ({})),
     getDocumentTypes: vi.fn(async () => []),
     fetchFileBlob: vi.fn(async () => new Blob(['xlsx'])),
@@ -95,6 +97,7 @@ beforeEach(() => {
   getDocumentBySource.mockReset().mockResolvedValue(null);
   buildAiaXlsxBlob.mockReset().mockResolvedValue(new Blob(['xlsx']));
   resolveAiaExportEnv.mockReset().mockResolvedValue(ENV);
+  makePayAppPdf.mockReset().mockResolvedValue({ fileId: 'pdf-1', name: 'Pay App #2 — G702.pdf', versionNumber: 1 });
 });
 
 const renderEditor = () =>
@@ -154,15 +157,16 @@ describe('AiaPayAppEditor — retainage release box', () => {
 // stored workbook can never disagree with the record it claims to represent.
 
 describe('AiaPayAppEditor — document actions', () => {
-  it('mounts the shared bar in Excel wording and drops its own Export button', async () => {
+  it('mounts the shared bar in Excel wording, with Email, and drops its own Export button', async () => {
     renderEditor();
 
     const generate = await screen.findByTestId('doc-generate');
     expect(generate).toHaveTextContent('Generate Excel');
     expect(await screen.findByText('No Excel yet')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Export AIA Excel/i })).toBeNull();
-    // Email is not part of the AIA flow; Close/Finalize/Save stay the editor's.
-    expect(screen.queryByTestId('doc-send')).toBeNull();
+    // Emailing a pay app arrived with its PDF (ONLYOFFICE Phase 4); Close,
+    // Finalize and Save stay the editor's.
+    expect(screen.getByTestId('doc-send')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Finalize' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
@@ -272,5 +276,37 @@ describe('AiaPayAppEditor — header and blank SOV rows', () => {
     await waitFor(() => expect(savePayAppLines).toHaveBeenCalledTimes(1));
     const lines = savePayAppLines.mock.calls[0][1];
     expect(lines.map((l: { sovLineId: string }) => l.sovLineId)).toEqual(['sov1']);
+  });
+});
+
+describe('AiaPayAppEditor — Make PDF (ONLYOFFICE Phase 4)', () => {
+  const byKind = (docs: Record<string, unknown>) => getDocumentBySource.mockImplementation(async (q: { kind: string }) => docs[q.kind] ?? null);
+
+  it('generates the workbook when there is none, then makes the PDF from it', async () => {
+    renderEditor();
+    fireEvent.click(await screen.findByTestId('payapp-make-pdf'));
+    await waitFor(() => expect(makePayAppPdf).toHaveBeenCalledWith('app2'));
+    expect(buildAiaXlsxBlob).toHaveBeenCalled();
+    expect(persistGeneratedDocument.mock.calls[0][1]).toMatchObject({ kind: 'payapp-export', sourceType: 'payapp', sourceId: 'app2' });
+    expect(persistGeneratedDocument.mock.invocationCallOrder[0]).toBeLessThan(makePayAppPdf.mock.invocationCallOrder[0]);
+    expect(await screen.findByText('PDF made')).toBeInTheDocument();
+  });
+
+  it('uses a workbook that already matches the pay app', async () => {
+    byKind({ 'payapp-export': { id: 'wb', name: 'wb.xlsx', mime: 'x', size: 1, createdAt: 150, versionNumber: 1 } });
+    renderEditor();
+    fireEvent.click(await screen.findByTestId('payapp-make-pdf'));
+    await waitFor(() => expect(makePayAppPdf).toHaveBeenCalled());
+    expect(persistGeneratedDocument).not.toHaveBeenCalled();
+  });
+
+  it('offers Update PDF and Open PDF once there is one, and reports a failure', async () => {
+    byKind({ 'payapp-pdf': { id: 'pdf-1', name: 'Pay App #2 — G702.pdf', mime: 'application/pdf', size: 1, createdAt: 150, versionNumber: 1 } });
+    makePayAppPdf.mockRejectedValue(new Error("ONLYOFFICE couldn't convert this file."));
+    renderEditor();
+    expect(await screen.findByTestId('payapp-open-pdf')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('payapp-make-pdf'));
+    expect(screen.getByTestId('payapp-make-pdf')).toHaveTextContent('Update PDF');
+    expect(await screen.findByText("ONLYOFFICE couldn't convert this file.")).toBeInTheDocument();
   });
 });

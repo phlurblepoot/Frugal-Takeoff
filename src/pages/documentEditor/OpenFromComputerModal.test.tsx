@@ -7,7 +7,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const h = vi.hoisted(() => ({ getProjectsSummary: vi.fn(), getDocumentTypes: vi.fn(), saveBinaryFile: vi.fn() }));
+const toast = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/store', async (orig) => ({ ...(await orig<typeof import('../../utils/store')>()), ...h }));
+vi.mock('../../components/Toast', () => ({ useToast: () => ({ toast }) }));
 import { OpenFromComputerModal } from './OpenFromComputerModal';
 
 const project = (id: string, name: string, over: Record<string, unknown> = {}) => ({ id, name, customerId: `c-${id}`, archived: false, ...over });
@@ -41,6 +43,23 @@ describe('OpenFromComputerModal', () => {
     expect(h.saveBinaryFile).toHaveBeenCalledWith(expect.any(String), file, {
       kind: 'custom:sub', name: 'Scope.docx', projectId: 'p1', customerId: 'c-p1',
     });
+  });
+
+  it('takes old formats the upload converts (Pages, .xls…), and passes on what happened', async () => {
+    h.saveBinaryFile.mockResolvedValue({
+      fileId: 'stored-id', versioned: false,
+      conversion: { status: 'converted', from: 'pages', to: 'docx', name: 'Spec.docx' },
+    });
+    const onUploaded = vi.fn();
+    render(<OpenFromComputerModal open onClose={() => {}} onUploaded={onUploaded} />);
+    choose(new File(['x'], 'Spec.pages', { type: '' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    await screen.findByRole('option', { name: 'Dania Beach' });
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'p1' } });
+    fireEvent.click(screen.getByTestId('open-computer-upload'));
+    await waitFor(() => expect(onUploaded).toHaveBeenCalledWith('stored-id'));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('"Spec.pages" was converted to .docx'), { type: 'info' });
+    expect(screen.getByTestId('open-computer-input')).toHaveAttribute('accept', expect.stringContaining('.pages'));
   });
 
   it('guesses the type from the file', async () => {

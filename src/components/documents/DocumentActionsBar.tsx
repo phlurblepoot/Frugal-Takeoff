@@ -53,6 +53,9 @@ export interface MailComposerPrefill {
   /** Renders the "Document shows email" select above the recipients. */
   headerEmailOptions?: { label: string; value: string }[];
   defaultHeaderEmail?: string;
+  /** Files already attached when the composer opens (the sender can remove
+   *  them), e.g. a pay app's PDF next to its workbook. */
+  extraAttachments?: { fileId: string; name: string; size?: number }[];
 }
 
 export interface DocumentActionsBarProps {
@@ -390,6 +393,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
             bcc: parseAddresses(send.composer.defaultBcc ?? ''),
             subject: send.composer.defaultSubject,
             html: textToHtml(send.composer.defaultBody),
+            attachments: (send.composer.extraAttachments ?? []).map(a => ({ kind: 'file' as const, ...a })),
           }}
           // Display only: the document may not exist yet, and the bar attaches
           // the real bytes itself once it has settled which file to send.

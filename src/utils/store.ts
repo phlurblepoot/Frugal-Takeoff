@@ -258,9 +258,17 @@ export interface FileUploadOpts {
   sourceId?: string;
 }
 
+/** What happened to an old-format upload (.doc, .xls, Pages…; ONLYOFFICE
+ *  Phase 4): converted to the modern format with the upload kept as version
+ *  1, or kept as it came, with the reason. */
+export type UploadConversion =
+  | { status: 'converted'; from: string; to: string; name: string }
+  | { status: 'failed'; from: string; to: string; message: string };
+
 export interface UploadResult {
   fileId: string;
   versioned: boolean;
+  conversion?: UploadConversion;
 }
 
 const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
@@ -278,8 +286,8 @@ const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
 // back to the posted id so a stale deployment keeps working.
 const readUploadResult = async (res: Response, postedId: string): Promise<UploadResult> => {
   try {
-    const body = await res.json() as { fileId?: string; versioned?: boolean };
-    return { fileId: body?.fileId || postedId, versioned: !!body?.versioned };
+    const body = await res.json() as { fileId?: string; versioned?: boolean; conversion?: UploadConversion };
+    return { fileId: body?.fileId || postedId, versioned: !!body?.versioned, ...(body?.conversion ? { conversion: body.conversion } : {}) };
   } catch {
     return { fileId: postedId, versioned: false };
   }
@@ -1491,6 +1499,22 @@ export const getBillingSummary = async (projectId: string): Promise<BillingSumma
     const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
     await handleResponse(res); return res.json();
   });
+/** Emails a pay application (its workbook first; ONLYOFFICE Phase 4). */
+export const sendPayApp = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await billingJson('POST', `/api/aia/pay-apps/${id}/send`, payload);
+  await handleResponse(res);
+  return res.json();
+};
+
+/** Makes the pay app's workbook into its PDF (ONLYOFFICE converts it). */
+export const makePayAppPdf = async (payAppId: string): Promise<{ fileId: string; name: string; versionNumber: number }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/pay-app-pdf/${encodeURIComponent(payAppId)}`, {
+    method: 'POST', headers: { ...getAuthHeaders() },
+  }, { timeoutMs: 150_000 });
+  await handleResponse(res);
+  return res.json();
+};
+
 export const sendInvoice = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await billingJson('POST', `/api/invoices/${id}/send`, payload);
   await handleResponse(res);

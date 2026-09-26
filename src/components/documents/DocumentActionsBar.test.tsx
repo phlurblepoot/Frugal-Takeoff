@@ -409,6 +409,20 @@ describe('DocumentActionsBar — composer wiring', () => {
     expect(props.initial.subject).toBe('Invoice 12');
     // Escaped and line-broken, matching the server's own textToHtml.
     expect(props.initial.html).toBe('<p>Hello,<br><br>Attached &amp; signed.</p>');
+    expect(props.initial.attachments).toEqual([]);
+  });
+
+  it('pre-attaches extra files, e.g. a pay app PDF next to its workbook', () => {
+    renderBar({
+      send: sendProp({
+        composer: {
+          defaultSubject: 'Pay app 3', defaultBody: 'x',
+          extraAttachments: [{ fileId: 'pdf1', name: 'Pay App #3.pdf', size: 12 }],
+        },
+      }),
+    });
+    fireEvent.click(screen.getByTestId('doc-send'));
+    expect(h.composerProps.last.initial.attachments).toEqual([{ kind: 'file', fileId: 'pdf1', name: 'Pay App #3.pdf', size: 12 }]);
   });
 
   it('describes the generated document as the primary attachment', () => {

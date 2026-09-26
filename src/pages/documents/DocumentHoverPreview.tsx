@@ -15,6 +15,7 @@ import { createPortal } from 'react-dom';
 import { DocumentRow, formatBytes } from '../../utils/store';
 import { CustomDocType, kindLabel } from './docTypes';
 import { MimeIcon } from './MimeIcon';
+import { useThumbnail } from './FileThumb';
 import { HOVER_PDF_SIZE_CAP, Thumb, getPreviewThumb, makeGenerationGuard, previewKindFor } from './previewEngine';
 import { hoverCardPosition } from './previewPosition';
 
@@ -114,6 +115,9 @@ export const DocumentHoverPreview: React.FC<{
     ));
   });
 
+  // Word, Excel and the like: page one as ONLYOFFICE rendered it (Phase 4).
+  const officeThumb = useThumbnail(row, thumb !== null && thumb.kind !== 'image' && thumb.kind !== 'canvas');
+
   if (!shown) return null;
 
   const { left, top } = hoverCardPosition(
@@ -140,6 +144,8 @@ export const DocumentHoverPreview: React.FC<{
           <img src={thumb.url} alt="" className="max-h-40 w-full object-contain" />
         ) : thumb.kind === 'canvas' ? (
           <img src={thumb.dataUrl} alt="" className="max-h-40 w-full object-contain" />
+        ) : officeThumb ? (
+          <img src={officeThumb} alt="" className="max-h-40 w-full bg-white object-contain" data-testid="hover-office-thumb" />
         ) : (
           <div className="flex flex-col items-center gap-1 py-4 text-ink-faint">
             <MimeIcon mime={row.mime} size={28} className="text-ink-faint" />

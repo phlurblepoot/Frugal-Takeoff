@@ -74,3 +74,31 @@ export const NEW_DOCUMENT_TYPES = [
 export type NewDocumentType = (typeof NEW_DOCUMENT_TYPES)[number]['ext'];
 export const isNewDocumentType = (v: unknown): v is NewDocumentType =>
   NEW_DOCUMENT_TYPES.some(t => t.ext === v);
+
+// ── Converted on upload (ONLYOFFICE Phase 4) ────────────────────────────────
+// Old and unusual formats become .docx/.xlsx/.pptx when uploaded, the upload
+// kept as version 1. Shared: the server converts, the browser lets these be
+// picked where only editor files are allowed.
+export type ConversionTarget = 'docx' | 'xlsx' | 'pptx';
+
+// ONLYOFFICE's conversion tables, less what the app already handles as is
+// (PDF, plain text, CSV, HTML, e-books) and the modern formats themselves.
+const TO_DOCX = ['doc', 'docm', 'dot', 'dotm', 'dotx', 'fodt', 'odt', 'ott', 'pages', 'rtf', 'stw', 'sxw', 'wps', 'wpt', 'hwp', 'hwpx'];
+const TO_XLSX = ['et', 'ett', 'fods', 'numbers', 'ods', 'ots', 'sxc', 'xls', 'xlsb', 'xlsm', 'xlt', 'xltm', 'xltx'];
+const TO_PPTX = ['dps', 'dpt', 'fodp', 'key', 'odp', 'otp', 'pot', 'potm', 'potx', 'pps', 'ppsm', 'ppsx', 'ppt', 'pptm', 'sxi'];
+/** Every extension converted on upload, for file pickers. */
+export const CONVERTIBLE_EXTENSIONS: readonly string[] = [...TO_DOCX, ...TO_XLSX, ...TO_PPTX];
+const UPLOAD_CONVERSIONS: Record<string, ConversionTarget> = Object.fromEntries([
+  ...TO_DOCX.map(e => [e, 'docx'] as const),
+  ...TO_XLSX.map(e => [e, 'xlsx'] as const),
+  ...TO_PPTX.map(e => [e, 'pptx'] as const),
+]);
+
+/** What an uploaded file would be converted to, judged by its name (browsers
+ *  send all sorts of types for Pages or Numbers files, or none). */
+export function uploadConversionTarget(name: string | null): { from: string; to: ConversionTarget } | null {
+  const from = extensionOf(name);
+  const to = UPLOAD_CONVERSIONS[from];
+  return to ? { from, to } : null;
+}
+

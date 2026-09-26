@@ -24,7 +24,7 @@ import { Skeleton, StatusPill, Table, TBody, TD, TH, THead, TR } from '../../com
 import { CustomDocType, kindLabel, kindTone } from './docTypes';
 import { DocumentHoverPreview } from './DocumentHoverPreview';
 import { DocumentViewerModal } from './DocumentViewerModal';
-import { MimeIcon } from './MimeIcon';
+import { FileThumb } from './FileThumb';
 import { openTargetFor } from './openTarget';
 import { RowContextMenu, RowContextMenuState } from './RowContextMenu';
 import { VersionHistory } from './VersionHistory';
@@ -272,14 +272,19 @@ export const DocumentsTable: React.FC<{
                     />
                   </TD>
                   <TD className="font-medium text-ink">
+                    {/* Page one (ONLYOFFICE Phase 4) or the type icon, beside both lines. */}
                     <div className="flex min-w-0 items-center gap-2">
-                      <MimeIcon mime={row.mime} />
-                      <span className="truncate" title={row.name ?? row.id}>{row.name ?? row.id}</span>
-                      <FileViewerDots fileId={row.id} />
-                    </div>
-                    <div className="ml-[23px] truncate text-xs font-normal text-ink-faint">
-                      {formatBytes(row.size)}{row.versionNumber > 1 ? ` · v${row.versionNumber}` : ''}
-                      <span className="xl:hidden"> · {new Date(row.createdAt).toLocaleDateString()}</span>
+                      <span className="flex w-6 shrink-0 justify-center"><FileThumb row={row} box="h-8 w-6" /></span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate" title={row.name ?? row.id}>{row.name ?? row.id}</span>
+                          <FileViewerDots fileId={row.id} />
+                        </div>
+                        <div className="truncate text-xs font-normal text-ink-faint">
+                          {formatBytes(row.size)}{row.versionNumber > 1 ? ` · v${row.versionNumber}` : ''}
+                          <span className="xl:hidden"> · {new Date(row.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      </div>
                     </div>
                   </TD>
                   <TD className="overflow-hidden"><StatusPill tone={kindTone(row.kind)}>{kindLabel(row.kind, customTypes)}</StatusPill></TD>
@@ -329,7 +334,7 @@ export const DocumentsTable: React.FC<{
               <button type="button" onClick={() => handleRowClick(row)} className="block min-w-0 flex-1 text-left">
                 <div className="flex items-start justify-between gap-2">
                   <span className="flex min-w-0 items-center gap-2 font-medium text-ink">
-                    <MimeIcon mime={row.mime} />
+                    <FileThumb row={row} box="h-10 w-8" />
                     <span className="truncate break-words">{row.name ?? row.id}</span>
                     <FileViewerDots fileId={row.id} />
                   </span>

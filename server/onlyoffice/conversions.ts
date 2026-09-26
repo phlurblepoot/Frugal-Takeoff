@@ -12,32 +12,13 @@
 import crypto from 'crypto';
 import type Database from 'better-sqlite3';
 import { getMeta, putBuffer, saveNewVersion, type FileMeta } from '../files';
-import { extensionOf, officeFormatByExt } from '../../src/utils/officeFormats';
+import { extensionOf, officeFormatByExt, uploadConversionTarget } from '../../src/utils/officeFormats';
 import { readOnlyofficeConfig } from './config';
 import type { LinkTokens } from './tokens';
 import { fileLink } from './links';
 import { OnlyofficeError, convert, downloadFromOnlyoffice } from './client';
 
-type Target = 'docx' | 'xlsx' | 'pptx';
-
-// ONLYOFFICE's conversion tables, less what the app already handles as is
-// (PDF, plain text, CSV, HTML, e-books) and the modern formats themselves.
-const TO_DOCX = ['doc', 'docm', 'dot', 'dotm', 'dotx', 'fodt', 'odt', 'ott', 'pages', 'rtf', 'stw', 'sxw', 'wps', 'wpt', 'hwp', 'hwpx'];
-const TO_XLSX = ['et', 'ett', 'fods', 'numbers', 'ods', 'ots', 'sxc', 'xls', 'xlsb', 'xlsm', 'xlt', 'xltm', 'xltx'];
-const TO_PPTX = ['dps', 'dpt', 'fodp', 'key', 'odp', 'otp', 'pot', 'potm', 'potx', 'pps', 'ppsm', 'ppsx', 'ppt', 'pptm', 'sxi'];
-const UPLOAD_CONVERSIONS: Record<string, Target> = Object.fromEntries([
-  ...TO_DOCX.map(e => [e, 'docx'] as const),
-  ...TO_XLSX.map(e => [e, 'xlsx'] as const),
-  ...TO_PPTX.map(e => [e, 'pptx'] as const),
-]);
-
-/** What an uploaded file would be converted to, judged by its name (browsers
- *  send all sorts of types for Pages or Numbers files, or none). */
-export function uploadConversionTarget(name: string | null): { from: string; to: Target } | null {
-  const from = extensionOf(name);
-  const to = UPLOAD_CONVERSIONS[from];
-  return to ? { from, to } : null;
-}
+export { uploadConversionTarget };
 
 export type UploadConversion =
   | { status: 'converted'; from: string; to: string; name: string }

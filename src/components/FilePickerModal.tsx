@@ -29,6 +29,7 @@ import { MimeIcon } from '../pages/documents/MimeIcon';
 import { CustomDocType, KIND_OPTIONS, kindLabel, kindTone } from '../pages/documents/docTypes';
 import { MultiSelectOption } from '../pages/documents/MultiSelectDropdown';
 import { OFFICE_FORMATS } from '../utils/officeFormats';
+import { reportConversions } from '../utils/uploadConversion';
 
 const PAGE_SIZE = 100;
 const MIMES: Record<NonNullable<FilePickerModalProps['accept']>, string[] | undefined> = {
@@ -268,6 +269,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
     };
 
     const done: { row: DocumentRow; blob: Blob }[] = [];
+    const conversions: Parameters<typeof reportConversions>[1] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       mark(i, 'uploading');
@@ -283,6 +285,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
         // upload that actually succeeded.
         const meta = await getFileMeta(res.fileId).catch(() => null);
         done.push({ row: rowFromUpload(res.fileId, meta, file, upload), blob: file });
+        conversions.push({ name: file.name, conversion: res.conversion });
         mark(i, 'done');
       } catch {
         mark(i, 'error');
@@ -300,6 +303,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
     if (done.length < files.length) {
       toast(`Uploaded ${done.length} of ${files.length} files`, { type: done.length ? 'warning' : 'error' });
     }
+    reportConversions(toast, conversions);
     // Every upload failed: stay open on the failure list rather than handing
     // the caller an empty batch and closing.
     if (!done.length) return;

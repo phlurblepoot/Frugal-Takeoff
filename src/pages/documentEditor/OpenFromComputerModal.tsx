@@ -11,13 +11,16 @@ import {
   getDocumentTypes, getProjectsSummary, saveBinaryFile,
   type CustomDocType, type ProjectSummary,
 } from '../../utils/store';
-import { OFFICE_FORMATS, officeFormatOf } from '../../utils/officeFormats';
+import { CONVERTIBLE_EXTENSIONS, OFFICE_FORMATS, officeFormatOf, uploadConversionTarget } from '../../utils/officeFormats';
 import { kindFromMime } from '../documents/openTarget';
 import { kindLabel } from '../documents/docTypes';
+import { useToast } from '../../components/Toast';
+import { reportConversions } from '../../utils/uploadConversion';
 
 // Photos aren't editor files, and company documents belong to no project.
 const KINDS = ['document', 'spreadsheet', 'other'] as const;
-const ACCEPT = OFFICE_FORMATS.map(f => `.${f.ext}`).join(',');
+// Editor files, and the old formats converted to one on upload.
+const ACCEPT = [...OFFICE_FORMATS.map(f => f.ext), ...CONVERTIBLE_EXTENSIONS].map(e => `.${e}`).join(',');
 
 export const OpenFromComputerModal: React.FC<{
   open: boolean;
@@ -25,6 +28,7 @@ export const OpenFromComputerModal: React.FC<{
   /** Called with the stored file's id once the upload lands. */
   onUploaded: (fileId: string) => void;
 }> = ({ open, onClose, onUploaded }) => {
+  const { toast } = useToast();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [customTypes, setCustomTypes] = useState<CustomDocType[]>([]);
   const [file, setFile] = useState<File | null>(null);
@@ -43,7 +47,7 @@ export const OpenFromComputerModal: React.FC<{
 
   const pick = (f: File | undefined) => {
     if (!f) return;
-    if (!officeFormatOf({ mime: f.type, name: f.name })) {
+    if (!officeFormatOf({ mime: f.type, name: f.name }) && !uploadConversionTarget(f.name)) {
       setError(`"${f.name}" isn't a file the editor opens. Pick a PDF, Word, Excel or PowerPoint file.`);
       return;
     }
@@ -59,9 +63,10 @@ export const OpenFromComputerModal: React.FC<{
     setError(null);
     try {
       const project = projects.find(p => p.id === projectId);
-      const { fileId } = await saveBinaryFile(uuidv4(), file, {
+      const { fileId, conversion } = await saveBinaryFile(uuidv4(), file, {
         kind, name: file.name, projectId, customerId: project?.customerId ?? undefined,
       });
+      reportConversions(toast, [{ name: file.name, conversion }]);
       onUploaded(fileId);
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : 'Upload failed');
