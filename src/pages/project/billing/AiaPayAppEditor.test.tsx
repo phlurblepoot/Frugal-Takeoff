@@ -97,7 +97,7 @@ beforeEach(() => {
   getDocumentBySource.mockReset().mockResolvedValue(null);
   buildAiaXlsxBlob.mockReset().mockResolvedValue(new Blob(['xlsx']));
   resolveAiaExportEnv.mockReset().mockResolvedValue(ENV);
-  makePayAppPdf.mockReset().mockResolvedValue({ fileId: 'pdf-1', name: 'Pay App #2 — G702.pdf', versionNumber: 1 });
+  makePayAppPdf.mockReset().mockResolvedValue({ fileId: 'pdf-1', name: 'Pay App #2 — G702.pdf', versionNumber: 1, changed: true });
 });
 
 const renderEditor = () =>
@@ -290,6 +290,8 @@ describe('AiaPayAppEditor — Make PDF (ONLYOFFICE Phase 4)', () => {
     expect(persistGeneratedDocument.mock.calls[0][1]).toMatchObject({ kind: 'payapp-export', sourceType: 'payapp', sourceId: 'app2' });
     expect(persistGeneratedDocument.mock.invocationCallOrder[0]).toBeLessThan(makePayAppPdf.mock.invocationCallOrder[0]);
     expect(await screen.findByText('PDF made')).toBeInTheDocument();
+    // The bar re-reads its workbook status after Make PDF made one.
+    await waitFor(() => expect(getDocumentBySource.mock.calls.filter(c => c[0].kind === 'payapp-export').length).toBeGreaterThanOrEqual(3));
   });
 
   it('uses a workbook that already matches the pay app', async () => {

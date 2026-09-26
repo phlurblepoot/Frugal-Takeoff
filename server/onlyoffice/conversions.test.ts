@@ -38,6 +38,8 @@ let requests: any[];
  *  "still working" answers come before the result. */
 let converterError: number;
 let pendingPolls: number;
+/** What the fake converter returns; by default "<from>-><to>". */
+let converted: string | null;
 let dsFiles: Map<string, Buffer>;
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -49,7 +51,7 @@ const fakeFetch = (async (input: any, init: any = {}) => {
     if (converterError) return json({ error: converterError });
     if (pendingPolls > 0) { pendingPolls--; return json({ endConvert: false, percent: 50 }); }
     const fileUrl = `https://docs.example.com/cache/files/conv/${params.key}/output.${params.outputtype}`;
-    dsFiles.set(fileUrl.replace('https://docs.example.com', 'http://onlyoffice'), Buffer.from(`${params.filetype}->${params.outputtype}`));
+    dsFiles.set(fileUrl.replace('https://docs.example.com', 'http://onlyoffice'), Buffer.from(converted ?? `${params.filetype}->${params.outputtype}`));
     return json({ endConvert: true, percent: 100, fileUrl, fileType: params.outputtype });
   }
   const file = dsFiles.get(url);
@@ -81,6 +83,7 @@ beforeEach(() => {
   requests = [];
   converterError = 0;
   pendingPolls = 0;
+  converted = null;
   dsFiles = new Map();
 });
 
@@ -176,9 +179,14 @@ describe('POST /api/onlyoffice/pay-app-pdf/:payAppId', () => {
     expect(requests[0]).toMatchObject({ filetype: 'xlsx', outputtype: 'pdf', region: 'en-US' });
     expect(requests[0].spreadsheetLayout).toBeUndefined(); // the sheets' own page setup
 
+    // Nothing changed: the same PDF back, no duplicate version.
+    const same = await request(a).post('/api/onlyoffice/pay-app-pdf/pa1');
+    expect(same.body).toMatchObject({ fileId: r.body.fileId, versionNumber: 1, changed: false });
+
     workbook('workbook v2');
+    converted = 'xlsx->pdf (v2)';
     const again = await request(a).post('/api/onlyoffice/pay-app-pdf/pa1');
-    expect(again.body).toMatchObject({ fileId: r.body.fileId, versionNumber: 2 });
+    expect(again.body).toMatchObject({ fileId: r.body.fileId, versionNumber: 2, changed: true });
   });
 
   it('is for admins, needs the workbook, and reports a failed conversion', async () => {

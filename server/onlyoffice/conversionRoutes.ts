@@ -43,14 +43,16 @@ export function registerOnlyofficeConversionRoutes(app: express.Express, deps: O
     const meta = workbook ? getMeta(db, workbook.id) : null;
     if (!meta) return res.status(404).json({ error: 'Generate the Excel workbook first.', code: 'no-workbook' });
     try {
-      const pdf = await services.conversions.workbookToPdf(meta, {
+      const { file: pdf, changed } = await services.conversions.workbookToPdf(meta, {
         kind: 'payapp-pdf', sourceType: 'payapp', sourceId: payAppId, userId: req.user?.id ? String(req.user.id) : null,
       });
-      deps.broadcastChange({
-        type: 'file', id: pdf.id, projectId: pdf.projectId ?? undefined,
-        action: pdf.versionNumber > 1 ? 'updated' : 'created', ...requestMeta(req),
-      });
-      res.json({ fileId: pdf.id, name: pdf.name, versionNumber: pdf.versionNumber });
+      if (changed) {
+        deps.broadcastChange({
+          type: 'file', id: pdf.id, projectId: pdf.projectId ?? undefined,
+          action: pdf.versionNumber > 1 ? 'updated' : 'created', ...requestMeta(req),
+        });
+      }
+      res.json({ fileId: pdf.id, name: pdf.name, versionNumber: pdf.versionNumber, changed });
     } catch (e) {
       const message = e instanceof OnlyofficeError ? e.message : 'Making the PDF failed.';
       if (!(e instanceof OnlyofficeError)) console.error(`[onlyoffice] pay app ${payAppId} PDF failed:`, e);

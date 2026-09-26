@@ -51,7 +51,7 @@ export const PayAppPdfControls: React.FC<{
       setBusy('Making PDF…');
       const made = await makePayAppPdf(payAppId);
       await pdf.refresh();
-      toast(made.versionNumber > 1 ? `PDF updated (version ${made.versionNumber})` : 'PDF made', { type: 'success' });
+      toast(!made.changed ? 'The PDF was already up to date' : made.versionNumber > 1 ? `PDF updated (version ${made.versionNumber})` : 'PDF made', { type: 'success' });
     } catch (e) {
       toast(e instanceof Error && e.message ? e.message : "Couldn't make the PDF", { type: 'error' });
     } finally {

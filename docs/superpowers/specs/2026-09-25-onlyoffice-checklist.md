@@ -614,8 +614,40 @@ container next to the app, and build the extras agreed below on top of it.
     demand).
   - Shown in the Documents table and the phone cards (loaded as rows scroll
     into view), and in the hover card for Word/Excel files.
-- [ ] Tests: conversion client (mocked Document Server), upload conversion keeps
+- [x] Tests: conversion client (mocked Document Server), upload conversion keeps
   the original, thumbnail cache.
+  - `server/onlyoffice/conversions.test.ts` (13, fake converter and cache):
+    polling with the same request, error reasons, the time limit; which
+    formats convert; upload → v1 kept + v2 converted and renamed, failure
+    keeps the original with the reason, "not set up", modern formats and
+    generated documents untouched; pay app PDF (en-US, no forced layout, same
+    PDF back when nothing changed, a new version when it did, admin-only,
+    needs the workbook, failure stores nothing); thumbnails (202 then PNG,
+    new bytes → new thumbnail, none for images/admin-only/not set up, no
+    retry loop, made after upload, swept)
+  - `server/routes.test.ts`: pay app email with the workbook first and the
+    PDF along, linked to the pay app, admin-only
+  - client: `FileThumb` (4), `uploadConversion` (2), `AiaPayAppEditor` +3
+    (and the bar now has Email), `DocumentActionsBar` +1 (pre-attached files),
+    `OpenFromComputerModal` +1 (Pages accepted, notice shown)
+  - e2e `e2e/conversions.spec.ts` (2): an .xls upload on a server without
+    ONLYOFFICE is kept and the reason shown; the pay app editor has Email and
+    Make PDF, which generates the workbook, says ONLYOFFICE isn't set up, and
+    leaves the bar showing the new workbook (this found the bar not
+    refreshing; fixed)
+  - smoke against the real server and a stand-in Document Server (10
+    checks): .xls → .xlsx with the upload kept as v1, the stand-in converting
+    exactly the bytes it downloaded through the signed link (after answering
+    "still working" once); thumbnails 202 → PNG, also for the converted file;
+    pay app PDF en-US from the workbook, found by source, a second run with a
+    changed workbook → v2
+  - full unit suite 3289/3289
+- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  - upload an .xls, a .doc and (if you have one) a Pages or Numbers file: each
+    becomes .xlsx/.docx with the original as version 1
+  - Documents shows first-page thumbnails for Word, Excel and PDF files
+  - a pay app: Make PDF, open it (US dates and money, pages set up right),
+    then Email: the workbook and the PDF are both attached
 
 ## Phase 5 — Notification bell
 

@@ -76,7 +76,9 @@ export class Conversions {
   /** A PDF of a workbook, stored as a generated document of the same record
    *  (e.g. a pay app's G702/G703 → its PDF). Regenerating makes a new version
    *  of that PDF, like any generated document. Throws OnlyofficeError. */
-  async workbookToPdf(workbook: FileMeta, target: { kind: string; sourceType: string; sourceId: string; userId: string | null }): Promise<FileMeta> {
+  async workbookToPdf(
+    workbook: FileMeta, target: { kind: string; sourceType: string; sourceId: string; userId: string | null },
+  ): Promise<{ file: FileMeta; changed: boolean }> {
     const { config: cfg } = readOnlyofficeConfig(this.deps.env);
     if (!cfg) throw new OnlyofficeError('failed', "The document editor isn't set up, so it can't make PDFs.");
     const from = extensionOf(workbook.name) || 'xlsx';
@@ -90,6 +92,12 @@ export class Conversions {
       region: 'en-US',
     }, this.deps.timeoutMs ?? 120_000);
     const bytes = await downloadFromOnlyoffice(cfg, this.deps.fetch, result.fileUrl);
+    // Asked again with nothing changed: the same PDF, not a duplicate version.
+    const existing = this.deps.db.prepare(
+      'SELECT id FROM files WHERE parentFileId IS NULL AND sourceType = ? AND sourceId = ? AND kind = ?',
+    ).get(target.sourceType, target.sourceId, target.kind) as { id: string } | undefined;
+    const current = existing ? getMeta(this.deps.db, existing.id) : null;
+    if (current && current.sha256 === crypto.createHash('sha256').update(bytes).digest('hex')) return { file: current, changed: false };
     const name = `${(workbook.name ?? 'workbook').replace(/\.[A-Za-z0-9]+$/, '')}.pdf`;
     const stored = putBuffer(this.deps.db, this.deps.dataDir, crypto.randomUUID(), bytes, 'application/pdf', {
       ...(workbook.projectId ? { projectId: workbook.projectId } : {}),
@@ -97,6 +105,6 @@ export class Conversions {
       kind: target.kind, sourceType: target.sourceType, sourceId: target.sourceId,
       name, ...(target.userId ? { createdBy: target.userId } : {}),
     });
-    return getMeta(this.deps.db, stored.id)!;
+    return { file: getMeta(this.deps.db, stored.id)!, changed: true };
   }
 }

@@ -1507,7 +1507,7 @@ export const sendPayApp = async (id: string, payload: ItemSendBody): Promise<Ite
 };
 
 /** Makes the pay app's workbook into its PDF (ONLYOFFICE converts it). */
-export const makePayAppPdf = async (payAppId: string): Promise<{ fileId: string; name: string; versionNumber: number }> => {
+export const makePayAppPdf = async (payAppId: string): Promise<{ fileId: string; name: string; versionNumber: number; changed: boolean }> => {
   const res = await fetchWithRetry(`/api/onlyoffice/pay-app-pdf/${encodeURIComponent(payAppId)}`, {
     method: 'POST', headers: { ...getAuthHeaders() },
   }, { timeoutMs: 150_000 });

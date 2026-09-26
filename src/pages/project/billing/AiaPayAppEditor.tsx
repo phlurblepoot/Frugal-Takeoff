@@ -71,6 +71,9 @@ export const AiaPayAppEditor: React.FC<{
     getProject(projectId).then(p => { if (live) setProjectName(p?.name ?? ''); }).catch(() => {});
     return () => { live = false; };
   }, [projectId]);
+  // Make PDF may regenerate the workbook itself; the document bar doesn't hear
+  // about a change this tab made, so it is remounted to re-read its status.
+  const [barKey, setBarKey] = useState(0);
   const pdfDoc = useGeneratedDocument({
     sourceType: 'payapp', sourceId: payAppId, kind: 'payapp-pdf', updatedAt: data?.app.updatedAt, enabled: !!data,
   });
@@ -299,6 +302,7 @@ export const AiaPayAppEditor: React.FC<{
         {data && (
           <div className="mr-auto">
             <DocumentActionsBar
+              key={barKey}
               source={{ sourceType: 'payapp', sourceId: data.app.id }}
               kind="payapp-export"
               format="xlsx"
@@ -338,6 +342,7 @@ export const AiaPayAppEditor: React.FC<{
             save={saveForDocument}
             buildWorkbook={buildPayAppXlsx}
             workbookName={`Pay App #${data.app.number} — G702.xlsx`}
+            onWorkbookChanged={() => setBarKey(k => k + 1)}
           />
         )}
         <Button variant="secondary" onClick={onClose}>Close</Button>
