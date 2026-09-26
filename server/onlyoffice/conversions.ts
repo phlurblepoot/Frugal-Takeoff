@@ -87,9 +87,13 @@ export class Conversions {
       key: conversionKey('pdf', workbook.sha256, 'pdf'),
       title: workbook.name ?? 'workbook.xlsx',
       url: fileLink(cfg, this.deps.tokens, workbook.id),
-      // Money and dates the US way. The page setup comes from the workbook's
-      // own sheets (Letter, fit to width), so none is forced here.
+      // Money and dates the US way.
       region: 'en-US',
+      // Any spreadsheetLayout makes ONLYOFFICE print every sheet (without one
+      // it prints only the active sheet: the G702 without its G703). Landscape
+      // throughout; each sheet's own fit-to-page and page breaks still apply,
+      // since neither fit nor scale is set here (sdkjs asc_nativePrint).
+      spreadsheetLayout: { orientation: 'landscape', ignorePrintArea: false },
     }, this.deps.timeoutMs ?? 120_000);
     const bytes = await downloadFromOnlyoffice(cfg, this.deps.fetch, result.fileUrl);
     // Asked again with nothing changed: the same PDF, not a duplicate version.

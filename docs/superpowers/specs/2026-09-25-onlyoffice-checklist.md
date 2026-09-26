@@ -598,8 +598,23 @@ container next to the app, and build the extras agreed below on top of it.
   - In the pay app editor, beside the document bar. It saves unsaved changes
     and regenerates a missing or out-of-date workbook first, so the PDF always
     matches the pay app. Stored as kind `payapp-pdf` (admin-only, like the
-    workbook), a new version each time. No page layout is forced: the
-    workbook's own sheets set Letter and fit-to-width.
+    workbook), a new version each time.
+  - Layout (Nathan, 2026-09-26): landscape; both sheets; every column fitted
+    to the page width; the G702 all on one page; the G703 over as many pages
+    as its rows need, with the change orders starting on a new page.
+    - The workbook carries it (built-in and admin-template alike): G702
+      fit 1 wide × 1 tall, G703 fit 1 wide × automatic height, a manual page
+      break before the change-order section, landscape Letter. Excel prints
+      the same way.
+    - The conversion sends `spreadsheetLayout: { orientation: 'landscape',
+      ignorePrintArea: false }`. Any `spreadsheetLayout` makes ONLYOFFICE
+      print the entire workbook; without one it printed only the active sheet
+      (the first version's PDF had the G702 but no G703). Fit and scale are
+      left unset so each sheet's own settings and page breaks apply (checked
+      in ONLYOFFICE's source: sdkjs `asc_nativePrint`, server
+      `converterservice.js`; page breaks count when the height is automatic).
+    - Workbooks generated before this change lack the layout, so Make PDF
+      rebuilds any workbook older than 2026-09-26 14:30 UTC once.
   - Pay apps had no Email before. They now have one like the other records
     (`POST /api/aia/pay-apps/:id/send`, admin-only, same recipients as
     invoices); the PDF is pre-attached when it matches the pay app.
@@ -649,6 +664,9 @@ container next to the app, and build the extras agreed below on top of it.
   - Documents shows first-page thumbnails for Word, Excel and PDF files
   - a pay app: Make PDF, open it (US dates and money, pages set up right),
     then Email: the workbook and the PDF are both attached
+  - the pay app PDF again after the layout fix: landscape, G702 on page one,
+    the G703 after it fitted to the width, and the change orders starting on
+    a new page (try one with enough lines to run past a page)
 
 ## Phase 5 — Notification bell
 

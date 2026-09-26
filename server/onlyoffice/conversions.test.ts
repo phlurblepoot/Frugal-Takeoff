@@ -177,7 +177,8 @@ describe('POST /api/onlyoffice/pay-app-pdf/:payAppId', () => {
     });
     expect(readFileContent(dataDir, r.body.fileId)!.toString()).toBe('xlsx->pdf');
     expect(requests[0]).toMatchObject({ filetype: 'xlsx', outputtype: 'pdf', region: 'en-US' });
-    expect(requests[0].spreadsheetLayout).toBeUndefined(); // the sheets' own page setup
+    // Every sheet (G702 and G703), landscape, each sheet's own fit and breaks.
+    expect(requests[0].spreadsheetLayout).toEqual({ orientation: 'landscape', ignorePrintArea: false });
 
     // Nothing changed: the same PDF back, no duplicate version.
     const same = await request(a).post('/api/onlyoffice/pay-app-pdf/pa1');

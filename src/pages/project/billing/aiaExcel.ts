@@ -103,18 +103,27 @@ function setCell(
   return cell;
 }
 
-// US Letter page setup, fit-to-width.
-function applyPageSetup(ws: ExcelJS.Worksheet, landscape = false): void {
+// US Letter, landscape, every column fitted to the page width. `onePage`
+// also fits the height (the G702 is one page); otherwise as many pages tall
+// as the rows need (the G703). Nathan's PDF rules (2026-09-26); Excel prints
+// the same way, and the PDF ("Make PDF") is made from these settings.
+function applyPageSetup(ws: ExcelJS.Worksheet, onePage: boolean): void {
   ws.pageSetup = {
     // Letter == 1; absent from exceljs's PaperSize enum (it lists non-default
     // sizes only), so cast the literal through the enum type.
     paperSize: 1 as unknown as ExcelJS.PaperSize, // Letter
-    orientation: landscape ? 'landscape' : 'portrait',
+    orientation: 'landscape',
     fitToPage: true,
     fitToWidth: 1,
-    fitToHeight: 0,
+    fitToHeight: onePage ? 1 : 0,
     margins: { left: 0.5, right: 0.5, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 },
   };
+}
+
+/** The same rules on a sheet of an admin's own template, keeping its paper
+ *  size and margins. */
+function applyTemplatePageSetup(ws: ExcelJS.Worksheet, onePage: boolean): void {
+  ws.pageSetup = { ...ws.pageSetup, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: onePage ? 1 : 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +194,7 @@ const G703_COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'] as const;
 // ---------------------------------------------------------------------------
 function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
   const ws = wb.addWorksheet('G703');
-  applyPageSetup(ws, true); // landscape helps the wide grid
+  applyPageSetup(ws, false); // as many pages as the rows need
 
   ws.columns = [
     { width: 11 }, // A item no
@@ -316,6 +325,8 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
 
   // ── Change-order section ──────────────────────────────────────────────────
   const coLabelRow = contractTotalRow + 2;
+  // It starts on a new page when printed (and in the PDF).
+  ws.getRow(coLabelRow - 1).addPageBreak();
   setCell(ws, `B${coLabelRow}`, 'Change Orders', { bold: true });
   const coLetterRow = coLabelRow + 1;
   letterRow(coLetterRow);
@@ -343,7 +354,7 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
 // G702 — Application and Certificate for Payment (uses G703's dynamic rows).
 // ---------------------------------------------------------------------------
 function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): void {
-  applyPageSetup(ws, false);
+  applyPageSetup(ws, true); // all on one page
 
   ws.columns = [
     { width: 12 }, // A
@@ -593,6 +604,16 @@ export async function buildAiaWorkbookFromTemplate(
   const startRow = Number.isFinite(mapping.g703StartRow) && mapping.g703StartRow > 0
     ? Math.floor(mapping.g703StartRow)
     : 1;
+
+  // Print (and PDF) layout: G702 on one page; G703 fitted to the width over
+  // as many pages as it needs, change orders starting on a new page. A
+  // one-sheet template gets the G703 rules.
+  if (g702ws && g702ws !== g703ws) applyTemplatePageSetup(g702ws, true);
+  if (g703ws) {
+    applyTemplatePageSetup(g703ws, false);
+    const firstCo = ctx.g703.findIndex(r => r.isChangeOrder);
+    if (firstCo > 0) g703ws.getRow(startRow + firstCo - 1).addPageBreak();
+  }
 
   ctx.g703.forEach((row, i) => {
     const rowNum = startRow + i;

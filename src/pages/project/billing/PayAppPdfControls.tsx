@@ -15,6 +15,11 @@ import { useDocumentViewer } from '../../../components/documents/useDocumentView
 import { isUpToDate, type GeneratedDocState } from '../../../hooks/useGeneratedDocument';
 import { getDocumentBySource, getPayApp, makePayAppPdf, persistGeneratedDocument } from '../../../utils/store';
 
+/** Workbooks built before the PDF page setup (landscape, G702 on one page,
+ *  change orders on a new page; 2026-09-26) don't carry it, and the PDF is
+ *  made from the workbook's own settings: rebuild those once. */
+export const WORKBOOK_LAYOUT_SINCE = Date.parse('2026-09-26T14:30:00Z');
+
 export const PayAppPdfControls: React.FC<{
   payAppId: string;
   projectId: string;
@@ -41,7 +46,7 @@ export const PayAppPdfControls: React.FC<{
       // The workbook must match the saved pay app before it becomes a PDF.
       const saved = await getPayApp(payAppId);
       const workbook = await getDocumentBySource({ sourceType: 'payapp', sourceId: payAppId, kind: 'payapp-export' });
-      if (!workbook || !isUpToDate(workbook, saved?.app?.updatedAt)) {
+      if (!workbook || !isUpToDate(workbook, saved?.app?.updatedAt) || workbook.createdAt < WORKBOOK_LAYOUT_SINCE) {
         setBusy('Generating Excel…');
         await persistGeneratedDocument(await buildWorkbook(), {
           projectId, kind: 'payapp-export', name: workbookName, sourceType: 'payapp', sourceId: payAppId,

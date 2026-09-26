@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AiaPayAppEditor } from './AiaPayAppEditor';
+import { WORKBOOK_LAYOUT_SINCE } from './PayAppPdfControls';
 import { ToastProvider } from '../../../components/Toast';
 import type { AiaG702, AiaG703Row, AiaPayAppDetail } from '../../../utils/store';
 
@@ -294,8 +295,18 @@ describe('AiaPayAppEditor — Make PDF (ONLYOFFICE Phase 4)', () => {
     await waitFor(() => expect(getDocumentBySource.mock.calls.filter(c => c[0].kind === 'payapp-export').length).toBeGreaterThanOrEqual(3));
   });
 
-  it('uses a workbook that already matches the pay app', async () => {
+  it('rebuilds a workbook made before the PDF page setup existed', async () => {
     byKind({ 'payapp-export': { id: 'wb', name: 'wb.xlsx', mime: 'x', size: 1, createdAt: 150, versionNumber: 1 } });
+    renderEditor();
+    fireEvent.click(await screen.findByTestId('payapp-make-pdf'));
+    await waitFor(() => expect(makePayAppPdf).toHaveBeenCalled());
+    expect(persistGeneratedDocument).toHaveBeenCalled();
+  });
+
+  it('uses a workbook that already matches the pay app', async () => {
+    const after = WORKBOOK_LAYOUT_SINCE + 1;
+    getPayApp.mockResolvedValue({ ...load(), app: { ...app, updatedAt: after - 1 } });
+    byKind({ 'payapp-export': { id: 'wb', name: 'wb.xlsx', mime: 'x', size: 1, createdAt: after, versionNumber: 1 } });
     renderEditor();
     fireEvent.click(await screen.findByTestId('payapp-make-pdf'));
     await waitFor(() => expect(makePayAppPdf).toHaveBeenCalled());
