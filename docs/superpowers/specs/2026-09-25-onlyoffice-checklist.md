@@ -548,6 +548,8 @@ container next to the app, and build the extras agreed below on top of it.
     preselected; letterhead once, upload, rename, start from a template (bytes
     copied); a stamp with its cleared preview; old-editor signature import,
     add, make default
+  - full unit suite 3248/3248; full e2e suite 108 passed, 1 skipped (the same
+    conditional spec), 0 failed
   - smoke against the real server and a stand-in Document Server over HTTP
     (15 checks): letterhead → new document → ONLYOFFICE downloads it; a blank
     PDF form is a PDF; the signature isn't on the login-free route; the stand-in
