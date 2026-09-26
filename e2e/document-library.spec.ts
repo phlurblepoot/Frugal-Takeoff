@@ -13,6 +13,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PNG = readFileSync(join(__dirname, 'fixtures', 'assets', 'test-page.png'));
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
+/** The e2e store outlives a run, so a test that counts library items starts
+ *  by clearing what an earlier run left. */
+async function clearLibrary(request: import('@playwright/test').APIRequestContext, auth: Record<string, string>, list: string) {
+  const items = await (await request.get(`/api/${list}`, { headers: auth })).json() as { id: string }[];
+  for (const item of items) await request.delete(`/api/${list}/${item.id}`, { headers: auth });
+}
+
 test('New document: a blank spreadsheet filed in the chosen project opens in the editor', async ({ authedPage, apiToken, request }) => {
   const { projectId, name: projectName } = await seedProjectWithPage(request, apiToken.token);
   await authedPage.goto('/documents');
@@ -42,6 +49,7 @@ test('the command palette opens New document on the type picked, with the projec
 
 test('Document Templates: add the letterhead and an upload, then start a document from one', async ({ authedPage, apiToken, request }) => {
   const auth = { Authorization: `Bearer ${apiToken.token}` };
+  await clearLibrary(request, auth, 'document-templates');
   const { projectId, name: projectName } = await seedProjectWithPage(request, apiToken.token);
   await authedPage.goto('/settings?tab=document-templates');
   const tab = authedPage.getByTestId('document-templates-tab');
@@ -81,7 +89,8 @@ test('Document Templates: add the letterhead and an upload, then start a documen
   expect(meta).toMatchObject({ name: 'Bid for Maple.docx', projectId });
 });
 
-test('company stamps: an admin adds one with the background cleared', async ({ authedPage }) => {
+test('company stamps: an admin adds one with the background cleared', async ({ authedPage, apiToken, request }) => {
+  await clearLibrary(request, { Authorization: `Bearer ${apiToken.token}` }, 'company-stamps');
   await authedPage.goto('/settings?tab=document-templates');
   await authedPage.getByTestId('stamps-add').click();
   await authedPage.getByTestId('stamp-upload-input').setInputFiles({ name: 'approved.png', mimeType: 'image/png', buffer: PNG });
@@ -92,6 +101,7 @@ test('company stamps: an admin adds one with the background cleared', async ({ a
 });
 
 test('My signatures: several, named, one default; old-editor signatures come across once', async ({ authedPage, apiToken, request }) => {
+  await clearLibrary(request, { Authorization: `Bearer ${apiToken.token}` }, 'signatures');
   // What the old PDF editor left in this browser.
   await authedPage.goto('/dashboard');
   await authedPage.evaluate(png => localStorage.setItem('pdfEditorSignatures', JSON.stringify([

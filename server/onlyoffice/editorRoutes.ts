@@ -27,6 +27,7 @@ import { LinkTokens } from './tokens';
 import { EditorSessions, FileQueue, ForcesaveWaiters, type SupersededSession } from './sessions';
 import { fileLink, fileSubject } from './links';
 import { buildEditorConfig, documentKeyFor, documentKeyPrefix } from './editorConfig';
+import { normalizeActionLink } from '../../src/utils/editorLinks';
 import { OnlyofficeError, downloadFromOnlyoffice, isSessionOpen } from './client';
 
 export interface OnlyofficeEditorDeps {
@@ -134,6 +135,7 @@ export function registerOnlyofficeEditorRoutes(app: express.Express, deps: Onlyo
       device,
       theme,
       user: { id: String(req.user.id), name: String(req.user.username || req.user.id) },
+      actionLink: normalizeActionLink(req.body?.actionLink),
     });
     res.json({
       publicUrl: cfg.publicUrl,

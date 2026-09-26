@@ -12,6 +12,10 @@ export interface DocsEditorInstance {
   refreshHistory?: (data: unknown) => void;
   setHistoryData?: (data: unknown) => void;
   insertImage?: (data: unknown) => void;
+  /** Answers onRequestUsers (e.g. who can be @mentioned). */
+  setUsers?: (data: unknown) => void;
+  /** Answers onMakeActionLink with the link to a comment. */
+  setActionLink?: (link: string) => void;
 }
 
 declare global {

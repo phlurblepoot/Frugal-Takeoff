@@ -22,6 +22,8 @@ import type { BroadcastChange } from '../realtime/changeFeed';
 import { registerOnlyofficeEditorRoutes } from './editorRoutes';
 import { registerOnlyofficeHistoryRoutes } from './historyRoutes';
 import { registerOnlyofficeExtrasRoutes } from './extrasRoutes';
+import { registerOnlyofficeMentionRoutes } from './mentionRoutes';
+import type { Notifier } from '../notifications';
 import { EditorSessions, FileQueue, ForcesaveWaiters } from './sessions';
 import { createOnlyofficeServices, type OnlyofficeServices } from './services';
 import { registerOnlyofficeConversionRoutes } from './conversionRoutes';
@@ -42,6 +44,8 @@ export interface OnlyofficeRouteDeps {
   forcesaveTimeoutMs?: number;
   /** Shared with the upload route (server.ts); made here when not given. */
   services?: OnlyofficeServices;
+  /** The notification bell: @mentions in comments tell the person mentioned. */
+  notifier?: Notifier;
 }
 
 export type CheckStatus = 'ok' | 'failed' | 'skipped';
@@ -83,6 +87,7 @@ export function registerOnlyofficeRoutes(app: express.Express, deps: OnlyofficeR
   registerOnlyofficeEditorRoutes(app, { ...editor, onSaved: fileId => services.thumbnails.enqueue(fileId) });
   registerOnlyofficeHistoryRoutes(app, { ...editor, forcesaveTimeoutMs: deps.forcesaveTimeoutMs });
   registerOnlyofficeExtrasRoutes(app, editor);
+  registerOnlyofficeMentionRoutes(app, { db: deps.db, authenticateToken, notifier: deps.notifier });
   registerOnlyofficeConversionRoutes(app, {
     db: deps.db, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange, services,
   });

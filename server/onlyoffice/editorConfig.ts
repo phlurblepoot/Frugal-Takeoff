@@ -41,6 +41,9 @@ export interface EditorConfigInput {
   device: 'desktop' | 'phone';
   theme: 'light' | 'dark';
   user: { id: string; name: string };
+  /** Where to scroll on opening: a comment's action link (onMakeActionLink /
+   *  onRequestSendNotify), from a notification or a shared comment link. */
+  actionLink?: Record<string, unknown> | null;
 }
 
 export function buildEditorConfig(input: EditorConfigInput): Record<string, unknown> {
@@ -82,6 +85,7 @@ export function buildEditorConfig(input: EditorConfigInput): Record<string, unkn
     },
   };
   if (input.callbackUrl) config.editorConfig.callbackUrl = input.callbackUrl;
+  if (input.actionLink) config.editorConfig.actionLink = input.actionLink;
   config.token = jwt.sign(config, input.cfg.jwtSecret, { algorithm: 'HS256' });
   return config;
 }

@@ -48,7 +48,7 @@ export function applySendEffects(db: Database.Database, i: SendEffectsInput): Se
     }
     case 'rfi': {
       const rfi = getRfi(db, i.itemId); if (!rfi) return { applied: false, skipped: 'missing' };
-      try { markRfiSent(db, rfi.id); } catch { /* best effort */ }
+      try { markRfiSent(db, rfi.id, i.userId); } catch { /* best effort */ }
       logActivity(db, { projectId: rfi.projectId, userId: i.userId, type: 'rfi_sent', message: `RFI RFI-${pad3(rfi.number)} emailed to ${i.to}` });
       return { applied: true, broadcast: { type: 'rfi', id: rfi.id, projectId: rfi.projectId, version: getRfi(db, rfi.id)?.version } };
     }

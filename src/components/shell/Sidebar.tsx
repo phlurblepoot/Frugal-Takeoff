@@ -9,6 +9,7 @@ import {
 import { useTheme } from '../../context/ThemeContext';
 import { useMailUnread } from '../../pages/mail/useMailUnread';
 import { SidebarPresence } from './SidebarPresence';
+import { NotificationBell } from './NotificationBell';
 import { isBareRoute } from '../../utils/locationInfo';
 
 export type SidebarState = 'expanded' | 'collapsed' | 'hidden';
@@ -204,7 +205,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
 
       {/* Footer */}
       <div className="px-2 pb-3 pt-2 pb-safe border-t border-edge space-y-0.5 shrink-0">
-        <SidebarPresence expanded={expanded} />
+        {/* Who's online, with the notification bell beside it (stacked on the thin rail). */}
+        <div className={expanded ? 'flex items-center gap-1' : 'flex flex-col gap-0.5'}>
+          <div className="min-w-0 flex-1"><SidebarPresence expanded={expanded} /></div>
+          <NotificationBell expanded={expanded} />
+        </div>
         <NavRow
           label={mode === 'dark' ? 'Light mode' : 'Dark mode'}
           Icon={mode === 'dark' ? Sun : Moon}

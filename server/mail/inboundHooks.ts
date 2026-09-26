@@ -109,6 +109,27 @@ async function captureRfiReply(ctx: MailContext, ev: InboundEvent, msg: MessageR
     if (!setPendingReply(db, rfiId, reply)) continue;
     const after = db.prepare('SELECT version FROM rfis WHERE id = ?').get(rfiId) as { version: number } | undefined;
     ctx.broadcastChange({ type: 'rfi', id: rfiId, projectId: row.projectId, version: after?.version, action: 'updated' });
+    notifyRfiAnswered(ctx, rfiId, row.projectId, reply);
+  }
+}
+
+/** The GC answered: tell the RFI's assignee and whoever sent it (the bell,
+ *  ONLYOFFICE Phase 5). Once per captured reply, so a retried or duplicate
+ *  capture (skipped above) tells nobody twice. */
+function notifyRfiAnswered(ctx: MailContext, rfiId: string, projectId: string, reply: RfiPendingReply): void {
+  if (!ctx.notifier) return;
+  try {
+    const rfi = ctx.db.prepare('SELECT number, title, assigneeUserId, sentByUserId FROM rfis WHERE id = ?').get(rfiId) as
+      { number: number; title: string; assigneeUserId: string | null; sentByUserId: string | null } | undefined;
+    if (!rfi) return;
+    ctx.notifier.notifyEach([rfi.assigneeUserId, rfi.sentByUserId], {
+      type: 'rfi-answered',
+      title: `Reply received on RFI-${String(rfi.number).padStart(3, '0')}`,
+      body: `${reply.from.name || reply.from.addr || 'The GC'} replied to "${rfi.title}". Review it to record the answer.`,
+      link: `/project/${encodeURIComponent(projectId)}/rfis?open=${encodeURIComponent(rfiId)}`,
+    });
+  } catch (e) {
+    console.error('[mail] rfi answer notification failed', e);
   }
 }
 

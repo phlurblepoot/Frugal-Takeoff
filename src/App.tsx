@@ -31,6 +31,7 @@ import { TimeKeeping } from './pages/TimeKeeping';
 import { CustomersSplitView } from './pages/customers/CustomersSplitView';
 import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
+import { NotificationsProvider } from './context/NotificationsContext';
 import { NotesProvider } from './context/NotesContext';
 import { FollowPill } from './components/FollowPill';
 import { ThemeWipe } from './components/shell/ThemeWipe';
@@ -56,18 +57,20 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
       <ConfirmProvider>
         <ShareProvider>
           <CollaborationProvider>
-            <NotesProvider>
-              {!isBare && <CommandPalette />}
-              <AppShell appName={appName}>
-                <FollowPill />
-                <ThemeWipe />
-                <CelebrationOverlay />
-                <NotesOverlay />
-                <PageTransition>
-                  <Outlet context={{ appName, logoUrl }} />
-                </PageTransition>
-              </AppShell>
-            </NotesProvider>
+            <NotificationsProvider>
+              <NotesProvider>
+                {!isBare && <CommandPalette />}
+                <AppShell appName={appName}>
+                  <FollowPill />
+                  <ThemeWipe />
+                  <CelebrationOverlay />
+                  <NotesOverlay />
+                  <PageTransition>
+                    <Outlet context={{ appName, logoUrl }} />
+                  </PageTransition>
+                </AppShell>
+              </NotesProvider>
+            </NotificationsProvider>
           </CollaborationProvider>
         </ShareProvider>
       </ConfirmProvider>

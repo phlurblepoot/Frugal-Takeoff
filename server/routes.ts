@@ -70,6 +70,7 @@ import { registerProposalRoutes } from './proposalRoutes';
 import { registerDocumentLibraryRoutes } from './documentLibraryRoutes';
 import { LIBRARY_KINDS, SIGNATURE_KIND, mayReadLibraryFile } from './documentLibrary';
 import type { OnlyofficeServices } from './onlyoffice/services';
+import type { Notifier } from './notifications';
 import { getProposal } from './proposalStore';
 import { send as mailSend, MailSendError, type SendRequest as MailSendRequest, type SendResult } from './mail/sendService';
 import { AuthExpiredError } from './mail/providers/types';
@@ -89,6 +90,8 @@ export interface RouteDeps {
   broadcastChange: BroadcastChange;
   /** ONLYOFFICE conversion and thumbnails (server/onlyoffice/services.ts). */
   onlyoffice?: Pick<OnlyofficeServices, 'conversions' | 'thumbnails'>;
+  /** The notification bell: tasks and RFIs assigned to someone tell them. */
+  notifier?: Notifier;
 }
 
 export function registerDataRoutes(app: express.Express, deps: RouteDeps): void {
@@ -737,6 +740,21 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     return res.status(500).json({ error: 'RFI operation failed' });
   };
   const rfiNo = (n: number) => `RFI-${String(n).padStart(3, '0')}`;
+  const actor = (req: express.Request) => {
+    const u = (req as any).user as { id?: unknown; username?: unknown } | undefined;
+    return { id: u?.id != null ? String(u.id) : null, name: typeof u?.username === 'string' && u.username ? u.username : 'Someone' };
+  };
+  // Assigned to someone else, or reassigned: they hear about it in the bell.
+  const notifyRfiAssigned = (req: express.Request, rfi: { id: string; projectId: string; number: number; title: string; assigneeUserId?: string | null }) => {
+    if (!rfi.assigneeUserId) return;
+    const by = actor(req);
+    deps.notifier?.notify({
+      userId: rfi.assigneeUserId, type: 'rfi-assigned', actorUserId: by.id,
+      title: `${by.name} assigned you ${rfiNo(rfi.number)}`,
+      body: rfi.title,
+      link: `/project/${encodeURIComponent(rfi.projectId)}/rfis?open=${encodeURIComponent(rfi.id)}`,
+    });
+  };
 
   app.get('/api/projects/:id/rfis', authenticateToken, (req, res) => {
     try { res.json(listRfis(db, req.params.id)); } catch (e) { rfiErr(e, res); }
@@ -747,6 +765,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'rfi_created', message: `RFI ${rfiNo(r.number)} opened: ${req.body?.title ?? ''}` });
       const row = getRfi(db, r.id);
       deps.broadcastChange({ type: 'rfi', id: r.id, projectId: req.params.id, version: row?.version, action: 'created', ...requestMeta(req) });
+      if (row) notifyRfiAssigned(req, row);
       res.json(r);
     } catch (e) { rfiErr(e, res); }
   });
@@ -755,12 +774,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.put('/api/rfis/:id', authenticateToken, (req, res) => {
     try {
+      const assignedBefore = (getRfi(db, req.params.id)?.assigneeUserId ?? null) as string | null;
       const result = saveRfi(db, req.params.id, req.body);
       const row = getRfi(db, req.params.id);
       if (row) deps.broadcastChange({
         type: 'rfi', id: req.params.id, projectId: row.projectId,
         version: row.version, action: 'updated', ...requestMeta(req),
       });
+      if (row && row.assigneeUserId !== assignedBefore) notifyRfiAssigned(req, row);
       res.json({ success: true, ...result });
     } catch (e) { rfiErr(e, res); }
   });
@@ -1049,11 +1070,26 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       }));
     } catch (e) { taskErr(e, res); }
   });
+  // Assigned to someone else, or reassigned: they hear about it in the bell.
+  // Assigning yourself tells nobody.
+  const notifyTaskAssigned = (req: express.Request, task: { id: string; title: string; assigneeUserId?: string | null }) => {
+    if (!task.assigneeUserId) return;
+    const u = (req as any).user as { id?: unknown; username?: unknown } | undefined;
+    const by = typeof u?.username === 'string' && u.username ? u.username : 'Someone';
+    deps.notifier?.notify({
+      userId: task.assigneeUserId, type: 'task-assigned', actorUserId: u?.id != null ? String(u.id) : null,
+      title: `${by} assigned you a task`,
+      body: task.title,
+      link: `/tasks?open=${encodeURIComponent(task.id)}`,
+    });
+  };
   app.post('/api/tasks', authenticateToken, (req, res) => {
     try {
       const r = createTask(db, { ...req.body, createdBy: (req as any).user?.id ?? null });
       const projectId = typeof req.body?.projectId === 'string' && req.body.projectId ? req.body.projectId : undefined;
       deps.broadcastChange({ type: 'task', id: r.id, projectId, action: 'created', ...requestMeta(req) });
+      const created = getTask(db, r.id);
+      if (created) notifyTaskAssigned(req, created);
       res.json(r);
     } catch (e) { taskErr(e, res); }
   });
@@ -1062,9 +1098,11 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.put('/api/tasks/:id', authenticateToken, (req, res) => {
     try {
+      const assignedBefore = (getTask(db, req.params.id)?.assigneeUserId ?? null) as string | null;
       const r = saveTask(db, req.params.id, req.body);
       const row = getTask(db, req.params.id);
       deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row?.projectId ?? undefined, version: r.version, action: 'updated', ...requestMeta(req) });
+      if (row && row.assigneeUserId !== assignedBefore) notifyTaskAssigned(req, row);
       res.json({ success: true, ...r });
     } catch (e) { taskErr(e, res); }
   });

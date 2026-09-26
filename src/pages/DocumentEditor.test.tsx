@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   openInEditor: vi.fn(), loadDocsApi: vi.fn(), theme: 'light' as 'light' | 'dark',
   getEditorHistory: vi.fn(), getEditorHistoryData: vi.fn(), restoreFileVersion: vi.fn(),
   getInsertImageData: vi.fn(), saveEditorCopy: vi.fn(), listSignatures: vi.fn(), listCompanyStamps: vi.fn(), fetchFileBlob: vi.fn(),
+  getMentionUsers: vi.fn(), sendMentionNotifications: vi.fn(),
 }));
 vi.mock('../utils/store', async (orig) => ({
   ...(await orig<typeof import('../utils/store')>()),
@@ -27,6 +28,8 @@ vi.mock('../utils/store', async (orig) => ({
   listSignatures: h.listSignatures,
   listCompanyStamps: h.listCompanyStamps,
   fetchFileBlob: h.fetchFileBlob,
+  getMentionUsers: h.getMentionUsers,
+  sendMentionNotifications: h.sendMentionNotifications,
 }));
 vi.mock('../utils/onlyofficeApi', () => ({ loadDocsApi: h.loadDocsApi }));
 vi.mock('../context/ThemeContext', () => ({ useTheme: () => ({ mode: h.theme }) }));
@@ -73,6 +76,8 @@ beforeEach(() => {
       this.refreshHistory = vi.fn();
       this.setHistoryData = vi.fn();
       this.insertImage = vi.fn();
+      this.setUsers = vi.fn();
+      this.setActionLink = vi.fn();
     } as any,
   };
 });
@@ -87,7 +92,7 @@ describe('DocumentEditor — a file', () => {
     h.theme = 'dark';
     mount();
     await waitFor(() => expect(constructed).toHaveLength(1));
-    expect(h.openInEditor).toHaveBeenCalledWith('f1', { device: 'desktop', theme: 'dark' });
+    expect(h.openInEditor).toHaveBeenCalledWith('f1', { device: 'desktop', theme: 'dark', actionLink: null });
     expect(h.loadDocsApi).toHaveBeenCalledWith('https://docs.example.com');
     const { placeholderId, config } = constructed[0];
     expect(config).toMatchObject({ documentType: 'word', token: 'signed', document: { key: 'f1-v1-abc' } });
@@ -108,7 +113,7 @@ describe('DocumentEditor — a file', () => {
   it('asks for the phone viewer on small screens', async () => {
     window.matchMedia = ((query: string) => ({ ...originalMatchMedia(query), matches: query.includes('max-width') })) as any;
     mount();
-    await waitFor(() => expect(h.openInEditor).toHaveBeenCalledWith('f1', { device: 'phone', theme: 'light' }));
+    await waitFor(() => expect(h.openInEditor).toHaveBeenCalledWith('f1', { device: 'phone', theme: 'light', actionLink: null }));
   });
 
   it("goes back when the editor's own Close button is pressed", async () => {
@@ -308,5 +313,60 @@ describe('DocumentEditor — insert images and save copies', () => {
     await (await events()).onRequestSaveAs({ data: { url: 'https://docs.example.com/cache/x.pdf', title: 'Scope.pdf', fileType: 'pdf' } });
     expect(h.saveEditorCopy).toHaveBeenCalledWith('f1', { url: 'https://docs.example.com/cache/x.pdf', title: 'Scope.pdf', fileType: 'pdf' });
     expect(await screen.findByText('Saved "Scope.pdf" to the project\'s Documents')).toBeInTheDocument();
+  });
+});
+
+describe('DocumentEditor — @mentions in comments (Phase 5)', () => {
+  const events = async () => {
+    await waitFor(() => expect(constructed).toHaveLength(1));
+    return constructed[0].config.events;
+  };
+  const USERS = [{ id: 'u2', name: 'maria', email: 'maria@team.invalid' }, { id: 'u3', name: 'joe', email: 'joe@team.invalid' }];
+  const LINK = { action: { type: 'comment', data: 'c_42' } };
+
+  it('lists the people who can be mentioned', async () => {
+    h.getMentionUsers.mockResolvedValue(USERS);
+    mount();
+    await (await events()).onRequestUsers({ data: { c: 'mention' } });
+    expect(h.getMentionUsers).toHaveBeenCalledWith('f1');
+    expect(constructed[0].instance.setUsers).toHaveBeenCalledWith({ c: 'mention', users: USERS });
+    // Asked about particular people: just those.
+    await constructed[0].config.events.onRequestUsers({ data: { c: 'info', id: ['u3'] } });
+    expect(constructed[0].instance.setUsers).toHaveBeenLastCalledWith({ c: 'info', users: [USERS[1]] });
+  });
+
+  it('tells the server who was mentioned, and says so if that fails', async () => {
+    h.sendMentionNotifications.mockResolvedValueOnce({ notified: 1 });
+    mount();
+    const ev = await events();
+    ev.onRequestSendNotify({ data: { emails: ['joe@team.invalid'], message: '+joe@team.invalid check this', actionLink: LINK } });
+    expect(h.sendMentionNotifications).toHaveBeenCalledWith('f1', { emails: ['joe@team.invalid'], message: '+joe@team.invalid check this', actionLink: LINK });
+    h.sendMentionNotifications.mockRejectedValueOnce(new Error('down'));
+    ev.onRequestSendNotify({ data: { emails: ['joe@team.invalid'] } });
+    expect(await screen.findByText("Couldn't notify the people you mentioned")).toBeInTheDocument();
+  });
+
+  it("gives a comment's Get link an address in this app that opens the file there", async () => {
+    mount();
+    (await events()).onMakeActionLink({ data: LINK });
+    const url = new URL(constructed[0].instance.setActionLink.mock.calls[0][0]);
+    expect(url.origin).toBe(window.location.origin);
+    expect(url.pathname).toBe('/tools/edit');
+    expect(url.searchParams.get('fileId')).toBe('f1');
+    expect(JSON.parse(url.searchParams.get('comment')!)).toEqual(LINK);
+  });
+
+  it('opens at the comment a link points to', async () => {
+    mount(`/tools/edit?fileId=f1&comment=${encodeURIComponent(JSON.stringify(LINK))}`);
+    await events();
+    expect(h.openInEditor).toHaveBeenCalledWith('f1', { device: 'desktop', theme: 'light', actionLink: LINK });
+  });
+
+  it('offers no mentions where the file only opens for viewing', async () => {
+    h.openInEditor.mockResolvedValue(opening({ file: { ...opening().file, mode: 'view' } }));
+    mount();
+    const ev = await events();
+    expect(ev.onRequestUsers).toBeUndefined();
+    expect(ev.onRequestSendNotify).toBeUndefined();
   });
 });

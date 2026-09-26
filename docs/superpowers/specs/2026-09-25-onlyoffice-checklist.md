@@ -61,12 +61,31 @@ container next to the app, and build the extras agreed below on top of it.
 - [x] **Existing share links** (Phase 7): **keep them working with no expiry.**
   They show up in the new active-links list, where they can be turned off.
   (Nathan, 2026-09-25)
-- [ ] **Replies to my comments** (Phase 5): ONLYOFFICE tells the app about
+- [x] **Replies to my comments** (Phase 5): ONLYOFFICE tells the app about
   @mentions (`onRequestSendNotify`) but has no event for replies. Plugin
   comment events (`onAddComment` / `onChangeCommentData`) are documented only
   for the Word editor, and only for comments added through the API. Do a short
   test first. If replies can't be caught everywhere, fall back to: "Word files
   only", or "replies that @mention you". Ask Nathan which.
+  - **Source check done (2026-09-26, sdkjs/web-apps/core tag v9.4.0.97):**
+    - A reply that @mentions someone already notifies them (it is a mention).
+    - A hidden plugin loaded from the app (`editorConfig.plugins.pluginsData`,
+      `"type": "system"`, works in Community Edition) gets
+      `onChangeCommentData` for every reply, live, but **only in Word and PDF**
+      (Excel and PowerPoint send no comment events to plugins). The data
+      names authors by display name only (usernames here, which are unique).
+    - Every saved file records who wrote each comment and reply (xlsx, pptx
+      and PDF by user id; docx by name), so the app can compare a save with
+      the version before it and find new replies **in all four formats**, but
+      only **when the file is saved** (about 10 s after everyone closes it, or
+      when someone clicks Save). Reply ids change on every save, so replies are
+      matched by parent comment, author, time and text.
+  - **Decision (Nathan, 2026-09-26): only replies that @mention someone.**
+    That is the mention notification (the link opens the thread), so nothing
+    more is built. Nathan also chose "everyone in the thread" for who hears
+    about a reply; that can't apply here, because ONLYOFFICE reports only who
+    is mentioned, never who else is in a thread. It would come back into play
+    only if reply detection is added later (at save, or the Word/PDF add-on).
 - [x] **Test subdomain name** for ONLYOFFICE on the test setup (Phase 0):
   **`docs-test.<domain>`**. (Nathan, 2026-09-25)
 - [ ] **ONLYOFFICE version to pin** (Phase 0): latest 9.4.x at the time. Never
@@ -520,8 +539,9 @@ container next to the app, and build the extras agreed below on top of it.
     ONLYOFFICE's own public or internal address (no fetching arbitrary URLs
     for the browser). Same project and customer; a spreadsheet copy is a
     spreadsheet; a company document's copy stays a company document.
-- [ ] **(Nathan)** Check ONLYOFFICE's own signature fields work (no code
+- [x] **(Nathan)** Check ONLYOFFICE's own signature fields work (no code
   expected): in a new PDF form, add a signature field and sign it.
+  (Nathan, 2026-09-26: "tested it all, everything works")
 - [x] Tests: new-document route, template kinds hidden from project lists,
   signature CRUD and permissions.
   - `server/documentLibrary.test.ts` (15): blanks for all three types (bytes
@@ -556,7 +576,8 @@ container next to the app, and build the extras agreed below on top of it.
     downloaded both signed image links; Save Copy as filed the converted PDF
     in the project; a non-ONLYOFFICE copy link refused; Documents shows the new
     files and not the library; orphan cleanup counts nothing
-- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  (Nathan, 2026-09-26: "tested it all, everything works")
   - Documents → New document: a Word, an Excel and a PDF form, blank and from
     a template; each opens in the editor and saves
   - Settings → Document Templates: add the letterhead, open it in the editor,
@@ -677,7 +698,9 @@ container next to the app, and build the extras agreed below on top of it.
     changed workbook → v2
   - full unit suite 3289/3289; full e2e suite 110 passed, 1 skipped (the
     same conditional spec), 0 failed
-- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  (Nathan, 2026-09-26: "tested it all, everything works", including the pay
+  app PDF layout and photo thumbnails)
   - upload an .xls, a .doc and (if you have one) a Pages or Numbers file: each
     becomes .xlsx/.docx with the original as version 1
   - Documents shows first-page thumbnails for Word, Excel and PDF files
@@ -692,32 +715,101 @@ container next to the app, and build the extras agreed below on top of it.
 
 ## Phase 5 — Notification bell
 
-- [ ] `notifications` table (id, userId, type, title, body, link, createdAt,
+- [x] `notifications` table (id, userId, type, title, body, link, createdAt,
   readAt) plus routes: list, mark read, mark all read.
-- [ ] Push new notifications live over the existing socket.
-- [ ] Bell in the sidebar **next to the user list** (`SidebarPresence`):
+  - Migration 39 (also `actorUserId`, and the RFI columns below).
+    `server/notifications.ts` (`Notifier`): nobody is notified about their own
+    act or as a user that doesn't exist; links must be in-app paths; text is
+    clipped; read ones are pruned after 90 days and unread after a year (after
+    start and daily); a deleted user's go with them.
+  - `server/notificationRoutes.ts`: `GET /api/notifications` (newest 50 and
+    the unread count), `POST /api/notifications/:id/read`,
+    `POST /api/notifications/read-all`. Each person sees only their own.
+- [x] Push new notifications live over the existing socket.
+  - Every signed-in socket joins `user:<id>`; the `notification` event carries
+    a new one or "these (or all) were read", so other tabs and devices keep
+    in step. The client reloads the list on every reconnect.
+- [x] Bell in the sidebar **next to the user list** (`SidebarPresence`):
   - unread badge
   - panel listing notifications
   - clicking one opens its link and marks it read
   - works collapsed and expanded, and on mobile
-- [ ] **@mentions** in document comments:
+  - `src/components/shell/NotificationBell.tsx`, state in
+    `src/context/NotificationsContext.tsx`. Beside "N online" when expanded,
+    under it on the thin rail. Badge shows up to "9+"; the panel has "Mark all
+    read" and an explanation when empty. On phones the menu button shows a
+    red dot while anything is unread, and the panel spans the screen.
+- [x] **@mentions** in document comments:
   - `onRequestUsers` (`c: "mention"`) returns the app's users
   - ONLYOFFICE keys mentions by email and users have none, so use a stable
     per-user id address and map it back
   - `onRequestSendNotify` creates a notification with a link that opens the
     document at the comment (`onMakeActionLink` / `actionLink`)
-- [ ] **Replies to my comments**: settle the open question above first, then
+  - ONLYOFFICE shows the address under the name and types it into the comment
+    (`+maria@team.invalid`), so the address is made from the username rather
+    than the id, under the reserved `.invalid` domain (never deliverable);
+    ".2" is added if two usernames come out the same. Matched back to users
+    by lookup (`server/onlyoffice/mentionRoutes.ts`).
+  - Only people who can open the file are listed or notified (an admin-only
+    document: admins only). The link is `/tools/edit?fileId=…&comment=…`;
+    the config route passes the comment's action link on as
+    `editorConfig.actionLink`, which scrolls to it in Word, Excel and
+    PowerPoint (PDF just opens). A comment's "Get link" makes the same link.
+  - ONLYOFFICE has no mentions in its phone editor.
+- [x] **Replies to my comments**: settle the open question above first, then
   build what's possible.
-- [ ] **Tasks assigned to me**: notify on assign and reassign (`server/taskStore.ts`).
+  - Nathan chose "only replies that @mention" (see Open questions): a reply
+    that @mentions someone notifies them like any mention, and its link opens
+    that thread. Nothing else to build.
+- [x] **Tasks assigned to me**: notify on assign and reassign (`server/taskStore.ts`).
   No notification when you assign yourself.
-- [ ] **RFIs**:
+  - In the task routes: on create with an assignee, and on a save that
+    changes it. The link opens the task (`/tasks?open=<id>`).
+- [x] **RFIs**:
   - Add migration `rfis.assigneeUserId` and an "Assigned to" field on the RFI
     form.
   - Record `sentByUserId` when an RFI is sent.
   - Notify the assignee when assigned.
   - Notify the assignee and the sender when a GC answer is detected (mail
     inbound hook).
-- [ ] Tests: notification store and routes, and each trigger.
+  - "Assigned to" is internal (not on the RFI PDF). A save from a client that
+    doesn't send the field leaves it alone. A deleted user is unassigned.
+  - The sender is whoever last emailed it (`applySendEffects`). The GC-answer
+    notice fires once per captured reply (retries and duplicates tell nobody
+    twice) and once per person when the sender is also the assignee. Links
+    open the RFI (`/project/<id>/rfis?open=<id>`).
+- [x] Tests: notification store and routes, and each trigger.
+  - `server/notifications.test.ts` (9): store rules (it never throws), routes, and the live push
+    over a real socket.io server (both of her tabs get it, nobody else does).
+  - `server/notificationTriggers.test.ts` (8): tasks (assign, self, reassign,
+    unchanged save), RFIs (assign, reassign, unassign, unknown user, field
+    left alone, sender recorded), mentions (address rules checked against
+    ONLYOFFICE's own mention pattern, who's listed, who's notified, admin-only
+    files, the link), and the config carrying the comment link, signed.
+  - `server/mail/inboundHooks.test.ts` +2: the GC answer tells assignee and
+    sender once.
+  - client: `NotificationBell` (6), `DocumentEditor` +5 (mention list, notify,
+    Get link, open at a comment, none when viewing), `RfiEditor` +3,
+    `editorLinks` (2).
+  - e2e `e2e/notifications.spec.ts` (4): a task assigned by someone else rings
+    the bell live and opens the task; an RFI opens from the bell with its
+    assignee shown; the phone dot, drawer bell and full-width panel; the bell
+    beside who's online, expanded and collapsed.
+  - smoke against the real server (8 checks): task and RFI assignments and a
+    mention arrive live on her socket; the mention list and address; the
+    link opens the editor config at the comment, signed; mark all read
+    reaches her other tabs; nobody else sees hers.
+  - full unit suite 3344/3344; full e2e suite 111 passed and 2 failed, both in
+    `e2e/document-library.spec.ts` because the e2e store is kept between runs
+    and those Phase 3 tests counted what an earlier run had added. They now
+    clear templates, stamps and signatures first, and pass twice in a row.
+- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  - in a Word, an Excel and a PowerPoint file, add a comment and type "+" or
+    "@": the list shows teammates (not yourself); pick one and post
+  - the person mentioned gets the bell (live if they're signed in), and
+    clicking it opens the file at that comment
+  - assign someone a task and an RFI; they get the bell and it opens the item
+  - on a phone: the dot on the menu button, the bell in the drawer
 
 ## Phase 6 — Viewers: mail attachments and share links
 

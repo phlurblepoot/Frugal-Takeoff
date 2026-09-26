@@ -4,6 +4,7 @@ import { useLocation, matchPath } from 'react-router-dom';
 import { Menu, Search } from 'lucide-react';
 import { Sidebar, SidebarState } from './Sidebar';
 import { isBareRoute } from '../../utils/locationInfo';
+import { useNotifications } from '../../context/NotificationsContext';
 
 // Keep the legacy storage key so existing users keep their saved preference.
 const SIDEBAR_STORAGE_KEY = 'sideDockState';
@@ -11,6 +12,9 @@ const SIDEBAR_STORAGE_KEY = 'sideDockState';
 export const AppShell: React.FC<{ appName: string; children: React.ReactNode }> = ({ appName, children }) => {
   const location = useLocation();
   const isBare = isBareRoute(location.pathname);
+  // Unread notifications show as a dot on the phone's menu button: the bell
+  // itself is inside the drawer.
+  const { unread } = useNotifications();
   const isCanvasPage = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
   // A file open in the document editor gets the same thin rail as the canvas:
   // ONLYOFFICE's toolbar wants the width.
@@ -106,10 +110,13 @@ export const AppShell: React.FC<{ appName: string; children: React.ReactNode }> 
         <header className="fixed top-0 inset-x-0 z-40 flex items-center gap-2 h-14 px-2 pt-safe glass-panel border-b border-edge md:hidden">
           <button
             onClick={() => setMobileSidebarOpen(true)}
-            aria-label="Open navigation"
-            className="flex items-center justify-center min-h-11 min-w-11 rounded-lg text-ink-soft hover:bg-hover active:bg-hover transition-colors"
+            aria-label={unread ? `Open navigation (${unread} unread notifications)` : 'Open navigation'}
+            className="relative flex items-center justify-center min-h-11 min-w-11 rounded-lg text-ink-soft hover:bg-hover active:bg-hover transition-colors"
           >
             <Menu size={20} />
+            {unread > 0 && (
+              <span data-testid="mobile-notification-dot" className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-surface" />
+            )}
           </button>
           <span className="flex-1 truncate font-semibold text-ink">{appName}</span>
           <button

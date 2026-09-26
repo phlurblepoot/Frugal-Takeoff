@@ -19,8 +19,9 @@ import { useTheme } from '../context/ThemeContext';
 import {
   EditorOpenError, RestoreError, fetchFileBlob, forgetRecentDocument, getEditorHistory, getEditorHistoryData,
   getFileMeta, getInsertImageData, getRecentDocuments, openInEditor, recordRecentDocument, restoreFileVersion,
-  saveEditorCopy, type RecentDocument,
+  saveEditorCopy, getMentionUsers, sendMentionNotifications, type RecentDocument,
 } from '../utils/store';
+import { editorPath, parseActionLinkParam } from '../utils/editorLinks';
 import { downloadBlob } from '../utils/download';
 import { loadDocsApi, type DocsEditorInstance } from '../utils/onlyofficeApi';
 import { officeFormatByExt } from '../utils/officeFormats';
@@ -40,14 +41,19 @@ export const DocumentEditor: React.FC = () => {
   const [params] = useSearchParams();
   const present = useIsPresent();
   const fileId = params.get('fileId');
+  // ?comment=: open at a comment (a notification's link, or a comment's "Get link").
+  const comment = params.get('comment');
   // PageTransition (AnimatePresence mode="wait") first renders a newly
   // entered route inside the OUTGOING page's wrapper while that fades out,
   // then mounts it again in its own. Rendering nothing in the outgoing copy
   // keeps ONLYOFFICE from being started twice on every in-app "Open", and the
   // landing page from losing a dialog opened in that first moment.
   if (!present) return null;
-  // Keyed: switching files tears the old editor down and builds a new one.
-  return fileId ? <EditorView key={fileId} fileId={fileId} /> : <EditorLanding />;
+  // Keyed: switching files (or following a link to a comment in the same
+  // file) tears the old editor down and builds a new one.
+  return fileId
+    ? <EditorView key={`${fileId}|${comment ?? ''}`} fileId={fileId} actionLink={parseActionLinkParam(comment)} />
+    : <EditorLanding />;
 };
 
 // ── The editor ───────────────────────────────────────────────────────────────
@@ -82,7 +88,7 @@ async function loadHistory(fileId: string): Promise<Record<string, unknown>> {
   }
 }
 
-const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
+const EditorView: React.FC<{ fileId: string; actionLink: Record<string, unknown> | null }> = ({ fileId, actionLink }) => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { mode: themeMode } = useTheme();
@@ -118,6 +124,9 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
   // Read once at open: ONLYOFFICE takes its theme when it starts, and
   // rebuilding the editor on a theme toggle would interrupt the person typing.
   const themeAtOpen = useRef(themeMode);
+  // Only the first start goes to the linked comment; a restart after the
+  // version history opens the document as usual.
+  const actionLinkAtOpen = useRef(actionLink);
   const close = useCallback(() => {
     if (window.history.length > 1) navigate(-1);
     else navigate('/documents');
@@ -137,7 +146,9 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
         const opening = await openInEditor(fileId, {
           device: phone ? 'phone' : 'desktop',
           theme: themeAtOpen.current === 'dark' ? 'dark' : 'light',
+          actionLink: actionLinkAtOpen.current,
         });
+        actionLinkAtOpen.current = null;
         if (cancelled) return;
         try {
           await loadDocsApi(opening.publicUrl);
@@ -198,6 +209,28 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
             ...(editing ? {
               onRequestInsertImage: (event: { data?: { c?: string } }) => {
                 if (!cancelled) setInserting(event.data?.c || 'add');
+              },
+            } : {}),
+            // @mentions in comments (ONLYOFFICE Phase 5): who can be mentioned,
+            // and telling them. Comments exist only where editing is allowed.
+            ...(editing ? {
+              onRequestUsers: async (event: { data?: { c?: string; id?: string[] } }) => {
+                const c = event.data?.c ?? 'mention';
+                let users: { id: string; name: string; email: string }[] = [];
+                try { users = await getMentionUsers(fileId); } catch { /* an empty list */ }
+                // 'info' asks about specific people (for avatars); the rest want the list.
+                const wanted = c === 'info' && Array.isArray(event.data?.id) ? new Set(event.data!.id) : null;
+                if (!cancelled) editor?.setUsers?.({ c, users: wanted ? users.filter(u => wanted.has(u.id)) : users });
+              },
+              onRequestSendNotify: (event: { data?: { emails?: string[]; message?: string; actionLink?: unknown } }) => {
+                const data = event.data ?? {};
+                if (!data.emails?.length) return;
+                sendMentionNotifications(fileId, { emails: data.emails, message: data.message, actionLink: data.actionLink })
+                  .catch(() => toastRef.current("Couldn't notify the people you mentioned", { type: 'error' }));
+              },
+              // A comment's "Get link": a link into the app that opens this file at it.
+              onMakeActionLink: (event: { data?: unknown }) => {
+                editor?.setActionLink?.(`${window.location.origin}${editorPath(fileId, event.data)}`);
               },
             } : {}),
             // File → Save Copy as: file the converted copy in the project.

@@ -19,6 +19,15 @@ function requireProject(db: Database.Database, projectId: string): void {
 interface RfiInput {
   title?: string; question?: string; specRef?: string; drawingRef?: string;
   attention?: string; responseNeededBy?: string; status?: string;
+  /** The internal "Assigned to" (a user id). Left alone on save when absent. */
+  assigneeUserId?: string | null;
+}
+
+function validateAssignee(db: Database.Database, assigneeUserId: unknown): string | null {
+  if (assigneeUserId === undefined || assigneeUserId === null || assigneeUserId === '') return null;
+  if (typeof assigneeUserId !== 'string') throw new ValidationError('Invalid assignee');
+  if (!db.prepare('SELECT id FROM users WHERE id = ?').get(assigneeUserId)) throw new ValidationError('Assignee is not a known user');
+  return assigneeUserId;
 }
 
 function photoCount(db: Database.Database, rfiId: string): number {
@@ -54,6 +63,7 @@ export function createRfi(db: Database.Database, projectId: string, input: RfiIn
   if (input.status !== undefined && !(RFI_STATUSES as readonly string[]).includes(input.status)) {
     throw new ValidationError(`Invalid RFI status: ${input.status}`);
   }
+  const assignee = validateAssignee(db, input.assigneeUserId);
   const id = crypto.randomUUID();
   let number = 0;
   const tx = db.transaction(() => {
@@ -65,11 +75,11 @@ export function createRfi(db: Database.Database, projectId: string, input: RfiIn
     number = Math.max(counter, max) + 1;
     const now = Date.now();
     db.prepare(`INSERT INTO rfis (id, projectId, number, title, question, specRef, drawingRef, attention, responseNeededBy,
-                responseText, responseFileId, status, version, sentAt, answeredAt, createdAt, updatedAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 1, NULL, NULL, ?, ?)`)
+                responseText, responseFileId, status, version, sentAt, answeredAt, createdAt, updatedAt, assigneeUserId)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 1, NULL, NULL, ?, ?, ?)`)
       .run(id, projectId, number, input.title!.trim(), input.question ?? null, input.specRef ?? null,
            input.drawingRef ?? null, input.attention ?? null, input.responseNeededBy ?? null,
-           input.status ?? 'open', now, now);
+           input.status ?? 'open', now, now, assignee);
     db.prepare('UPDATE projects SET rfiCounter = ? WHERE id = ?').run(number, projectId);
   });
   tx();
@@ -79,6 +89,8 @@ export function createRfi(db: Database.Database, projectId: string, input: RfiIn
 export function saveRfi(db: Database.Database, id: string, input: RfiInput & { version?: number }): { version: number } {
   if (typeof input.title !== 'string' || !input.title.trim()) throw new ValidationError('RFI title is required');
   if (!Number.isInteger(input.version) || (input.version as number) < 1) throw new ValidationError('Missing or invalid version — reload the RFI');
+  const setsAssignee = Object.prototype.hasOwnProperty.call(input, 'assigneeUserId');
+  const assignee = setsAssignee ? validateAssignee(db, input.assigneeUserId) : null;
   let newVersion = 0;
   const tx = db.transaction(() => {
     const row = db.prepare('SELECT version FROM rfis WHERE id = ?').get(id) as { version: number } | undefined;
@@ -88,6 +100,7 @@ export function saveRfi(db: Database.Database, id: string, input: RfiInput & { v
     db.prepare('UPDATE rfis SET title = ?, question = ?, specRef = ?, drawingRef = ?, attention = ?, responseNeededBy = ?, version = ?, updatedAt = ? WHERE id = ?')
       .run(input.title!.trim(), input.question ?? null, input.specRef ?? null, input.drawingRef ?? null,
            input.attention ?? null, input.responseNeededBy ?? null, newVersion, Date.now(), id);
+    if (setsAssignee) db.prepare('UPDATE rfis SET assigneeUserId = ? WHERE id = ?').run(assignee, id);
   });
   tx();
   return { version: newVersion };
@@ -137,9 +150,11 @@ export function removePhoto(db: Database.Database, rfiId: string, fileId: string
 // a real transition: updatedAt is what the generated-PDF "up to date" chip
 // compares the stored file's createdAt against, so bumping it on a no-op status
 // write would mark the just-emailed PDF stale the moment the send succeeded.
-export function markRfiSent(db: Database.Database, id: string): void {
+export function markRfiSent(db: Database.Database, id: string, sentByUserId?: string | null): void {
   const row = db.prepare('SELECT status FROM rfis WHERE id = ?').get(id) as { status: string } | undefined;
   if (!row) throw new NotFoundError('RFI not found');
+  // Who sent it last: told, with the assignee, when the GC answers.
+  if (sentByUserId) db.prepare('UPDATE rfis SET sentByUserId = ? WHERE id = ?').run(String(sentByUserId), id);
   const nextStatus = row.status === 'open' ? 'sent' : row.status;
   const now = Date.now();
   if (nextStatus === row.status) {

@@ -684,7 +684,9 @@ export class EditorOpenError extends Error {
 }
 
 export const openInEditor = async (
-  fileId: string, opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark' },
+  fileId: string,
+  // actionLink: open at a comment (from a notification or a comment's link).
+  opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark'; actionLink?: Record<string, unknown> | null },
 ): Promise<EditorOpening> => {
   const res = await fetchWithRetry(`/api/onlyoffice/config/${encodeURIComponent(fileId)}`, {
     method: 'POST',
@@ -1636,6 +1638,8 @@ export interface Rfi {
   pendingReply?: RfiPendingReply | null;
   responseSource?: string | null;            // 'email' once an emailed reply was accepted
   responseMessageIdHeader?: string | null;
+  assigneeUserId?: string | null;            // internal "Assigned to" (ONLYOFFICE Phase 5)
+  sentByUserId?: string | null;              // who last emailed it out
 }
 export interface RfiListItem {
   id: string; projectId: string; number: number; title: string | null;
@@ -2430,4 +2434,58 @@ export const getCustomerThreads = async (customerId: string): Promise<ProjectThr
   const res = await fetchWithRetry(`/api/mail/project-threads?customerId=${encodeURIComponent(customerId)}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res);
   return await res.json();
+};
+
+// ── Notifications (ONLYOFFICE Phase 5: the bell) ───────────────────────────
+
+export type NotificationType = 'mention' | 'comment-reply' | 'task-assigned' | 'rfi-assigned' | 'rfi-answered';
+export interface AppNotification {
+  id: string;
+  userId: string;
+  type: NotificationType;
+  title: string;
+  body: string | null;
+  /** An in-app path to open, e.g. "/tasks?open=…". */
+  link: string | null;
+  actorUserId: string | null;
+  createdAt: number;
+  readAt: number | null;
+}
+/** Pushed on the socket's `notification` event. */
+export type NotificationEvent =
+  | { kind: 'new'; notification: AppNotification }
+  | { kind: 'read'; ids: string[] | 'all' };
+
+export const getNotifications = async (): Promise<{ items: AppNotification[]; unread: number }> => {
+  const res = await fetchWithRetry('/api/notifications', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return res.json();
+};
+export const markNotificationRead = async (id: string): Promise<void> => {
+  const res = await fetchWithRetry(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'POST', headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+};
+export const markAllNotificationsRead = async (): Promise<void> => {
+  const res = await fetchWithRetry('/api/notifications/read-all', { method: 'POST', headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+};
+
+/** People who can be @mentioned in a document's comments, each under the
+ *  address ONLYOFFICE keys them by. */
+export const getMentionUsers = async (fileId: string): Promise<{ id: string; name: string; email: string }[]> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/mention-users/${encodeURIComponent(fileId)}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return (await res.json()).users;
+};
+/** Someone was @mentioned in a comment (ONLYOFFICE's onRequestSendNotify). */
+export const sendMentionNotifications = async (
+  fileId: string, data: { emails: string[]; message?: string; actionLink?: unknown },
+): Promise<{ notified: number }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/mention/${encodeURIComponent(fileId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(data),
+  });
+  await handleResponse(res);
+  return res.json();
 };

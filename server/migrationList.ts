@@ -1742,4 +1742,35 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 39,
+    name: 'notifications',
+    // ADDITIVE (ONLYOFFICE Phase 5 — the notification bell):
+    //   * notifications — one row per person told about something: an
+    //     @mention in a document comment, a task or RFI assigned to them, a
+    //     GC's answer to an RFI. readAt is NULL until they open or dismiss it.
+    //     actorUserId is who caused it (never notified about their own act).
+    //   * rfis.assigneeUserId — an internal "Assigned to" on RFIs.
+    //   * rfis.sentByUserId — who last emailed the RFI out; told, with the
+    //     assignee, when the GC's answer comes in.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id          TEXT PRIMARY KEY,
+          userId      TEXT NOT NULL,
+          type        TEXT NOT NULL,
+          title       TEXT NOT NULL,
+          body        TEXT,
+          link        TEXT,
+          actorUserId TEXT,
+          createdAt   INTEGER NOT NULL,
+          readAt      INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (userId, createdAt);
+      `);
+      const rfiCols = (db.prepare(`PRAGMA table_info(rfis)`).all() as any[]).map((c: any) => c.name);
+      if (!rfiCols.includes('assigneeUserId')) db.exec(`ALTER TABLE rfis ADD COLUMN assigneeUserId TEXT;`);
+      if (!rfiCols.includes('sentByUserId')) db.exec(`ALTER TABLE rfis ADD COLUMN sentByUserId TEXT;`);
+    },
+  },
 ];

@@ -33,6 +33,10 @@ function publicSession(s: SessionInfo): SessionInfo {
 export const projectRoom = (id: string) => `project:${id}`;
 export const pageRoom = (id: string) => `page:${id}`;
 export const pathRoom = (path: string) => `path:${path}`;
+/** Every socket of one signed-in user: where their notifications go. */
+export const userRoom = (userId: string) => `user:${userId}`;
+/** The socket event carrying a NotificationEvent (server/notifications.ts). */
+export const NOTIFICATION_EVENT = 'notification';
 
 function roomsForLocation(loc: { path: string; projectId?: string; pageId?: string }): string[] {
   const rooms = [pathRoom(loc.path)];
@@ -72,6 +76,7 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       lastActive: Date.now(),
     };
     registry.add(session);
+    socket.join(userRoom(socket.data.user.id));
 
     // Engine-level packets (incl. ping/pong) are sent from message handlers,
     // which browsers do NOT throttle in hidden tabs — unlike the client's

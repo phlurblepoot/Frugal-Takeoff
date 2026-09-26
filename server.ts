@@ -18,7 +18,9 @@ import { migrations } from './server/migrationList';
 import { registerDataRoutes, registerEmailRoutes } from './server/routes';
 import { registerAiRoutes } from './server/aiRoutes';
 import { getAiRunner } from './server/ai';
-import { registerRealtime } from './server/realtime/registerRealtime';
+import { NOTIFICATION_EVENT, registerRealtime, userRoom } from './server/realtime/registerRealtime';
+import { Notifier } from './server/notifications';
+import { registerNotificationRoutes } from './server/notificationRoutes';
 import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
 import { loadMailCrypto } from './server/mail/crypto';
@@ -179,6 +181,12 @@ async function startServer() {
     broadcastChange,
   });
 
+  // The notification bell (ONLYOFFICE Phase 5): stored per user, pushed live to
+  // every tab they have open. Old ones are pruned after start and daily.
+  const notifier = new Notifier(db, (userId, ev) => { io.to(userRoom(userId)).emit(NOTIFICATION_EVENT, ev); });
+  setTimeout(() => notifier.prune(), 5 * 60_000).unref();
+  setInterval(() => notifier.prune(), 24 * 3600_000).unref();
+
   // Clean shutdown: a container stop (SIGTERM) or Ctrl-C (SIGINT) stops the
   // mail sync workers before exiting. Guarded against double-registration
   // (each signal only ever fires this handler once per process) and skipped
@@ -244,7 +252,9 @@ async function startServer() {
     verifyToken,
     broadcastChange,
     onlyoffice: onlyofficeServices,
+    notifier,
   });
+  registerNotificationRoutes(app, { authenticateToken, notifier });
 
   // The Playwright e2e harness logs in many times per run (per-worker session +
   // a few explicit logins per spec), which would trip a 10/min cap. Detect the
@@ -388,6 +398,8 @@ async function startServer() {
       db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
       db.prepare('DELETE FROM user_preferences WHERE userId = ?').run(req.params.id);
       removeUserSignatures(db, DATA_DIR, req.params.id);
+      notifier.removeUser(req.params.id);
+      db.prepare('UPDATE rfis SET assigneeUserId = NULL WHERE assigneeUserId = ?').run(req.params.id);
       broadcastChange({ type: 'user', id: req.params.id, action: 'deleted', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
@@ -607,6 +619,7 @@ async function startServer() {
     crypto: mailCrypto,
     providerFactory: (a, auth) => createMailProvider(a, auth, defaultProviderDeps(db, mailCrypto)),
     broadcastChange,
+    notifier,
   };
   // publicUrl is what lets Graph accounts use change notifications instead of
   // polling alone: the scheduler both points Microsoft at our webhook and keeps
@@ -654,7 +667,7 @@ async function startServer() {
   // ONLYOFFICE document editor (docs/onlyoffice-setup.md).
   registerOnlyofficeRoutes(app, {
     env: process.env, appJwtSecret: JWT_SECRET, authenticateToken, requireAdmin,
-    db, dataDir: DATA_DIR, broadcastChange, services: onlyofficeServices,
+    db, dataDir: DATA_DIR, broadcastChange, services: onlyofficeServices, notifier,
   });
 
   // Before the first sync tick: a reply that lands in that tick must still be
