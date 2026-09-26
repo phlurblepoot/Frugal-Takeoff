@@ -50,7 +50,7 @@ describe('takeSnapshot', () => {
     await takeSnapshot(db, dataDir, store, opts);
     const r2 = await takeSnapshot(db, dataDir, store, { ...opts, now: () => new Date(Date.now() + 1000) });
     expect(r2.objectsAdded).toBe(0);
-    putBuffer(db, dataDir, 'id-a', Buffer.from('CHANGED'), 'text/plain', { kind: 'document', name: 'a', mode: 'overwrite' });
+    putBuffer(db, dataDir, 'id-a', Buffer.from('CHANGED'), 'text/plain', { kind: 'document', name: 'a' });
     const r3 = await takeSnapshot(db, dataDir, store, { ...opts, now: () => new Date(Date.now() + 2000) });
     expect(r3.objectsAdded).toBe(1);
     const m = await store.readManifest(r3.snapshotId);
@@ -141,7 +141,7 @@ describe('takeSnapshot', () => {
   it('prune keeps the newest N snapshots and only objects they reference', async () => {
     addFile('a', 'AAA');
     const r1 = await takeSnapshot(db, dataDir, store, { ...opts, keep: 99 });
-    putBuffer(db, dataDir, 'id-a', Buffer.from('V2'), 'text/plain', { kind: 'document', name: 'a', mode: 'overwrite' });
+    putBuffer(db, dataDir, 'id-a', Buffer.from('V2'), 'text/plain', { kind: 'document', name: 'a' });
     const r2 = await takeSnapshot(db, dataDir, store, { ...opts, keep: 99, now: () => new Date(Date.now() + 1000) });
     const res = await pruneTarget(store, 1);
     expect(res).toEqual({ snapshotsDeleted: 1, objectsDeleted: 1 });

@@ -338,11 +338,13 @@ container next to the app, and build the extras agreed below on top of it.
   - Save → version 2; second Save → same version 2 overwritten; close →
     overwritten and session ended; the next open got a new key
   - the page fills the screen beside the rail
-- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
   - edit and save a PDF, an .xlsx and a .docx
   - two users editing the same file
   - phone view-only
   - Documents shows the new version after closing
+
+  (Nathan, 2026-09-26: "tested it all, everything works")
 
 ## Phase 2 — Versions and generated documents
 
@@ -360,8 +362,16 @@ container next to the app, and build the extras agreed below on top of it.
   - `onRequestHistory` lists `/api/files/:id/versions`
   - `onRequestHistoryData` returns a signed per-version URL
   - `onRequestRestore` restores **as a new version**, so nothing is lost
-- [ ] Store the callback's `history` / `changesurl` per version, so version
-  history can highlight what changed.
+- [x] Store the callback's `history` / `changesurl` per version, so version
+  history can highlight what changed. (server, 2026-09-26)
+  - Kept in `editor_changes` (migration 38) when a session closes (status 2
+    or 3), against the version that session made. Only when the session made
+    exactly one version on top of what it opened; otherwise ONLYOFFICE would
+    highlight against the wrong earlier version. The zip is downloaded and
+    stored, since ONLYOFFICE's link expires.
+  - The editor frame downloads the zip itself, cross-origin:
+    `GET /api/onlyoffice/changes/:fileId/:version?t=` answers with
+    `Access-Control-Allow-Origin` set to ONLYOFFICE's public address.
 - [ ] Tests: regenerate → new version; delete-version permissions; restore
   creates a version.
 

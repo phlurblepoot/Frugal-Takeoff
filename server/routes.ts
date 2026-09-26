@@ -6,7 +6,7 @@ import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
   listProjectSummaries, patchProject, ValidationError, ConflictError, NotFoundError,
 } from './projectStore';
-import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions } from './files';
+import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
 import { logActivity, listActivity } from './activity';
 import {
@@ -64,7 +64,7 @@ import {
   customerSummaries, customerOverview,
 } from './customerStore';
 import { dashboardAttention, dashboardMoney, projectHappenings } from './dashboardStore';
-import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource } from './documents';
+import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource, NON_ADMIN_EXCLUDED_KINDS } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import { registerProposalRoutes } from './proposalRoutes';
 import { getProposal } from './proposalStore';
@@ -1176,7 +1176,6 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           customerId: str(q.customerId),
           sourceType: str(q.sourceType),
           sourceId: str(q.sourceId),
-          mode: str(q.mode) === 'overwrite' ? 'overwrite' : undefined,
           createdBy: (req as any).user?.id,
         });
         deps.broadcastChange({
@@ -1265,6 +1264,34 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json(versions);
     } catch (e) {
       res.status(500).json({ error: 'Failed to list file versions' });
+    }
+  });
+
+  // Deletes one older version (ONLYOFFICE decision 2026-09-25: regenerating
+  // always versions, and unwanted versions are removed one by one). Admins,
+  // or whoever made that version; versions from before authors were recorded
+  // are admin-only. The live version can't be deleted here.
+  app.delete('/api/files/:id/versions/:versionId', authenticateToken, (req: any, res) => {
+    try {
+      const live = getMeta(db, req.params.id);
+      const version = getMeta(db, req.params.versionId);
+      if (!live || live.parentFileId || !version || version.parentFileId !== live.id) {
+        return res.status(404).json({ error: 'Version not found' });
+      }
+      const isAdmin = req.user?.role === 'admin';
+      if (!isAdmin && (NON_ADMIN_EXCLUDED_KINDS as readonly string[]).includes(live.kind)) {
+        return res.status(404).json({ error: 'Version not found' });
+      }
+      const isAuthor = version.createdBy != null && String(version.createdBy) === String(req.user?.id);
+      if (!isAdmin && !isAuthor) {
+        return res.status(403).json({ error: 'Only an admin or the person who made this version can delete it.' });
+      }
+      removeFile(db, dataDir, version.id);
+      deps.broadcastChange({ type: 'file', id: live.id, projectId: live.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) {
+      console.error('Error deleting file version:', e);
+      res.status(500).json({ error: 'Failed to delete the version' });
     }
   });
 

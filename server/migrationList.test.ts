@@ -1142,3 +1142,22 @@ describe('migration 37: onlyoffice-editor', () => {
     db.close();
   });
 });
+
+describe('migration 38: onlyoffice-history', () => {
+  it('adds files.versionOrigin, editor_sessions.users, editor_changes and editor_superseded_sessions, and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations);
+    expect(columnNames(db, 'files')).toContain('versionOrigin');
+    expect(columnNames(db, 'editor_sessions')).toContain('users');
+    for (const c of ['fileId', 'versionNumber', 'changesJson', 'serverVersion', 'zip', 'createdAt']) {
+      expect(columnNames(db, 'editor_changes'), `missing ${c}`).toContain(c);
+    }
+    for (const c of ['docKey', 'fileId', 'lastSha256', 'closedAt']) {
+      expect(columnNames(db, 'editor_superseded_sessions'), `missing ${c}`).toContain(c);
+    }
+    const m38 = migrations.find(m => m.version === 38)!;
+    expect(() => m38.up({ db, dataDir: dir } as any)).not.toThrow();
+    db.close();
+  });
+});

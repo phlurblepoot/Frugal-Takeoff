@@ -1702,4 +1702,44 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 38,
+    name: 'onlyoffice-history',
+    // ADDITIVE (ONLYOFFICE Phase 2 — version history, restore, delete):
+    //   * files.versionOrigin — how the live bytes of a version came to be:
+    //     'editor' (an ONLYOFFICE save), 'restore', or NULL (uploaded or
+    //     generated). Lets a generated document show it was edited by hand.
+    //   * editor_sessions.users — JSON array of the user ids ONLYOFFICE last
+    //     reported in the session (callback status 1); restore is refused
+    //     while anyone else is editing.
+    //   * editor_changes — per (file, version) the change log and changes zip
+    //     ONLYOFFICE sends when a session closes, so the editor's Version
+    //     History can highlight what changed.
+    //   * editor_superseded_sessions — sessions a restore replaced: a late
+    //     save from one is only kept (as a new version) if it holds edits made
+    //     after the restore.
+    up({ db }) {
+      const fileCols = (db.prepare(`PRAGMA table_info(files)`).all() as any[]).map((c: any) => c.name);
+      if (!fileCols.includes('versionOrigin')) db.exec(`ALTER TABLE files ADD COLUMN versionOrigin TEXT;`);
+      const sessionCols = (db.prepare(`PRAGMA table_info(editor_sessions)`).all() as any[]).map((c: any) => c.name);
+      if (!sessionCols.includes('users')) db.exec(`ALTER TABLE editor_sessions ADD COLUMN users TEXT;`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS editor_changes (
+          fileId        TEXT NOT NULL,
+          versionNumber INTEGER NOT NULL,
+          changesJson   TEXT NOT NULL,
+          serverVersion TEXT,
+          zip           BLOB,
+          createdAt     INTEGER NOT NULL,
+          PRIMARY KEY (fileId, versionNumber)
+        );
+        CREATE TABLE IF NOT EXISTS editor_superseded_sessions (
+          docKey     TEXT PRIMARY KEY,
+          fileId     TEXT NOT NULL,
+          lastSha256 TEXT,
+          closedAt   INTEGER NOT NULL
+        );
+      `);
+    },
+  },
 ];

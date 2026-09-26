@@ -23,7 +23,8 @@ import type { BroadcastChange } from '../realtime/changeFeed';
 import { extensionOf, officeFormatByExt, officeFormatOf } from '../../src/utils/officeFormats';
 import { readOnlyofficeConfig, type OnlyofficeConfig } from './config';
 import { LinkTokens } from './tokens';
-import { EditorSessions } from './sessions';
+import { EditorSessions, FileQueue, ForcesaveWaiters, type SupersededSession } from './sessions';
+import { fileLink, fileSubject } from './links';
 import { buildEditorConfig, documentKeyFor, documentKeyPrefix } from './editorConfig';
 import { OnlyofficeError, downloadFromOnlyoffice, isSessionOpen } from './client';
 
@@ -35,23 +36,37 @@ export interface OnlyofficeEditorDeps {
   authenticateToken: express.RequestHandler;
   broadcastChange: BroadcastChange;
   fetch: typeof fetch;
+  /** Shared with the history routes (restore). */
+  sessions: EditorSessions;
+  queue: FileQueue;
+  waiters: ForcesaveWaiters;
 }
-
-// How long ONLYOFFICE may use a file link. It downloads when the first person
-// opens the file; the margin covers an editor tab left open all day that has
-// to reconnect. The link opens that one file, read-only, and the person it was
-// issued to could already read the file anyway.
-const FILE_LINK_TTL_SECONDS = 8 * 3600;
-const fileSubject = (fileId: string) => `file:${fileId}`;
 
 // Callback bodies carry change history for long sessions; a generous cap, but
 // nothing like the app's 50 MB JSON limit, since this route needs no login.
 export const CALLBACK_PATH_PREFIX = '/api/onlyoffice/callback/';
 const callbackParser = express.json({ limit: '10mb' });
 
-const NOT_CONFIGURED = "The document editor isn't set up yet. An admin can check Settings → Document Editor.";
+export const NOT_CONFIGURED = "The document editor isn't set up yet. An admin can check Settings → Document Editor.";
 
-const isAdminOnlyKind = (kind: string) => (NON_ADMIN_EXCLUDED_KINDS as readonly string[]).includes(kind);
+export const isAdminOnlyKind = (kind: string) => (NON_ADMIN_EXCLUDED_KINDS as readonly string[]).includes(kind);
+
+const callbackUsers = (payload: Record<string, any>): string[] =>
+  Array.isArray(payload.users) ? payload.users.filter((u: unknown): u is string => typeof u === 'string' && u.length <= 128) : [];
+
+/** When each change in a closing session's history was made, in ms. ONLYOFFICE
+ *  writes UTC as "YYYY-MM-DD HH:mm:ss". Null if any entry can't be read. */
+export function changeTimes(history: unknown): number[] | null {
+  const changes = (history as { changes?: unknown } | null)?.changes;
+  if (!Array.isArray(changes) || changes.length === 0) return null;
+  const times: number[] = [];
+  for (const c of changes) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(String((c as { created?: unknown })?.created ?? ''));
+    if (!m) return null;
+    times.push(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] ?? 0)));
+  }
+  return times;
+}
 
 /** The callback's parameters, from whichever signed form ONLYOFFICE used: the
  *  body's `token` (when set to sign in the body) or a Bearer header whose
@@ -75,20 +90,7 @@ function verifiedCallback(req: express.Request, secret: string): Record<string, 
 }
 
 export function registerOnlyofficeEditorRoutes(app: express.Express, deps: OnlyofficeEditorDeps): void {
-  const { db, dataDir, tokens, authenticateToken } = deps;
-  const sessions = new EditorSessions(db);
-
-  // Saves for one file are applied one at a time: a forcesave and the final
-  // close-save can arrive back to back, and each decides "overwrite or new
-  // version" from what the previous one wrote.
-  const queues = new Map<string, Promise<unknown>>();
-  const serialized = <T>(fileId: string, fn: () => Promise<T>): Promise<T> => {
-    const run = (queues.get(fileId) ?? Promise.resolve()).then(fn, fn);
-    const settled = run.catch(() => undefined);
-    queues.set(fileId, settled);
-    void settled.then(() => { if (queues.get(fileId) === settled) queues.delete(fileId); });
-    return run;
-  };
+  const { db, dataDir, tokens, authenticateToken, sessions, queue, waiters } = deps;
 
   app.post('/api/onlyoffice/config/:fileId', authenticateToken, async (req: any, res) => {
     const { config: cfg } = readOnlyofficeConfig(deps.env);
@@ -115,15 +117,13 @@ export function registerOnlyofficeEditorRoutes(app: express.Express, deps: Onlyo
       }
     }
 
-    const token = tokens.sign(fileSubject(meta.id), FILE_LINK_TTL_SECONDS);
-    const id = encodeURIComponent(meta.id);
     const config = buildEditorConfig({
       cfg,
       file: meta,
       format,
       docKey,
-      fileUrl: `${cfg.appInternalUrl}/api/onlyoffice/file/${id}?t=${encodeURIComponent(token)}`,
-      callbackUrl: mode === 'edit' ? `${cfg.appInternalUrl}${CALLBACK_PATH_PREFIX}${id}` : null,
+      fileUrl: fileLink(cfg, tokens, meta.id),
+      callbackUrl: mode === 'edit' ? `${cfg.appInternalUrl}${CALLBACK_PATH_PREFIX}${encodeURIComponent(meta.id)}` : null,
       mode,
       device,
       theme,
@@ -179,15 +179,29 @@ export function registerOnlyofficeEditorRoutes(app: express.Express, deps: Onlyo
     if (!key.startsWith(documentKeyPrefix(fileId))) return res.status(400).json({ error: 1 });
 
     const status = Number(payload.status);
+    const carriesFile = [2, 3, 6, 7].includes(status) && typeof payload.url === 'string' && !!payload.url;
     try {
-      await serialized(fileId, async () => {
+      await queue.run(fileId, async () => {
+        // 1 = someone joined or left: remember who is in the session.
+        if (status === 1) {
+          if (sessions.get(fileId)?.docKey === key) sessions.setUsers(fileId, key, callbackUsers(payload));
+          return;
+        }
+        const superseded = sessions.getSuperseded(key);
+        if (superseded) {
+          if (carriesFile) await saveFromSupersededSession(cfg, fileId, key, superseded, payload);
+          if ([2, 3, 4].includes(status)) sessions.dropSuperseded(key);
+          return;
+        }
         // 2 = closed with changes, 3 = closed but assembling failed, 6/7 = a
         // save while still open. ONLYOFFICE's own reference handler saves the
         // link it sends with 3 and 7 too: it is the best state it has.
-        if ([2, 3, 6, 7].includes(status) && typeof payload.url === 'string' && payload.url) {
+        if (carriesFile) {
           if (status === 3 || status === 7) console.warn(`[onlyoffice] ${fileId}: status ${status}, saving the state ONLYOFFICE could recover`);
           await saveFromCallback(cfg, fileId, key, payload);
         }
+        // Closing brings the session's change log, for Version History.
+        if (status === 2 || status === 3) await storeChanges(cfg, fileId, key, payload);
         // 2, 3 and 4 mean everyone has closed the file: the session is over.
         if ([2, 3, 4].includes(status)) sessions.end(fileId, key);
       });
@@ -197,6 +211,9 @@ export function registerOnlyofficeEditorRoutes(app: express.Express, deps: Onlyo
       // editing when it doesn't get {"error":0}.
       console.error(`[onlyoffice] saving ${fileId} failed:`, e instanceof Error ? e.message : e);
       res.json({ error: 1 });
+    } finally {
+      // A restore may be waiting for this save before it replaces the file.
+      if (carriesFile) waiters.settle(key);
     }
   });
 
@@ -212,14 +229,13 @@ export function registerOnlyofficeEditorRoutes(app: express.Express, deps: Onlyo
 
     const format = officeFormatByExt(typeof payload.filetype === 'string' ? payload.filetype : '') ?? officeFormatOf(live);
     const mime = format?.mime ?? live.mime;
-    const users: unknown[] = Array.isArray(payload.users) ? payload.users : [];
-    const by = typeof users[0] === 'string' && users[0].length <= 128 ? (users[0] as string) : null;
+    const by = callbackUsers(payload)[0] ?? null;
 
     const session = sessions.get(fileId);
     const ours = !!session && session.docKey === key;
     const untouchedSinceOurSave = ours && session!.savedVersionNumber === live.versionNumber && session!.savedSha256 === live.sha256;
-    if (untouchedSinceOurSave) replaceLiveContent(db, dataDir, fileId, bytes, mime, by);
-    else saveNewVersion(db, dataDir, fileId, bytes, mime, by);
+    if (untouchedSinceOurSave) replaceLiveContent(db, dataDir, fileId, bytes, mime, by, 'editor');
+    else saveNewVersion(db, dataDir, fileId, bytes, mime, by, 'editor');
 
     // ONLYOFFICE may hand back another format than was opened (it saves a
     // legacy file as its modern equivalent); keep the name's extension honest.
@@ -231,5 +247,49 @@ export function registerOnlyofficeEditorRoutes(app: express.Express, deps: Onlyo
     const after = getMeta(db, fileId)!;
     if (ours) sessions.recordSave(fileId, key, { versionNumber: after.versionNumber, sha256: after.sha256, by });
     deps.broadcastChange({ type: 'file', id: fileId, projectId: after.projectId ?? undefined, action: 'updated', byUserId: by ?? undefined });
+  }
+
+  /** A late save from a session a restore replaced: kept as a new version
+   *  only if it holds edits made after the restore — never over the top of
+   *  the restored file just for repeating what was saved before it. A closing
+   *  save says when each change was made, which settles it; other saves are
+   *  judged by their bytes (ONLYOFFICE doesn't promise the same bytes twice
+   *  for the same content, which is why the dates come first). */
+  async function saveFromSupersededSession(
+    cfg: OnlyofficeConfig, fileId: string, key: string, superseded: SupersededSession, payload: Record<string, any>,
+  ): Promise<void> {
+    const live = getMeta(db, fileId);
+    if (!live || live.parentFileId) return;
+    const times = changeTimes(payload.history);
+    if (times && !times.some(t => t > superseded.closedAt)) return;
+    const bytes = await downloadFromOnlyoffice(cfg, deps.fetch, payload.url);
+    const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+    if (sha256 === superseded.lastSha256 || sha256 === live.sha256) return;
+    const format = officeFormatByExt(typeof payload.filetype === 'string' ? payload.filetype : '') ?? officeFormatOf(live);
+    const by = callbackUsers(payload)[0] ?? null;
+    saveNewVersion(db, dataDir, fileId, bytes, format?.mime ?? live.mime, by, 'editor');
+    sessions.updateSuperseded(key, sha256);
+    deps.broadcastChange({ type: 'file', id: fileId, projectId: live.projectId ?? undefined, action: 'updated', byUserId: by ?? undefined });
+  }
+
+  /** Keeps the change log ONLYOFFICE sends when a session closes, so Version
+   *  History can highlight what changed. Only when the session's saves made
+   *  exactly one version on top of what it opened: otherwise the log would be
+   *  highlighted against the wrong earlier version. Never fails the save. */
+  async function storeChanges(cfg: OnlyofficeConfig, fileId: string, key: string, payload: Record<string, any>): Promise<void> {
+    const session = sessions.get(fileId);
+    const live = getMeta(db, fileId);
+    const history = payload.history;
+    if (!session || session.docKey !== key || !live || !history || !Array.isArray(history.changes)) return;
+    if (session.savedVersionNumber !== live.versionNumber || live.versionNumber !== session.baseVersionNumber + 1) return;
+    let zip: Buffer | null = null;
+    if (typeof payload.changesurl === 'string' && payload.changesurl) {
+      try { zip = await downloadFromOnlyoffice(cfg, deps.fetch, payload.changesurl); }
+      catch (e) { console.warn(`[onlyoffice] ${fileId}: couldn't download the change log:`, e instanceof Error ? e.message : e); }
+    }
+    db.prepare(`INSERT OR REPLACE INTO editor_changes (fileId, versionNumber, changesJson, serverVersion, zip, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(fileId, live.versionNumber, JSON.stringify(history.changes),
+        history.serverVersion != null ? JSON.stringify(history.serverVersion) : null, zip, Date.now());
   }
 }

@@ -370,3 +370,67 @@ describe('POST /api/onlyoffice/callback/:fileId', () => {
     expect(versionNumbers()).toEqual([2, 1]);
   });
 });
+
+describe('callback: what Version History needs', () => {
+  const start = async () => (await openConfig()).body.config.document.key as string;
+  const session = () => db.prepare('SELECT * FROM editor_sessions WHERE fileId = ?').get('doc1') as any;
+  const changes = () => db.prepare('SELECT * FROM editor_changes WHERE fileId = ? ORDER BY versionNumber').all('doc1') as any[];
+  const history = (created = '2026-09-26 10:00:00') => ({ changes: [{ created, user: { id: 'u-admin', name: 'nathan' } }], serverVersion: '9.4.0' });
+  const changesZip = (content = 'zip bytes') => {
+    const url = `https://docs.example.com/cache/files/data/c${++saveCounter}/changes.zip`;
+    dsFiles.set(url.replace('https://docs.example.com', 'http://onlyoffice'), Buffer.from(content));
+    return url;
+  };
+
+  it('remembers who is in the session, and ignores reports for other sessions', async () => {
+    const key = await start();
+    await callback('doc1', { key, status: 1, users: ['u-admin', 'u-user'] });
+    expect(JSON.parse(session().users)).toEqual(['u-admin', 'u-user']);
+    await callback('doc1', { key: `${key}-old`, status: 1, users: [] });
+    expect(JSON.parse(session().users)).toEqual(['u-admin', 'u-user']);
+  });
+
+  it('marks editor saves as edits; the version before keeps its own origin', async () => {
+    const key = await start();
+    await callback('doc1', { key, status: 6, url: savedFile('edited'), users: ['u-admin'] });
+    const [now, before] = listVersions(db, 'doc1');
+    expect(now.versionOrigin).toBe('editor');
+    expect(before.versionOrigin).toBeNull();
+  });
+
+  it('keeps the change log a closing session sends, against the version it made', async () => {
+    const key = await start();
+    await callback('doc1', { key, status: 6, url: savedFile('forcesaved'), users: ['u-admin'] });
+    await callback('doc1', { key, status: 2, url: savedFile('closed'), users: ['u-admin'], history: history(), changesurl: changesZip('the log') });
+    const [row] = changes();
+    expect(row).toMatchObject({ versionNumber: 2, serverVersion: '"9.4.0"' });
+    expect(JSON.parse(row.changesJson)).toEqual(history().changes);
+    expect(Buffer.from(row.zip).toString()).toBe('the log');
+  });
+
+  it('keeps the log even when the close brings no new bytes', async () => {
+    const key = await start();
+    await callback('doc1', { key, status: 6, url: savedFile('forcesaved'), users: ['u-admin'] });
+    await callback('doc1', { key, status: 2, url: savedFile('forcesaved'), users: ['u-admin'], history: history(), changesurl: changesZip() });
+    expect(changes().map(c => c.versionNumber)).toEqual([2]);
+  });
+
+  it('keeps no log when the session made more than one version (it would highlight the wrong changes)', async () => {
+    const key = await start();
+    await callback('doc1', { key, status: 6, url: savedFile('session edit'), users: ['u-admin'] });
+    saveNewVersion(db, dataDir, 'doc1', Buffer.from('regenerated'), DOCX, 'u-user');
+    await callback('doc1', { key, status: 2, url: savedFile('session edit 2'), users: ['u-admin'], history: history(), changesurl: changesZip() });
+    expect(versionNumbers()).toEqual([4, 3, 2, 1]);
+    expect(changes()).toEqual([]);
+  });
+
+  it('a change log that fails to download never fails the save', async () => {
+    const key = await start();
+    const url = 'https://docs.example.com/cache/files/data/nolog/changes.zip';
+    dsFiles.set('http://onlyoffice/cache/files/data/nolog/changes.zip', 'fail');
+    const r = await callback('doc1', { key, status: 2, url: savedFile('closed'), users: ['u-admin'], history: history(), changesurl: url });
+    expect(r.body).toEqual({ error: 0 });
+    expect(bytes()).toBe('closed');
+    expect(changes()).toMatchObject([{ versionNumber: 2, zip: null }]);
+  });
+});

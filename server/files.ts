@@ -43,6 +43,10 @@ export interface FileMeta {
   // (migration 37). Null for history from before then and for writes with no
   // signed-in user behind them (mail sync, migrations).
   createdBy: string | null;
+  // How this version's bytes came to be (migration 38): 'editor' for an
+  // ONLYOFFICE save, 'restore' for a restored older version, null for an
+  // upload or a generate.
+  versionOrigin: string | null;
 }
 
 // Canonical document kinds (spec 2026-08-17 §Data model). System kinds are
@@ -92,26 +96,31 @@ export interface PutOpts {
   // stable document — see the upsert-by-source note on `store` below.
   sourceType?: string;
   sourceId?: string;
-  // Only meaningful on an upsert-by-source hit (see `store`). 'version'
-  // (default) archives the prior bytes as history, same as always.
-  // 'overwrite' replaces the live bytes in place — no archived row, id and
-  // versionNumber unchanged — for callers that intentionally don't want the
-  // regenerate to grow the version history (spec 2026-08-29 document actions).
-  mode?: 'version' | 'overwrite';
   // The signed-in user producing these bytes (FileMeta.createdBy).
   createdBy?: string;
 }
 
-// files.createdBy arrives with migration 37, but older migrations (e.g.
-// images-to-disk) write files through this module before it exists. Only a
-// positive answer is cached: the column appears mid-run, when 37 applies.
-const hasCreatedByCache = new WeakSet<Database.Database>();
-function hasCreatedBy(db: Database.Database): boolean {
-  if (hasCreatedByCache.has(db)) return true;
+export type VersionOrigin = 'editor' | 'restore';
+
+// files.createdBy (migration 37) and files.versionOrigin (38) arrive late, but
+// older migrations (e.g. images-to-disk) write files through this module
+// before they exist. Only a positive answer is cached: a column appears
+// mid-run, when its migration applies.
+const knownColumns = new WeakMap<Database.Database, Set<string>>();
+function hasFileColumn(db: Database.Database, name: 'createdBy' | 'versionOrigin'): boolean {
+  if (knownColumns.get(db)?.has(name)) return true;
   const cols = db.prepare('PRAGMA table_info(files)').all() as { name: string }[];
-  if (!cols.some(c => c.name === 'createdBy')) return false;
-  hasCreatedByCache.add(db);
+  if (!cols.some(c => c.name === name)) return false;
+  if (!knownColumns.has(db)) knownColumns.set(db, new Set());
+  knownColumns.get(db)!.add(name);
   return true;
+}
+const hasCreatedBy = (db: Database.Database) => hasFileColumn(db, 'createdBy');
+
+/** Stamps who produced the live bytes, and how, after a write. */
+function stampVersion(db: Database.Database, id: string, createdBy: string | null | undefined, origin: VersionOrigin | null | undefined): void {
+  if (hasCreatedBy(db)) db.prepare('UPDATE files SET createdBy = ? WHERE id = ?').run(createdBy ?? null, id);
+  if (hasFileColumn(db, 'versionOrigin')) db.prepare('UPDATE files SET versionOrigin = ? WHERE id = ?').run(origin ?? null, id);
 }
 
 // A put either created/overwrote the requested id, or landed as a new version
@@ -167,9 +176,12 @@ function upsertRow(
     existing?.archived ?? 0,
   ];
   if (withCreatedBy) values.push(opts.createdBy ?? existing?.createdBy ?? null);
+  // New bytes are an upload or a generate unless a caller stamps otherwise
+  // afterwards (stampVersion), so versionOrigin is never carried over.
+  const withOrigin = hasFileColumn(db, 'versionOrigin');
   db.prepare(`
-    INSERT OR REPLACE INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, customerId, sourceType, sourceId, archived${withCreatedBy ? ', createdBy' : ''})
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${withCreatedBy ? ', ?' : ''})
+    INSERT OR REPLACE INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, customerId, sourceType, sourceId, archived${withCreatedBy ? ', createdBy' : ''}${withOrigin ? ', versionOrigin' : ''})
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${withCreatedBy ? ', ?' : ''}${withOrigin ? ', NULL' : ''})
   `).run(...values);
 }
 
@@ -213,31 +225,6 @@ function tableExists(db: Database.Database, name: string): boolean {
   return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
 }
 
-// Overwrite mode (spec 2026-08-29 document actions): replaces the live row's
-// bytes in place with no archived history row and no versionNumber bump —
-// for regenerate flows that intentionally don't want every re-run to grow the
-// version list (e.g. a draft the user is still iterating on before it's
-// final). Contrast with saveNewVersion, which always archives.
-// Overwrite = "start the history over": the new bytes become version 1 and
-// every archived version of this document (rows + bytes) is discarded.
-// Contrast saveNewVersion, which keeps the old bytes as a history row.
-export function overwriteLive(db: Database.Database, dataDir: string, id: string, buf: Buffer, mime: string, createdBy?: string | null): void {
-  const archived = db.prepare('SELECT id FROM files WHERE parentFileId = ?').all(id) as { id: string }[];
-  const tx = db.transaction(() => {
-    if (archived.length) db.prepare('DELETE FROM files WHERE parentFileId = ?').run(id);
-    const { size, sha256 } = writeFileContent(dataDir, id, buf); // atomic rename over the same path
-    db.prepare('UPDATE files SET mime = ?, size = ?, sha256 = ?, legacyFormat = NULL, createdAt = ?, archived = 0, versionNumber = 1 WHERE id = ?')
-      .run(mime, size, sha256, Date.now(), id);
-    if (hasCreatedBy(db)) db.prepare('UPDATE files SET createdBy = ? WHERE id = ?').run(createdBy ?? null, id);
-  });
-  tx();
-  // Bytes go after the commit: a failed delete is a storage leak to report,
-  // not a reason to fail the overwrite the caller already asked for.
-  for (const a of archived) {
-    try { deleteFileContent(dataDir, a.id); } catch (e) { console.warn(`[files] could not delete archived version ${a.id}:`, e); }
-  }
-}
-
 // Upsert-by-source (spec 2026-08-17 §Data model): a generate/download flow
 // uploads with the owning entity's source metadata every time, minting a fresh
 // id client-side. When that source already has a live document of the same
@@ -255,11 +242,9 @@ function store(
 ): PutResult {
   const existingId = findLiveBySource(db, opts);
   if (existingId) {
-    if (opts.mode === 'overwrite') {
-      overwriteLive(db, dataDir, existingId, buf, mime, opts.createdBy);
-    } else {
-      saveNewVersion(db, dataDir, existingId, buf, mime, opts.createdBy);
-    }
+    // Always a new version, never an overwrite (ONLYOFFICE decision
+    // 2026-09-25): older versions are deleted one by one if unwanted.
+    saveNewVersion(db, dataDir, existingId, buf, mime, opts.createdBy);
     // saveNewVersion re-enters putBuffer with no opts, which stamps the
     // dataURL format and keeps the old labels. Replay the caller's actual
     // format (so getDataUrlString still round-trips) and take whichever
@@ -272,7 +257,7 @@ function store(
     if (opts.projectId) { sets.push('projectId = ?'); vals.push(opts.projectId); }
     if (opts.customerId) { sets.push('customerId = ?'); vals.push(opts.customerId); }
     db.prepare(`UPDATE files SET ${sets.join(', ')} WHERE id = ?`).run(...vals, existingId);
-    // A regenerate — versioned or overwritten in place — invalidates any
+    // A regenerate invalidates any
     // in-progress editor draft for the old bytes; keeping it around would let
     // a stale PDF-editor draft silently resurrect content the regenerate just
     // replaced. drafts (migration 7) postdates files, so older migration
@@ -337,6 +322,16 @@ export function getDataUrlString(db: Database.Database, dataDir: string, id: str
 }
 
 export function removeFile(db: Database.Database, dataDir: string, id: string): void {
+  // The editor's change log for this version goes with it (migration 38). A
+  // live row takes every version's log; an archived row just its own.
+  if (tableExists(db, 'editor_changes')) {
+    const row = getMeta(db, id);
+    if (row?.parentFileId) {
+      db.prepare('DELETE FROM editor_changes WHERE fileId = ? AND versionNumber = ?').run(row.parentFileId, row.versionNumber);
+    } else if (row) {
+      db.prepare('DELETE FROM editor_changes WHERE fileId = ?').run(id);
+    }
+  }
   db.prepare('DELETE FROM files WHERE id = ?').run(id);
   deleteFileContent(dataDir, id);
 }
@@ -353,15 +348,14 @@ export function saveNewVersion(
   id: string,
   buf: Buffer,
   mime: string,
-  // Who produced the NEW bytes. The archived row keeps the old version's author.
-  createdBy?: string | null
+  // Who produced the NEW bytes, and how. The archived row keeps the old
+  // version's author and origin.
+  createdBy?: string | null,
+  origin?: VersionOrigin | null
 ): { archivedVersionId: string; versionNumber: number } {
   const live = getMeta(db, id);
   if (!live) throw new Error(`Cannot version unknown file ${id}`);
-  const withCreatedBy = hasCreatedBy(db);
-  const stampAuthor = () => {
-    if (withCreatedBy) db.prepare('UPDATE files SET createdBy = ? WHERE id = ?').run(createdBy ?? null, id);
-  };
+  const stampAuthor = () => stampVersion(db, id, createdBy, origin);
 
   const archivedVersionId = crypto.randomUUID();
   const oldContent = readFileContent(dataDir, id);
@@ -377,9 +371,10 @@ export function saveNewVersion(
       // of every source-keyed lookup (upsert-by-source, /api/documents).
       db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        archivedVersionId, live.projectId, live.name, live.mime, size, sha256, live.kind, id, live.versionNumber, live.legacyFormat, Date.now()
+        // createdAt: when these bytes were produced, not when they were archived.
+        archivedVersionId, live.projectId, live.name, live.mime, size, sha256, live.kind, id, live.versionNumber, live.legacyFormat, live.createdAt
       );
-      if (withCreatedBy) db.prepare('UPDATE files SET createdBy = ? WHERE id = ?').run(live.createdBy ?? null, archivedVersionId);
+      stampVersion(db, archivedVersionId, live.createdBy, (live.versionOrigin as VersionOrigin | null) ?? null);
       putBuffer(db, dataDir, id, buf, mime); // disk write is non-tx but idempotent; row upsert is in-tx
       // putBuffer -> upsertRow carries the OLD createdAt forward (it only
       // defaults createdAt for brand-new rows), so a versioned save must
@@ -406,15 +401,16 @@ export function saveNewVersion(
 // Replaces the live bytes in place: same id, same versionNumber, history
 // untouched. For a later save in an editing session whose first save already
 // archived the pre-session bytes (ONLYOFFICE one-version-per-session rule).
-// Unlike overwriteLive this keeps every archived version.
+// Every archived version is kept.
 export function replaceLiveContent(
-  db: Database.Database, dataDir: string, id: string, buf: Buffer, mime: string, createdBy?: string | null,
+  db: Database.Database, dataDir: string, id: string, buf: Buffer, mime: string,
+  createdBy?: string | null, origin?: VersionOrigin | null,
 ): FileMeta {
   if (!getMeta(db, id)) throw new Error(`Cannot replace unknown file ${id}`);
   const { size, sha256 } = writeFileContent(dataDir, id, buf); // atomic rename over the same path
   db.prepare(`UPDATE files SET mime = ?, size = ?, sha256 = ?, legacyFormat = 'dataurl', createdAt = ? WHERE id = ?`)
     .run(mime, size, sha256, Date.now(), id);
-  if (hasCreatedBy(db)) db.prepare('UPDATE files SET createdBy = ? WHERE id = ?').run(createdBy ?? null, id);
+  stampVersion(db, id, createdBy, origin);
   return getMeta(db, id)!;
 }
 

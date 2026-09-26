@@ -226,8 +226,10 @@ export function listDocuments(
 // know exactly which (sourceType, sourceId, kind) they want (e.g. "does this
 // invoice already have a generated PDF?") rather than browsing the full
 // Documents list. Honors the same role-visibility rules as listDocuments.
-export interface SourceDoc { id: string; name: string | null; mime: string; size: number; createdAt: number; versionNumber: number }
-const SOURCE_COLS = 'id, name, mime, size, createdAt, versionNumber, kind';
+// versionOrigin: 'editor' once someone has edited the generated document in
+// ONLYOFFICE since it was last generated (null right after a generate).
+export interface SourceDoc { id: string; name: string | null; mime: string; size: number; createdAt: number; versionNumber: number; versionOrigin: string | null }
+const SOURCE_COLS = 'id, name, mime, size, createdAt, versionNumber, versionOrigin, kind';
 
 export function findDocumentsBySource(
   db: Database.Database,

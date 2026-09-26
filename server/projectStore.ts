@@ -356,6 +356,9 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     // Drop editor drafts for this project's files before the files vanish, so
     // the subquery can still resolve their ids (prevents a slow drafts leak).
     db.prepare(`DELETE FROM drafts WHERE fileId IN (SELECT id FROM files WHERE ${OWNED})`).run(id);
+    // Same for the document editor's change logs and sessions (migrations 37-38).
+    db.prepare(`DELETE FROM editor_changes WHERE fileId IN (SELECT id FROM files WHERE ${OWNED})`).run(id);
+    db.prepare(`DELETE FROM editor_sessions WHERE fileId IN (SELECT id FROM files WHERE ${OWNED})`).run(id);
     db.prepare(`DELETE FROM files WHERE ${OWNED}`).run(id);
     db.prepare('DELETE FROM projects WHERE id = ?').run(id);
   });

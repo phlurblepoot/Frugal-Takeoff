@@ -140,3 +140,13 @@ export async function downloadFromOnlyoffice(cfg: OnlyofficeConfig, fetchImpl: F
   }
   throw new OnlyofficeError('unreachable', `Couldn't download the saved file from ONLYOFFICE (${lastError}).`);
 }
+
+/** Asks ONLYOFFICE to save the session's current state now (command
+ *  `forcesave`). Returns its error code: 0 = a save is on its way to the
+ *  callback, 4 = nothing changed since the last save, 1 = no such session. */
+export async function requestForcesave(cfg: OnlyofficeConfig, fetchImpl: Fetch, key: string, timeoutMs = 8000): Promise<number> {
+  const body = await postSigned(cfg, fetchImpl, '/command', { c: 'forcesave', key, userdata: 'restore' }, timeoutMs);
+  if (body?.error === 6) throw new OnlyofficeError('secret-mismatch', SECRET_MISMATCH, 6);
+  if (typeof body?.error !== 'number') throw new OnlyofficeError('bad-response', 'ONLYOFFICE gave no answer to the save request.');
+  return body.error;
+}
