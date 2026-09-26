@@ -64,7 +64,7 @@ import {
   customerSummaries, customerOverview,
 } from './customerStore';
 import { dashboardAttention, dashboardMoney, projectHappenings } from './dashboardStore';
-import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource } from './documents';
+import { listDocuments, listedDocumentIds, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import type { SheetSessionStore } from './realtime/sheetSessions';
 import { registerProposalRoutes } from './proposalRoutes';
@@ -1402,9 +1402,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   // ── Storage admin ─────────────────────────────────────────────────────────
 
   // Conservative reference walk: serialize every project aggregate plus every
-  // remaining JSON blob (checklists, notes) and shares, collect every
-  // string and every /api/images|files/<id> URL. A file is an orphan only if
-  // its id appears nowhere.
+  // remaining JSON blob (checklists, notes, settings…) and shares, collect
+  // every string and every /api/images|files/<id> URL, plus the file-id
+  // columns. A file is an orphan only if its id appears nowhere and it isn't
+  // a document anyone can see. Deleting is permanent: when in doubt, keep.
   const collectReferencedFileIds = (): Set<string> => {
     const referenced = new Set<string>();
     const urlRe = /\/api\/(?:images|files)\/([^/"'?\s]+)/g;
@@ -1423,12 +1424,18 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (typeof v === 'object') { for (const k in v) walk(v[k]); return; }
     };
     for (const p of listProjects(db)) walk(p);
-    for (const table of ['checklists', 'notes']) {
-      let rows: { data: string }[] = [];
-      try { rows = db.prepare(`SELECT data FROM ${table}`).all() as { data: string }[]; } catch { continue; }
+    // Settings hold the AIA template's id (aiaTemplateFileId); customers,
+    // takeoff templates and per-user preferences keep JSON that may name files.
+    const JSON_COLUMNS: [table: string, column: string][] = [
+      ['checklists', 'data'], ['notes', 'data'], ['settings', 'value'], ['templates', 'data'],
+      ['customers', 'attrs'], ['customers', 'emails'], ['user_preferences', 'value'],
+    ];
+    for (const [table, column] of JSON_COLUMNS) {
+      let rows: { v: string | null }[] = [];
+      try { rows = db.prepare(`SELECT ${column} AS v FROM ${table}`).all() as { v: string | null }[]; } catch { continue; }
       for (const r of rows) {
-        if (!r.data) continue;
-        try { walk(JSON.parse(r.data)); } catch { addString(r.data); }
+        if (!r.v) continue;
+        try { walk(JSON.parse(r.v)); } catch { addString(r.v); }
       }
     }
     // shares reference files directly (single-file shares) or via JSON page lists
@@ -1437,21 +1444,35 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       addString(r.resourceId);
       try { walk(JSON.parse(r.resourceId)); } catch { /* plain id */ }
     }
-    // Photo join tables hold their file ids in a column, not in any JSON the
-    // walk above reaches. Project-attributed rows are covered by the clause
-    // below, but task photos are deliberately project-less (a task outlives the
-    // project it merely refers to), so without this pass they read as orphans.
-    for (const table of ['issue_photos', 'punch_photos', 'task_photos', 'change_order_photos', 'rfi_photos', 'daily_report_photos']) {
+    // Photo and attachment join tables, and records with a file of their own,
+    // hold file ids in a column, not in any JSON the walk above reaches.
+    // Project-attributed rows are covered by the clause below, but task photos
+    // are deliberately project-less (a task outlives the project it merely
+    // refers to), and an attachment can be a company or customer document.
+    const FILE_ID_COLUMNS: [table: string, column: string][] = [
+      ['issue_photos', 'fileId'], ['punch_photos', 'fileId'], ['task_photos', 'fileId'],
+      ['change_order_photos', 'fileId'], ['rfi_photos', 'fileId'], ['daily_report_photos', 'fileId'],
+      ['invoice_photos', 'fileId'], ['invoice_attachments', 'fileId'],
+      ['proposal_photos', 'fileId'], ['proposal_attachments', 'fileId'],
+      ['proposals', 'fileId'], ['proposals', 'signedFileId'], ['rfis', 'responseFileId'],
+    ];
+    for (const [table, column] of FILE_ID_COLUMNS) {
       let rows: { fileId: string | null }[] = [];
-      try { rows = db.prepare(`SELECT fileId FROM ${table}`).all() as { fileId: string | null }[]; } catch { continue; }
+      try { rows = db.prepare(`SELECT ${column} AS fileId FROM ${table}`).all() as { fileId: string | null }[]; } catch { continue; }
       for (const r of rows) if (r.fileId) referenced.add(r.fileId);
     }
-    // Files attributed to a live project are referenced by definition (e.g.
-    // standalone Documents uploads whose id never appears in project JSON).
-    const projectFileRows = db.prepare(
-      'SELECT id FROM files WHERE projectId IS NOT NULL AND projectId IN (SELECT id FROM projects)'
-    ).all() as { id: string }[];
-    for (const r of projectFileRows) referenced.add(r.id);
+    // Files attributed to a live project or customer are referenced by
+    // definition (e.g. standalone Documents uploads whose id never appears in
+    // project JSON).
+    const ownedFileRows = db.prepare(`
+      SELECT id FROM files
+      WHERE (projectId IS NOT NULL AND projectId IN (SELECT id FROM projects))
+         OR (customerId IS NOT NULL AND customerId IN (SELECT id FROM customers))
+    `).all() as { id: string }[];
+    for (const r of ownedFileRows) referenced.add(r.id);
+    // Anything the Documents page lists is someone's document: a company
+    // document, a loose upload. They delete it there if they don't want it.
+    for (const id of listedDocumentIds(db)) referenced.add(id);
     return referenced;
   };
 
