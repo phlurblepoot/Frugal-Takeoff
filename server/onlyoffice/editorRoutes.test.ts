@@ -324,7 +324,8 @@ describe('POST /api/onlyoffice/callback/:fileId', () => {
   it('downloads saves over the internal address, falling back to the link as given', async () => {
     const key = await start();
     await callback('doc1', { key, status: 6, url: savedFile('via internal'), users: ['u-admin'] });
-    expect(fetched.at(-1)).toMatch(/^http:\/\/onlyoffice\/cache\/files\//);
+    // (A save also queues a thumbnail, which calls the converter meanwhile.)
+    expect(fetched.filter(u => !u.endsWith('/converter')).at(-1)).toMatch(/^http:\/\/onlyoffice\/cache\/files\//);
 
     // A link on another host (e.g. a proxy ONLYOFFICE reports) is used as-is.
     const elsewhere = 'https://cdn.example.net/cache/output.docx';

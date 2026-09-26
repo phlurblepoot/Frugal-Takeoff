@@ -82,23 +82,52 @@ export interface ConvertRequest {
   title: string;
   /** Where the Document Server downloads the input from; must be reachable from it. */
   url: string;
+  /** Number and date formats for spreadsheet → PDF, e.g. "en-US". */
+  region?: string;
+  /** Page setup for spreadsheet → PDF. */
+  spreadsheetLayout?: Record<string, unknown>;
+  /** Image output: the first page as a picture (ONLYOFFICE's `thumbnail`). */
+  thumbnail?: { aspect?: 0 | 1 | 2; first?: boolean; width?: number; height?: number };
 }
 
-/** Synchronous conversion; resolves with the Document Server's link to the result. */
+/** What ONLYOFFICE's conversion error codes mean, in words a person can act on. */
+const CONVERT_ERRORS: Record<number, string> = {
+  [-2]: 'ONLYOFFICE ran out of time converting the file.',
+  [-3]: "ONLYOFFICE couldn't convert this file (it may be damaged or in a format it can't read).",
+  [-5]: 'The file is password-protected.',
+  [-7]: "ONLYOFFICE couldn't read the conversion request.",
+  [-9]: "ONLYOFFICE couldn't tell what to convert the file to.",
+  [-10]: 'The file is larger than ONLYOFFICE will convert.',
+};
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+/** Converts a file and resolves with the Document Server's link to the
+ *  result. Asks asynchronously and polls (re-sending the same request, as the
+ *  conversion API expects) until ONLYOFFICE says it is done, so a big file
+ *  never holds one HTTP request open for minutes. */
 export async function convert(
-  cfg: OnlyofficeConfig, fetchImpl: Fetch, req: ConvertRequest, timeoutMs = 60_000,
+  cfg: OnlyofficeConfig, fetchImpl: Fetch, req: ConvertRequest, timeoutMs = 60_000, pollMs = 1000,
 ): Promise<{ fileUrl: string; fileType: string }> {
-  const body = await postSigned(cfg, fetchImpl, '/converter', { async: false, ...req }, timeoutMs);
-  const error = typeof body?.error === 'number' ? body.error : 0;
-  if (error === -8) throw new OnlyofficeError('secret-mismatch', SECRET_MISMATCH, -8);
-  if (error === -4) {
-    throw new OnlyofficeError('download-failed', `ONLYOFFICE couldn't download the file from ${new URL(req.url).origin}.`, -4);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const remaining = Math.max(1000, deadline - Date.now());
+    const body = await postSigned(cfg, fetchImpl, '/converter', { async: true, ...req }, Math.min(remaining, 30_000));
+    const error = typeof body?.error === 'number' ? body.error : 0;
+    if (error === -8) throw new OnlyofficeError('secret-mismatch', SECRET_MISMATCH, -8);
+    if (error === -4) {
+      throw new OnlyofficeError('download-failed', `ONLYOFFICE couldn't download the file from ${new URL(req.url).origin}.`, -4);
+    }
+    if (error !== 0) {
+      throw new OnlyofficeError('failed', CONVERT_ERRORS[error] ?? `ONLYOFFICE's conversion failed with error ${error}.`, error);
+    }
+    if (body?.endConvert === true) {
+      if (typeof body?.fileUrl !== 'string') throw new OnlyofficeError('failed', 'ONLYOFFICE finished the conversion but gave no link to the result.');
+      return { fileUrl: body.fileUrl, fileType: String(body.fileType || req.outputtype) };
+    }
+    if (Date.now() + pollMs > deadline) throw new OnlyofficeError('failed', CONVERT_ERRORS[-2], -2);
+    await sleep(pollMs);
   }
-  if (error !== 0) throw new OnlyofficeError('failed', `ONLYOFFICE's conversion failed with error ${error}.`, error);
-  if (body?.endConvert !== true || typeof body?.fileUrl !== 'string') {
-    throw new OnlyofficeError('failed', 'ONLYOFFICE did not finish the conversion.');
-  }
-  return { fileUrl: body.fileUrl, fileType: String(body.fileType || req.outputtype) };
 }
 
 /** Whether ONLYOFFICE still has an editing session open for this key (the

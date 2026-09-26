@@ -39,6 +39,8 @@ export interface OnlyofficeEditorDeps {
   fetch: typeof fetch;
   /** Shared with the history routes (restore). */
   sessions: EditorSessions;
+  /** Told after a save lands (e.g. to refresh the thumbnail). */
+  onSaved?: (fileId: string) => void;
   queue: FileQueue;
   waiters: ForcesaveWaiters;
 }
@@ -251,6 +253,7 @@ export function registerOnlyofficeEditorRoutes(app: express.Express, deps: Onlyo
     const after = getMeta(db, fileId)!;
     if (ours) sessions.recordSave(fileId, key, { versionNumber: after.versionNumber, sha256: after.sha256, by });
     deps.broadcastChange({ type: 'file', id: fileId, projectId: after.projectId ?? undefined, action: 'updated', byUserId: by ?? undefined });
+    deps.onSaved?.(fileId);
   }
 
   /** A late save from a session a restore replaced: kept as a new version

@@ -14,7 +14,7 @@ const ALWAYS_EXCLUDED_KINDS = ['plan', 'settings-asset', 'document-template', 'c
 // Billing-priced kinds — hidden from non-admins (spec §Decisions "Role
 // visibility"). change-order-photo and printout are deliberately NOT here:
 // they carry no dollar figures.
-export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'change-order', 'proposal', 'proposal-signed'] as const;
+export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'payapp-pdf', 'change-order', 'proposal', 'proposal-signed'] as const;
 
 // Generated documents that are nonetheless deletable. Everything else with a
 // sourceType is owned by a record you delete it at (an invoice, an issue, a
@@ -42,6 +42,7 @@ const KIND_LABELS: Record<string, string> = {
   'rfi-response': 'RFI Response',
   'task-photo': 'Task Photo',
   'payapp-export': 'Pay App Export',
+  'payapp-pdf': 'Pay App PDF',
   proposal: 'Proposal',
   'proposal-photo': 'Proposal Photo',
   'proposal-signed': 'Signed Proposal',

@@ -23,8 +23,9 @@ import { registerOnlyofficeEditorRoutes } from './editorRoutes';
 import { registerOnlyofficeHistoryRoutes } from './historyRoutes';
 import { registerOnlyofficeExtrasRoutes } from './extrasRoutes';
 import { EditorSessions, FileQueue, ForcesaveWaiters } from './sessions';
+import { createOnlyofficeServices, type OnlyofficeServices } from './services';
+import { registerOnlyofficeConversionRoutes } from './conversionRoutes';
 import { readOnlyofficeConfig, type OnlyofficeConfigProblem } from './config';
-import { LinkTokens } from './tokens';
 import { OnlyofficeError, convert, getVersion } from './client';
 
 export interface OnlyofficeRouteDeps {
@@ -39,6 +40,8 @@ export interface OnlyofficeRouteDeps {
   fetch?: typeof fetch;
   /** How long a restore waits for ONLYOFFICE to save the open file (tests shorten it). */
   forcesaveTimeoutMs?: number;
+  /** Shared with the upload route (server.ts); made here when not given. */
+  services?: OnlyofficeServices;
 }
 
 export type CheckStatus = 'ok' | 'failed' | 'skipped';
@@ -61,7 +64,10 @@ const selftestSubject = (id: string) => `selftest:${id}`;
 export function registerOnlyofficeRoutes(app: express.Express, deps: OnlyofficeRouteDeps): void {
   const { authenticateToken, requireAdmin } = deps;
   const fetchImpl = deps.fetch ?? globalThis.fetch;
-  const tokens = new LinkTokens(deps.appJwtSecret);
+  const services = deps.services ?? createOnlyofficeServices({
+    env: deps.env, appJwtSecret: deps.appJwtSecret, db: deps.db, dataDir: deps.dataDir, fetch: fetchImpl,
+  });
+  const tokens = services.tokens;
   // Test ids the Document Server actually downloaded, so a failed conversion
   // can still say whether it reached us. Entries live only for one check.
   const selftestHits = new Set<string>();
@@ -73,9 +79,13 @@ export function registerOnlyofficeRoutes(app: express.Express, deps: OnlyofficeR
     broadcastChange: deps.broadcastChange, fetch: fetchImpl,
     sessions: new EditorSessions(deps.db), queue: new FileQueue(), waiters: new ForcesaveWaiters(),
   };
-  registerOnlyofficeEditorRoutes(app, editor);
+  // A save changes the first page: queue a fresh thumbnail.
+  registerOnlyofficeEditorRoutes(app, { ...editor, onSaved: fileId => services.thumbnails.enqueue(fileId) });
   registerOnlyofficeHistoryRoutes(app, { ...editor, forcesaveTimeoutMs: deps.forcesaveTimeoutMs });
   registerOnlyofficeExtrasRoutes(app, editor);
+  registerOnlyofficeConversionRoutes(app, {
+    db: deps.db, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange, services,
+  });
 
   // Public by necessity (the Document Server has no user session), but only
   // with a two-minute token for this one test id, and it serves a fixed

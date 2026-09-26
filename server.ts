@@ -37,6 +37,7 @@ import { readDrive } from './server/backup/settings';
 import { BackupScheduler } from './server/backup/scheduler';
 import { registerOnlyofficeRoutes } from './server/onlyoffice/routes';
 import { removeUserSignatures } from './server/documentLibrary';
+import { createOnlyofficeServices } from './server/onlyoffice/services';
 import { CALLBACK_PATH_PREFIX as ONLYOFFICE_CALLBACK_PATH_PREFIX } from './server/onlyoffice/editorRoutes';
 
 dotenv.config();
@@ -227,6 +228,13 @@ async function startServer() {
     next();
   };
 
+  // ONLYOFFICE conversions and thumbnails, shared by the upload route and the
+  // editor routes (docs/onlyoffice-setup.md). Idle until ONLYOFFICE is set up.
+  const onlyofficeServices = createOnlyofficeServices({ env: process.env, appJwtSecret: JWT_SECRET, db, dataDir: DATA_DIR });
+  // Thumbnails of files that are gone or replaced: tidy once after start, then daily.
+  setTimeout(() => onlyofficeServices.thumbnails.sweep(), 5 * 60_000).unref();
+  setInterval(() => onlyofficeServices.thumbnails.sweep(), 24 * 3600_000).unref();
+
   registerDataRoutes(app, {
     db,
     dataDir: DATA_DIR,
@@ -235,6 +243,7 @@ async function startServer() {
     requireAdmin,
     verifyToken,
     broadcastChange,
+    onlyoffice: onlyofficeServices,
   });
 
   // The Playwright e2e harness logs in many times per run (per-worker session +
@@ -645,7 +654,7 @@ async function startServer() {
   // ONLYOFFICE document editor (docs/onlyoffice-setup.md).
   registerOnlyofficeRoutes(app, {
     env: process.env, appJwtSecret: JWT_SECRET, authenticateToken, requireAdmin,
-    db, dataDir: DATA_DIR, broadcastChange,
+    db, dataDir: DATA_DIR, broadcastChange, services: onlyofficeServices,
   });
 
   // Before the first sync tick: a reply that lands in that tick must still be

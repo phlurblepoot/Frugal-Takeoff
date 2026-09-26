@@ -11,6 +11,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { createProject, loadProject } from './projectStore';
 import { markRfiSent, setPendingReply, type RfiPendingReply } from './rfiStore';
+import { createPayApp } from './aiaStore';
 import { registerDataRoutes, registerEmailRoutes } from './routes';
 import { MailCrypto } from './mail/crypto';
 import * as accounts from './mail/accountStore';
@@ -1463,6 +1464,23 @@ describe('email send routes', () => {
     // and the thread is linked back to the invoice
     expect(db.prepare('SELECT itemType, itemId FROM mail_thread_links WHERE threadKey = ?').all(res.body.threadKey))
       .toEqual([{ itemType: 'invoice', itemId: id }]);
+  });
+
+  it('pay app send (ONLYOFFICE Phase 4): the workbook first, its PDF along, the thread linked to the pay app', async () => {
+    const { id, number } = createPayApp(db, 'p1', {});
+    await request(app).post(`/api/files/wb?projectId=p1&kind=payapp-export&sourceType=payapp&sourceId=${id}&name=${encodeURIComponent(`Pay App #${number} — G702.xlsx`)}`)
+      .set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(Buffer.from('XLSXBYTES'));
+    await request(app).post(`/api/files/pdf?projectId=p1&kind=payapp-pdf&sourceType=payapp&sourceId=${id}&name=${encodeURIComponent(`Pay App #${number} — G702.pdf`)}`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('PDFBYTES'));
+    const res = await request(emailApp).post(`/api/aia/pay-apps/${id}/send`).send({ to: 'gc@example.com', fileId: 'wb', attachmentFileIds: ['pdf'] });
+    expect(res.status).toBe(200);
+    const m = provider.sent[0];
+    expect(names(m.attachments)).toEqual([`Pay App #${number} — G702.xlsx`, `Pay App #${number} — G702.pdf`]);
+    expect(m.subject).toBe(`Application for Payment #${number} — Test Project`);
+    expect(db.prepare('SELECT itemType, itemId FROM mail_thread_links WHERE threadKey = ?').all(res.body.threadKey))
+      .toEqual([{ itemType: 'payApp', itemId: id }]);
+    expect((await request(buildEmailApp('member')).post(`/api/aia/pay-apps/${id}/send`).send({ to: 'x@y.z', fileId: 'wb' })).status).toBe(403);
+    expect((await request(emailApp).post('/api/aia/pay-apps/nope/send').send({ to: 'x@y.z', fileId: 'wb' })).status).toBe(404);
   });
 
   it('invoice send: blank cc/bcc parse to empty lists; falls back to default subject/body; single attachment', async () => {

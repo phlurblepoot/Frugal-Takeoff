@@ -567,8 +567,14 @@ container next to the app, and build the extras agreed below on top of it.
 
 ## Phase 4 — Conversions
 
-- [ ] Conversion API client (`/converter`, JWT, async polling) in
+- [x] Conversion API client (`/converter`, JWT, async polling) in
   `server/onlyoffice/`.
+  - `convert()` asks with `async: true` and re-sends the same request until
+    `endConvert`, within an overall time limit; ONLYOFFICE's error codes
+    become plain reasons (password-protected, too large, can't read it…).
+    Options: `region`, `spreadsheetLayout`, `thumbnail`.
+  - `services.ts` makes the conversion and thumbnail services once at startup
+    and shares them with the upload route and the editor routes.
 - [ ] **Old formats on upload** (.xls, .doc, .rtf, .odt, .ods, .pages,
   .numbers…):
   - the original is saved first

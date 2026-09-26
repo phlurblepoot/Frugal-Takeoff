@@ -134,7 +134,7 @@ describe('GET /api/onlyoffice/status', () => {
       const { iat: _b, ...fromBody } = c.bodyParams;
       expect(c.headerPayload).toEqual(fromBody);
     }
-    expect(calls[1].bodyParams).toMatchObject({ async: false, filetype: 'txt', outputtype: 'docx' });
+    expect(calls[1].bodyParams).toMatchObject({ async: true, filetype: 'txt', outputtype: 'docx' });
   });
 
   it('says the secrets differ when ONLYOFFICE rejects the signature, and skips the second check', async () => {

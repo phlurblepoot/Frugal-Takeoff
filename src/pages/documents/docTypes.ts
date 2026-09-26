@@ -37,6 +37,7 @@ const KIND_META: Record<string, KindMeta> = {
   'change-order':       { label: 'Change Order',       tone: 'amber' },
   'change-order-photo': { label: 'Change Order Photo', tone: 'amber' },
   'payapp-export':      { label: 'Pay App Export',     tone: 'emerald' },
+  'payapp-pdf':         { label: 'Pay App PDF',        tone: 'emerald' },
   'issue-report':       { label: 'Issue',              tone: 'red' },
   'issue-photo':        { label: 'Issue Photo',        tone: 'red' },
   'punch-report':       { label: 'Punch Report',       tone: 'orange' },

@@ -6,7 +6,7 @@ import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
   listProjectSummaries, patchProject, ValidationError, ConflictError, NotFoundError,
 } from './projectStore';
-import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile } from './files';
+import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile, isDirectUploadKind } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
 import { logActivity, listActivity } from './activity';
 import {
@@ -69,6 +69,7 @@ import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import { registerProposalRoutes } from './proposalRoutes';
 import { registerDocumentLibraryRoutes } from './documentLibraryRoutes';
 import { LIBRARY_KINDS, SIGNATURE_KIND, mayReadLibraryFile } from './documentLibrary';
+import type { OnlyofficeServices } from './onlyoffice/services';
 import { getProposal } from './proposalStore';
 import { send as mailSend, MailSendError, type SendRequest as MailSendRequest, type SendResult } from './mail/sendService';
 import { AuthExpiredError } from './mail/providers/types';
@@ -86,6 +87,8 @@ export interface RouteDeps {
   // headers). Returns the decoded user or null.
   verifyToken: (token: string) => unknown | null;
   broadcastChange: BroadcastChange;
+  /** ONLYOFFICE conversion and thumbnails (server/onlyoffice/services.ts). */
+  onlyoffice?: Pick<OnlyofficeServices, 'conversions' | 'thumbnails'>;
 }
 
 export function registerDataRoutes(app: express.Express, deps: RouteDeps): void {
@@ -1156,7 +1159,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     '/api/files/:id',
     express.raw({ limit: '100mb', type: () => true }),
     authenticateToken,
-    (req, res) => {
+    async (req, res) => {
       try {
         const body = req.body as Buffer;
         if (!Buffer.isBuffer(body) || body.length === 0) {
@@ -1182,11 +1185,20 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           sourceId: str(q.sourceId),
           createdBy: (req as any).user?.id,
         });
+        // An old or unusual format someone uploads (.doc, .xls, Pages…) is
+        // converted to .docx/.xlsx/.pptx, the upload kept as version 1
+        // (ONLYOFFICE Phase 4). Only people's own uploads: generated
+        // documents are already in the formats the app writes.
+        const conversion = !result.versioned && isDirectUploadKind(result.kind) && deps.onlyoffice
+          ? await deps.onlyoffice.conversions.convertUpload(result.id, (req as any).user?.id ?? null)
+          : null;
+        deps.onlyoffice?.thumbnails.enqueue(result.id);
+        const stored = conversion?.status === 'converted' ? getMeta(db, result.id) ?? result : result;
         deps.broadcastChange({
-          type: 'file', id: result.id, projectId: result.projectId ?? undefined,
+          type: 'file', id: result.id, projectId: stored.projectId ?? undefined,
           action: result.versioned ? 'updated' : 'created', ...requestMeta(req),
         });
-        res.json({ success: true, fileId: result.id, versioned: result.versioned });
+        res.json({ success: true, fileId: result.id, versioned: result.versioned, ...(conversion ? { conversion } : {}) });
       } catch (e) {
         console.error('Error saving file:', e);
         res.status(500).json({ error: 'Failed to save file' });
@@ -1970,6 +1982,23 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       primaryName: sanitizedJobName ? `DailyReport-${sanitizedJobName}-${report.reportDate}.pdf` : `DailyReport-${report.reportDate}.pdf`,
       defaultSubject: `Daily Report — ${report.reportDate}${report.jobName ? ` — ${report.jobName}` : ''}`,
       defaultBody: 'Please find the attached daily report.',
+    });
+    if (!r) return;
+    res.json({ success: true, ...r });
+  }));
+
+  // Send a pay application (admin only; ONLYOFFICE Phase 4). The primary
+  // attachment is the G702/G703 workbook; its PDF ("Make PDF") rides along as
+  // an extra attachment when the sender keeps it.
+  app.post('/api/aia/pay-apps/:id/send', authenticateToken, requireAdmin, sendRoute('pay application', async (req, res) => {
+    const payApp = getPayApp(db, req.params.id);
+    if (!payApp) { res.status(404).json({ error: 'Pay application not found' }); return; }
+    const project = loadProject(db, payApp.projectId);
+    const r = await sendItem(req, res, {
+      itemType: 'payApp', itemId: payApp.id,
+      primaryName: getMeta(db, (req.body as SendBody).fileId)?.name ?? `Pay App #${payApp.number}.xlsx`,
+      defaultSubject: `Application for Payment #${payApp.number} — ${project?.name ?? 'Project'}`,
+      defaultBody: 'Please find the attached application for payment.',
     });
     if (!r) return;
     res.json({ success: true, ...r });

@@ -44,8 +44,8 @@ export interface FileMeta {
   // signed-in user behind them (mail sync, migrations).
   createdBy: string | null;
   // How this version's bytes came to be (migration 38): 'editor' for an
-  // ONLYOFFICE save, 'restore' for a restored older version, null for an
-  // upload or a generate.
+  // ONLYOFFICE save, 'restore' for a restored older version, 'convert' for an
+  // old format converted on upload, null for an upload or a generate.
   versionOrigin: string | null;
 }
 
@@ -57,7 +57,7 @@ export const SYSTEM_KINDS = [
   'invoice', 'invoice-photo', 'change-order', 'change-order-photo', 'issue-report',
   'issue-photo', 'punch-report', 'punch-photo', 'rfi', 'rfi-photo',
   'rfi-response', 'task-photo', 'payapp-export', 'email-attachment',
-  'settings-asset', 'daily-report', 'daily-report-photo',
+  'settings-asset', 'daily-report', 'daily-report-photo', 'payapp-pdf',
   // The document library (server/documentLibrary.ts, ONLYOFFICE Phase 3).
   'document-template', 'company-stamp', 'signature',
 ] as const;
@@ -102,7 +102,7 @@ export interface PutOpts {
   createdBy?: string;
 }
 
-export type VersionOrigin = 'editor' | 'restore';
+export type VersionOrigin = 'editor' | 'restore' | 'convert';
 
 // files.createdBy (migration 37) and files.versionOrigin (38) arrive late, but
 // older migrations (e.g. images-to-disk) write files through this module
