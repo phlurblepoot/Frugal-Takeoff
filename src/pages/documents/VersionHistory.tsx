@@ -25,7 +25,7 @@ export const versionFileName = (name: string, version: number): string => {
   return dot > 0 ? `${name.slice(0, dot)} (v${version})${name.slice(dot)}` : `${name} (v${version})`;
 };
 
-const ORIGIN_LABEL: Record<string, string> = { editor: 'edited', restore: 'restored' };
+const ORIGIN_LABEL: Record<string, string> = { editor: 'edited', restore: 'restored', convert: 'converted' };
 
 const actionCls = 'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-accent-600 hover:bg-hover hover:underline disabled:opacity-50 dark:text-accent-400';
 

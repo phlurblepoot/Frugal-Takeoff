@@ -586,8 +586,9 @@ container next to the app, and build the extras agreed below on top of it.
     uploads only (not generated documents). Presentations (.ppt, .odp,
     Keynote) become .pptx too. The list lives in `src/utils/officeFormats.ts`
     so "Open from computer" accepts those files as well.
-  - The version history tags the converted version "converted"
-    (`versionOrigin = 'convert'`). The upload shows a notice either way:
+  - The converted version is stamped `versionOrigin = 'convert'`; the
+    Documents version list tags it "converted" once a later version sits on
+    top of it. The upload shows a notice either way:
     "converted, the original is kept as version 1", or "Kept as .xls: <why>"
     (including when the editor isn't set up).
 - [x] **AIA pay app "Make PDF" button**:
