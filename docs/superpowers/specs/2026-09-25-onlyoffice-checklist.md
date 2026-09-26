@@ -504,11 +504,22 @@ container next to the app, and build the extras agreed below on top of it.
   fails to upload stays for the next try.)
 - [x] Company stamps: managed in the Document Templates tab (admins upload, with
   the same background removal). Everyone can insert them.
-- [ ] Editor **Insert → Image → From storage** (`onRequestInsertImage`) opens a
+- [x] Editor **Insert → Image → From storage** (`onRequestInsertImage`) opens a
   picker with: My signatures (default first), Company stamps, Project photos,
   and other images in Documents. It inserts through signed URLs.
-- [ ] **Save copy to project** (`onRequestSaveAs`): the copy (e.g. a PDF of a
+  - `POST /api/onlyoffice/insert-image/:fileId` checks each pick (someone
+    else's signature reads as missing; admin-only kinds for admins) and signs
+    the `insertImage` data with link-token URLs ONLYOFFICE downloads over the
+    Docker network. WebP/HEIC are skipped with a message (the editor takes
+    PNG, JPEG, GIF, BMP, TIFF). Offered only where the file opens for editing.
+  - "Photos and images in Documents…" is the shared file picker (images only),
+    starting on the document's project; clearing the filter reaches the rest.
+- [x] **Save copy to project** (`onRequestSaveAs`): the copy (e.g. a PDF of a
   Word letter) is saved as a new file in the same project's Documents.
+  - `POST /api/onlyoffice/save-copy/:fileId` only downloads links on
+    ONLYOFFICE's own public or internal address (no fetching arbitrary URLs
+    for the browser). Same project and customer; a spreadsheet copy is a
+    spreadsheet; a company document's copy stays a company document.
 - [ ] Check ONLYOFFICE's own signature fields work (no code expected).
 - [ ] Tests: new-document route, template kinds hidden from project lists,
   signature CRUD and permissions.

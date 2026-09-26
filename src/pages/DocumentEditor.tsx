@@ -18,13 +18,15 @@ import { useToast } from '../components/Toast';
 import { useTheme } from '../context/ThemeContext';
 import {
   EditorOpenError, RestoreError, fetchFileBlob, forgetRecentDocument, getEditorHistory, getEditorHistoryData,
-  getFileMeta, getRecentDocuments, openInEditor, recordRecentDocument, restoreFileVersion, type RecentDocument,
+  getFileMeta, getInsertImageData, getRecentDocuments, openInEditor, recordRecentDocument, restoreFileVersion,
+  saveEditorCopy, type RecentDocument,
 } from '../utils/store';
 import { downloadBlob } from '../utils/download';
 import { loadDocsApi, type DocsEditorInstance } from '../utils/onlyofficeApi';
 import { officeFormatByExt } from '../utils/officeFormats';
 import { MimeIcon } from './documents/MimeIcon';
 import { OpenFromComputerModal } from './documentEditor/OpenFromComputerModal';
+import { InsertImagePicker } from './documentEditor/InsertImagePicker';
 
 const editorUrl = (fileId: string) => `/tools/edit?fileId=${encodeURIComponent(fileId)}`;
 const isAdmin = () => {
@@ -92,6 +94,26 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
   const [generation, setGeneration] = useState(0);
   const toastRef = useRef(toast);
   toastRef.current = toast;
+  // The running editor, for the add-ons below that answer it later.
+  const editorRef = useRef<DocsEditorInstance | null>(null);
+  // Insert → Image → From storage: which insertion ONLYOFFICE asked for, while
+  // the picker is open; and the project the document is filed in.
+  const [inserting, setInserting] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
+
+  const insertImages = async (fileIds: string[]) => {
+    const c = inserting ?? 'add';
+    setInserting(null);
+    try {
+      const data = await getInsertImageData(fileId, c, fileIds);
+      editorRef.current?.insertImage?.({ c: data.c, images: data.images, token: data.token });
+      if (data.skipped.length) {
+        toast(`Not inserted (the editor takes PNG, JPEG, GIF, BMP or TIFF): ${data.skipped.join(', ')}`, { type: 'warning' });
+      }
+    } catch (e) {
+      toast(e instanceof Error && e.message ? e.message : "Couldn't insert the image", { type: 'error' });
+    }
+  };
 
   // Read once at open: ONLYOFFICE takes its theme when it starts, and
   // rebuilding the editor on a theme toggle would interrupt the person typing.
@@ -132,6 +154,8 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
         placeholder.id = `oo-editor-${++placeholderSeq}`;
         host.appendChild(placeholder);
         const canRestore = opening.file.mode === 'edit';
+        const editing = opening.file.mode === 'edit';
+        setProjectId(opening.file.projectId ?? null);
         const restart = () => { if (!cancelled) setGeneration(g => g + 1); };
         editor = new window.DocsAPI.DocEditor(placeholder.id, {
           ...opening.config,
@@ -170,8 +194,24 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
                 if (!cancelled) editor?.refreshHistory?.(history);
               },
             } : {}),
+            // Insert → Image → From storage (declaring it shows the button).
+            ...(editing ? {
+              onRequestInsertImage: (event: { data?: { c?: string } }) => {
+                if (!cancelled) setInserting(event.data?.c || 'add');
+              },
+            } : {}),
+            // File → Save Copy as: file the converted copy in the project.
+            onRequestSaveAs: async (event: { data: { url: string; title: string; fileType: string } }) => {
+              try {
+                const saved = await saveEditorCopy(fileId, event.data);
+                toastRef.current(`Saved "${saved.name}" to ${saved.projectId ? "the project's" : 'company'} Documents`, { type: 'success' });
+              } catch (e) {
+                toastRef.current(e instanceof Error && e.message ? e.message : "Couldn't save the copy", { type: 'error' });
+              }
+            },
           },
         });
+        editorRef.current = editor;
         recordRecentDocument({
           id: opening.file.id,
           name: opening.file.name || 'Document',
@@ -191,6 +231,7 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
 
     return () => {
       cancelled = true;
+      if (editorRef.current === editor) editorRef.current = null;
       try { editor?.destroyEditor?.(); } catch { /* already gone */ }
       if (host) host.replaceChildren();
     };
@@ -205,6 +246,12 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
         </div>
       )}
       {state.phase === 'error' && <OpenError fileId={fileId} state={state} onBack={close} />}
+      <InsertImagePicker
+        open={inserting !== null}
+        onClose={() => setInserting(null)}
+        projectId={projectId}
+        onPick={ids => { void insertImages(ids); }}
+      />
     </div>
   );
 };

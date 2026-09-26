@@ -14,6 +14,7 @@ import { ToastProvider } from '../components/Toast';
 const h = vi.hoisted(() => ({
   openInEditor: vi.fn(), loadDocsApi: vi.fn(), theme: 'light' as 'light' | 'dark',
   getEditorHistory: vi.fn(), getEditorHistoryData: vi.fn(), restoreFileVersion: vi.fn(),
+  getInsertImageData: vi.fn(), saveEditorCopy: vi.fn(), listSignatures: vi.fn(), listCompanyStamps: vi.fn(), fetchFileBlob: vi.fn(),
 }));
 vi.mock('../utils/store', async (orig) => ({
   ...(await orig<typeof import('../utils/store')>()),
@@ -21,6 +22,11 @@ vi.mock('../utils/store', async (orig) => ({
   getEditorHistory: h.getEditorHistory,
   getEditorHistoryData: h.getEditorHistoryData,
   restoreFileVersion: h.restoreFileVersion,
+  getInsertImageData: h.getInsertImageData,
+  saveEditorCopy: h.saveEditorCopy,
+  listSignatures: h.listSignatures,
+  listCompanyStamps: h.listCompanyStamps,
+  fetchFileBlob: h.fetchFileBlob,
 }));
 vi.mock('../utils/onlyofficeApi', () => ({ loadDocsApi: h.loadDocsApi }));
 vi.mock('../context/ThemeContext', () => ({ useTheme: () => ({ mode: h.theme }) }));
@@ -66,6 +72,7 @@ beforeEach(() => {
       this.destroyEditor = () => { destroyed++; };
       this.refreshHistory = vi.fn();
       this.setHistoryData = vi.fn();
+      this.insertImage = vi.fn();
     } as any,
   };
 });
@@ -247,5 +254,59 @@ describe('DocumentEditor — version history', () => {
     const ev = await events();
     expect(ev.onRequestRestore).toBeUndefined();
     expect(typeof ev.onRequestHistory).toBe('function');
+  });
+});
+
+describe('DocumentEditor — insert images and save copies', () => {
+  const events = async () => {
+    await waitFor(() => expect(constructed).toHaveLength(1));
+    return constructed[0].config.events;
+  };
+
+  beforeEach(() => {
+    h.listSignatures.mockResolvedValue([
+      { id: 's-full', name: 'Full', isDefault: false, mime: 'image/png', size: 1, createdAt: 1, createdBy: 'u1' },
+      { id: 's-init', name: 'Initials', isDefault: true, mime: 'image/png', size: 1, createdAt: 2, createdBy: 'u1' },
+    ]);
+    h.listCompanyStamps.mockResolvedValue([{ id: 'st1', name: 'APPROVED', mime: 'image/png', size: 1, createdAt: 1, createdBy: null }]);
+    h.fetchFileBlob.mockResolvedValue(new Blob(['png']));
+    h.getInsertImageData.mockResolvedValue({ c: 'add', images: [{ fileType: 'png', url: 'http://app/x' }], token: 'signed', skipped: [] });
+    h.saveEditorCopy.mockResolvedValue({ fileId: 'copy1', name: 'Scope.pdf', projectId: 'p1' });
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:x');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  it('opens the picker, default signature first, and inserts through signed links', async () => {
+    mount();
+    (await events()).onRequestInsertImage({ data: { c: 'change' } });
+    const tiles = await screen.findAllByTestId('insert-signature');
+    expect(tiles.map(t => t.textContent)).toEqual(['Initials· default', 'Full']);
+    fireEvent.click(tiles[0]);
+    await waitFor(() => expect(h.getInsertImageData).toHaveBeenCalledWith('f1', 'change', ['s-init']));
+    expect(constructed[0].instance.insertImage).toHaveBeenCalledWith({ c: 'add', images: [{ fileType: 'png', url: 'http://app/x' }], token: 'signed' });
+    await waitFor(() => expect(screen.queryByTestId('insert-image-picker')).toBeNull());
+  });
+
+  it('inserts a company stamp, and says which picks the editor could not take', async () => {
+    h.getInsertImageData.mockResolvedValue({ c: 'add', images: [{ fileType: 'png', url: 'u' }], token: 't', skipped: ['phone.webp'] });
+    mount();
+    (await events()).onRequestInsertImage({ data: { c: 'add' } });
+    fireEvent.click(await screen.findByRole('tab', { name: /Company stamps/ }));
+    fireEvent.click(await screen.findByTestId('insert-stamp'));
+    await waitFor(() => expect(h.getInsertImageData).toHaveBeenCalledWith('f1', 'add', ['st1']));
+    expect(await screen.findByText(/Not inserted.*phone\.webp/)).toBeInTheDocument();
+  });
+
+  it('offers no image insert where the file only opens for viewing', async () => {
+    h.openInEditor.mockResolvedValue(opening({ file: { ...opening().file, mode: 'view' } }));
+    mount();
+    expect((await events()).onRequestInsertImage).toBeUndefined();
+  });
+
+  it('files a Save Copy as in the project', async () => {
+    mount();
+    await (await events()).onRequestSaveAs({ data: { url: 'https://docs.example.com/cache/x.pdf', title: 'Scope.pdf', fileType: 'pdf' } });
+    expect(h.saveEditorCopy).toHaveBeenCalledWith('f1', { url: 'https://docs.example.com/cache/x.pdf', title: 'Scope.pdf', fileType: 'pdf' });
+    expect(await screen.findByText('Saved "Scope.pdf" to the project\'s Documents')).toBeInTheDocument();
   });
 });

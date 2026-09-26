@@ -2,7 +2,7 @@
 // behind Settings → Document Editor (here, with the one-off test file the
 // Document Server downloads during it), and the editor itself: opening files
 // and saving them back (editorRoutes.ts), version history and restore
-// (historyRoutes.ts).
+// (historyRoutes.ts), inserting images and saving copies (extrasRoutes.ts).
 //
 // The check proves both directions, because either can be broken on its own:
 //   1. this app → ONLYOFFICE: the command service's `version` call. It fails
@@ -21,6 +21,7 @@ import type Database from 'better-sqlite3';
 import type { BroadcastChange } from '../realtime/changeFeed';
 import { registerOnlyofficeEditorRoutes } from './editorRoutes';
 import { registerOnlyofficeHistoryRoutes } from './historyRoutes';
+import { registerOnlyofficeExtrasRoutes } from './extrasRoutes';
 import { EditorSessions, FileQueue, ForcesaveWaiters } from './sessions';
 import { readOnlyofficeConfig, type OnlyofficeConfigProblem } from './config';
 import { LinkTokens } from './tokens';
@@ -74,6 +75,7 @@ export function registerOnlyofficeRoutes(app: express.Express, deps: OnlyofficeR
   };
   registerOnlyofficeEditorRoutes(app, editor);
   registerOnlyofficeHistoryRoutes(app, { ...editor, forcesaveTimeoutMs: deps.forcesaveTimeoutMs });
+  registerOnlyofficeExtrasRoutes(app, editor);
 
   // Public by necessity (the Document Server has no user session), but only
   // with a two-minute token for this one test id, and it serves a fixed

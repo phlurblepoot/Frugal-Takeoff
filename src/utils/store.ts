@@ -809,6 +809,33 @@ export const updateSignature = (id: string, patch: { name?: string; isDefault?: 
 export const deleteSignature = (id: string): Promise<void> =>
   jsonRequest(`/api/signatures/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
+/** Signed data for the editor's insertImage (Insert → Image → From storage).
+ *  `skipped` names picked images the editor can't insert (e.g. WebP). */
+export const getInsertImageData = async (
+  fileId: string, c: string, fileIds: string[],
+): Promise<{ c: string; images: { fileType: string; url: string }[]; token: string; skipped: string[] }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/insert-image/${encodeURIComponent(fileId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ c, fileIds }),
+  });
+  await handleResponse(res);
+  return res.json();
+};
+
+/** Files a copy ONLYOFFICE made (File → Save Copy as) in the document's project. */
+export const saveEditorCopy = async (
+  fileId: string, copy: { url: string; title: string; fileType: string },
+): Promise<{ fileId: string; name: string; projectId: string | null }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/save-copy/${encodeURIComponent(fileId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(copy),
+  }, { timeoutMs: 120_000 });
+  await handleResponse(res);
+  return res.json();
+};
+
 // Recently opened documents (client-only, newest first) — the editor's
 // landing list. Same shape and idiom as recent projects above.
 export interface RecentDocument { id: string; name: string; mime: string; at: number }

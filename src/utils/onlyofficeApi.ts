@@ -11,6 +11,7 @@ export interface DocsEditorInstance {
   destroyEditor?: () => void;
   refreshHistory?: (data: unknown) => void;
   setHistoryData?: (data: unknown) => void;
+  insertImage?: (data: unknown) => void;
 }
 
 declare global {
