@@ -202,6 +202,61 @@ describe('storage + search + orphans', () => {
     expect((await request(app).get('/api/files/tphoto1/meta')).status).toBe(200);
   });
 
+  // What survives a cleanup, checked the way the button does it: count, clean
+  // up, then look for each file.
+  const survivors = async (ids: string[]) => {
+    await request(app).post('/api/storage/orphans/cleanup');
+    const alive: string[] = [];
+    for (const id of ids) if ((await request(app).get(`/api/files/${id}/meta`)).status === 200) alive.push(id);
+    return alive;
+  };
+  const PNG = 'data:image/png;base64,' + Buffer.from('x').toString('base64');
+
+  it('orphan cleanup spares company, customer and loose documents the Documents page lists', async () => {
+    // None has a project or anything pointing at it: each is still someone's
+    // document, which they can see (and delete) on the Documents page.
+    const cust = await request(app).post('/api/customers').send({ name: 'Acme GC' });
+    const upload = (id: string, q: string) => request(app).post(`/api/files/${id}?${q}`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from(id));
+    await upload('company1', 'kind=company-document&name=Insurance.pdf');
+    await upload('cust1', `kind=document&customerId=${cust.body.id}&name=W9.pdf`);
+    await upload('loose1', 'kind=document&name=Notes.pdf');
+    await upload('archived1', 'kind=other&name=Old.pdf');
+    await request(app).patch('/api/files/archived1').send({ archived: true });
+
+    expect((await request(app).get('/api/storage/orphans')).body.count).toBe(0);
+    expect(await survivors(['company1', 'cust1', 'loose1', 'archived1'])).toEqual(['company1', 'cust1', 'loose1', 'archived1']);
+  });
+
+  it('orphan cleanup spares the AIA template, but not one it replaced', async () => {
+    const upload = (id: string) => request(app).post(`/api/files/${id}?kind=settings-asset&name=AIA.xlsx`)
+      .set('Content-Type', 'application/octet-stream').send(Buffer.from(id));
+    await upload('aia-old');
+    await upload('aia-new');
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('aiaTemplateFileId', 'aia-new')").run();
+
+    expect((await request(app).get('/api/storage/orphans')).body.count).toBe(1);
+    expect(await survivors(['aia-old', 'aia-new'])).toEqual(['aia-new']);
+  });
+
+  it('orphan cleanup spares files only an attachment or photo table names', async () => {
+    // Unnamed and project-less, so hidden from Documents: only the join rows
+    // vouch for them.
+    for (const id of ['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'loose-img']) {
+      await request(app).post('/api/images').send({ id, data: PNG });
+    }
+    const link = (table: string, owner: string, fileId: string) =>
+      db.prepare(`INSERT INTO ${table} (id, ${owner}, fileId, sortOrder, createdAt) VALUES (?, 'x1', ?, 0, 1)`).run(`${table}-${fileId}`, fileId);
+    link('invoice_attachments', 'invoiceId', 'inv-att');
+    link('invoice_photos', 'invoiceId', 'inv-photo');
+    link('proposal_attachments', 'proposalId', 'prop-att');
+    link('proposal_photos', 'proposalId', 'prop-photo');
+
+    expect((await request(app).get('/api/storage/orphans')).body.count).toBe(1);
+    expect(await survivors(['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'loose-img']))
+      .toEqual(['inv-att', 'inv-photo', 'prop-att', 'prop-photo']);
+  });
+
   it('search finds projects, pages, and takeoffs from normalized tables', async () => {
     await request(app).post('/api/projects').send({
       ...PROJECT,

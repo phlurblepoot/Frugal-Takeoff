@@ -120,6 +120,29 @@ interface RawRow {
 
 const inClause = (n: number) => Array(n).fill('?').join(',');
 
+// Page assets can never appear (spec §Decisions "Page assets can never
+// appear"): live EXISTS against pages.imageId/thumbnailId, so it's
+// label-independent and self-healing — it hides a row even if it was uploaded
+// before `kind='plan'` attribution existed, or under some other kind entirely.
+const PAGE_ASSET_SQL = 'EXISTS (SELECT 1 FROM pages pg WHERE pg.imageId = f.id OR pg.thumbnailId = f.id)';
+// The hidden "unassigned" class (spec 2026-08-17-documents-clutter-design.md):
+// no project and no name, so nothing labels it.
+const UNASSIGNED_SQL = 'f.projectId IS NULL AND f.name IS NULL';
+
+/** Every live file the Documents page lists to an admin, archived ones
+ *  included (not the unassigned class). Each is someone's document, which
+ *  they can see and delete there, so storage cleanup never takes one as an
+ *  orphan: company and customer documents and loose uploads belong to no
+ *  project and nothing else points at them. */
+export function listedDocumentIds(db: Database.Database): string[] {
+  const rows = db.prepare(`
+    SELECT f.id FROM files f
+    WHERE f.parentFileId IS NULL AND f.kind NOT IN (${inClause(ALWAYS_EXCLUDED_KINDS.length)})
+      AND NOT ${PAGE_ASSET_SQL} AND NOT (${UNASSIGNED_SQL})
+  `).all(...ALWAYS_EXCLUDED_KINDS) as { id: string }[];
+  return rows.map(r => r.id);
+}
+
 export function listDocuments(
   db: Database.Database,
   filters: DocumentFilters,
@@ -129,12 +152,7 @@ export function listDocuments(
   const where: string[] = [
     'f.parentFileId IS NULL',
     `f.kind NOT IN (${inClause(excluded.length)})`,
-    // Page assets can never appear (spec §Decisions "Page assets can never
-    // appear"): live NOT-EXISTS against pages.imageId/thumbnailId, so it's
-    // label-independent and self-healing — it hides a row even if it was
-    // uploaded before `kind='plan'` attribution existed, or under some other
-    // kind entirely.
-    'NOT EXISTS (SELECT 1 FROM pages pg WHERE pg.imageId = f.id OR pg.thumbnailId = f.id)',
+    `NOT ${PAGE_ASSET_SQL}`,
   ];
   const params: unknown[] = [...excluded];
 
@@ -143,9 +161,9 @@ export function listDocuments(
   // this can never leak to a non-admin regardless of what the route passes.
   const unassignedView = isAdmin && !!filters.unassigned;
   if (unassignedView) {
-    where.push('f.projectId IS NULL AND f.name IS NULL');
+    where.push(UNASSIGNED_SQL);
   } else {
-    where.push('NOT (f.projectId IS NULL AND f.name IS NULL)');
+    where.push(`NOT (${UNASSIGNED_SQL})`);
     where.push(filters.archived ? 'f.archived = 1' : 'f.archived = 0');
   }
 
