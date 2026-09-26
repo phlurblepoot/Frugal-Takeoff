@@ -520,9 +520,48 @@ container next to the app, and build the extras agreed below on top of it.
     ONLYOFFICE's own public or internal address (no fetching arbitrary URLs
     for the browser). Same project and customer; a spreadsheet copy is a
     spreadsheet; a company document's copy stays a company document.
-- [ ] Check ONLYOFFICE's own signature fields work (no code expected).
-- [ ] Tests: new-document route, template kinds hidden from project lists,
+- [ ] **(Nathan)** Check ONLYOFFICE's own signature fields work (no code
+  expected): in a new PDF form, add a signature field and sign it.
+- [x] Tests: new-document route, template kinds hidden from project lists,
   signature CRUD and permissions.
+  - `server/documentLibrary.test.ts` (15): blanks for all three types (bytes
+    equal the bundled files), from a template (latest version, type must
+    match, missing template), project required except company documents,
+    kind rules, defaults; template add/rename (extension kept)/delete with
+    versions, admin-only, format check, letterhead once, hidden from
+    Documents, kept by orphan cleanup; stamps admin-only, images only;
+    signatures several/named/default/fallback, private (list, change, bytes,
+    and the login-free image route), removed with their user
+  - `extrasRoutes.test.ts` (10): signed insert links that serve the image,
+    someone else's signature refused, WebP skipped, command kept, not set
+    up, admin-only documents; save copy filed with project/customer,
+    spreadsheet and company-document copies, non-ONLYOFFICE links refused
+    without fetching, failed download and unknown format save nothing
+  - `editorRoutes.test.ts`: templates open in the editor for admins only
+  - client: `NewDocumentModal` (5), `DocumentTemplatesTab` (6),
+    `MySignatures` (4, with the old-editor import), `InsertImagePicker` (2),
+    `DocumentEditor` +4 (picker with the default first, stamps, skipped
+    images, view-only has no insert, save copy), `CommandPalette` +2,
+    `dataUrlToBlob`
+  - e2e `e2e/document-library.spec.ts` (5): New document → editor with the
+    file filed right; palette → dialog on the type with the project
+    preselected; letterhead once, upload, rename, start from a template (bytes
+    copied); a stamp with its cleared preview; old-editor signature import,
+    add, make default
+  - smoke against the real server and a stand-in Document Server over HTTP
+    (15 checks): letterhead → new document → ONLYOFFICE downloads it; a blank
+    PDF form is a PDF; the signature isn't on the login-free route; the stand-in
+    downloaded both signed image links; Save Copy as filed the converted PDF
+    in the project; a non-ONLYOFFICE copy link refused; Documents shows the new
+    files and not the library; orphan cleanup counts nothing
+- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  - Documents → New document: a Word, an Excel and a PDF form, blank and from
+    a template; each opens in the editor and saves
+  - Settings → Document Templates: add the letterhead, open it in the editor,
+    change it, then start a new document from it
+  - add a company stamp and two signatures (one default); in the editor,
+    Insert → Image → From storage inserts each, and a project photo
+  - File → Save Copy as → PDF lands in the project's Documents
 
 ## Phase 4 — Conversions
 
