@@ -36,6 +36,7 @@ import { createDriveStore } from './server/backup/drive';
 import { readDrive } from './server/backup/settings';
 import { BackupScheduler } from './server/backup/scheduler';
 import { registerOnlyofficeRoutes } from './server/onlyoffice/routes';
+import { removeUserSignatures } from './server/documentLibrary';
 import { CALLBACK_PATH_PREFIX as ONLYOFFICE_CALLBACK_PATH_PREFIX } from './server/onlyoffice/editorRoutes';
 
 dotenv.config();
@@ -377,6 +378,7 @@ async function startServer() {
       
       db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
       db.prepare('DELETE FROM user_preferences WHERE userId = ?').run(req.params.id);
+      removeUserSignatures(db, DATA_DIR, req.params.id);
       broadcastChange({ type: 'user', id: req.params.id, action: 'deleted', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {

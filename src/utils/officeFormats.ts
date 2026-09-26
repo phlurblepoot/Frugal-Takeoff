@@ -63,3 +63,14 @@ export function officeFormatOf(file: { mime?: string | null; name?: string | nul
   const mime = (file.mime ?? '').split(';')[0].trim().toLowerCase();
   return byMime.get(mime) ?? officeFormatByExt(MIME_ALIASES[mime]) ?? null;
 }
+
+/** What "New document" can make (decision 2026-09-25: Word, Excel and PDF
+ *  form; no PowerPoint). Shared by the dialog and POST /api/documents/new. */
+export const NEW_DOCUMENT_TYPES = [
+  { ext: 'docx', label: 'Word document', short: 'Word' },
+  { ext: 'xlsx', label: 'Excel spreadsheet', short: 'Excel' },
+  { ext: 'pdf', label: 'PDF form', short: 'PDF form' },
+] as const;
+export type NewDocumentType = (typeof NEW_DOCUMENT_TYPES)[number]['ext'];
+export const isNewDocumentType = (v: unknown): v is NewDocumentType =>
+  NEW_DOCUMENT_TYPES.some(t => t.ext === v);

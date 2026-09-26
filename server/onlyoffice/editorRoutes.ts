@@ -19,6 +19,7 @@ import type Database from 'better-sqlite3';
 import { getMeta, replaceLiveContent, saveNewVersion, type FileMeta } from '../files';
 import { pathFor, statFile } from '../fileStore';
 import { NON_ADMIN_EXCLUDED_KINDS } from '../documents';
+import { TEMPLATE_KIND } from '../documentLibrary';
 import type { BroadcastChange } from '../realtime/changeFeed';
 import { extensionOf, officeFormatByExt, officeFormatOf } from '../../src/utils/officeFormats';
 import { readOnlyofficeConfig, type OnlyofficeConfig } from './config';
@@ -49,7 +50,10 @@ const callbackParser = express.json({ limit: '10mb' });
 
 export const NOT_CONFIGURED = "The document editor isn't set up yet. An admin can check Settings → Document Editor.";
 
-export const isAdminOnlyKind = (kind: string) => (NON_ADMIN_EXCLUDED_KINDS as readonly string[]).includes(kind);
+// Billing documents, and the templates admins manage in Settings (anyone can
+// start a document from a template; only admins change the template itself).
+export const isAdminOnlyKind = (kind: string) =>
+  (NON_ADMIN_EXCLUDED_KINDS as readonly string[]).includes(kind) || kind === TEMPLATE_KIND;
 
 const callbackUsers = (payload: Record<string, any>): string[] =>
   Array.isArray(payload.users) ? payload.users.filter((u: unknown): u is string => typeof u === 'string' && u.length <= 128) : [];

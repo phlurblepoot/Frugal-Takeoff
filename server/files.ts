@@ -58,6 +58,8 @@ export const SYSTEM_KINDS = [
   'issue-photo', 'punch-report', 'punch-photo', 'rfi', 'rfi-photo',
   'rfi-response', 'task-photo', 'payapp-export', 'email-attachment',
   'settings-asset', 'daily-report', 'daily-report-photo',
+  // The document library (server/documentLibrary.ts, ONLYOFFICE Phase 3).
+  'document-template', 'company-stamp', 'signature',
 ] as const;
 
 // Kinds an entity legitimately holds MANY of: one issue has a dozen photos,

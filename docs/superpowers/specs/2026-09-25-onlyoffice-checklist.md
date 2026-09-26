@@ -443,7 +443,8 @@ container next to the app, and build the extras agreed below on top of it.
     v3 and restored v1 as v4; the old session's late close was dropped; the
     next open got a fresh key; blocked while someone else edits; delete v2;
     the live version can't be deleted
-- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  (Nathan, 2026-09-26: "tested it all, everything works")
   - edit a document, close it, then File → Version History: the versions show
     with names, and the edited one highlights its changes
   - restore an older version from the editor, and from the Documents page
@@ -454,10 +455,20 @@ container next to the app, and build the extras agreed below on top of it.
 
 ## Phase 3 — New documents, templates, signatures and stamps
 
-- [ ] Bundle ONLYOFFICE's blank `new.docx`, `new.xlsx` and `new.pdf` (form)
+- [x] Bundle ONLYOFFICE's blank `new.docx`, `new.xlsx` and `new.pdf` (form)
   from `ONLYOFFICE/document-templates` (Apache-2.0; keep the license notice).
-- [ ] `POST /api/documents/new`: blank or template, name, projectId, kind. It
+  - The en-US files (Letter paper), unchanged, in
+    `server/documentLibrary/blank/` with `LICENSE` and a `NOTICE.md` naming
+    the source commit.
+- [x] `POST /api/documents/new`: blank or template, name, projectId, kind. It
   copies into storage with `createdBy` and returns the fileId.
+  - `server/documentLibrary.ts` + `documentLibraryRoutes.ts`. The project is
+    required except for company documents; the kind must be an upload kind
+    (not photo); a template must match the type; the name gets its extension.
+  - Templates, company stamps and signatures are ordinary files with three
+    new system kinds (`document-template`, `company-stamp`, `signature`):
+    hidden from Documents, kept by the Storage orphan cleanup, versions and
+    backups work unchanged. Templates open in the editor for admins only.
 - [ ] "New document" dialog:
   - type: Word / Excel / PDF form
   - start from: Blank or a template of that type

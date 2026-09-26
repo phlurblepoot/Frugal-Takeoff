@@ -6,8 +6,10 @@
 import type Database from 'better-sqlite3';
 import { getMeta, setFileFlags, removeFile, listVersions, isDirectUploadKind, isContainerSourceType, FileMeta } from './files';
 
-// Always hidden regardless of role: per-page plan assets and the AIA template.
-const ALWAYS_EXCLUDED_KINDS = ['plan', 'settings-asset'] as const;
+// Always hidden regardless of role: per-page plan assets, the AIA template,
+// and the document library (templates, company stamps and signatures live in
+// Settings, not in Documents; ONLYOFFICE Phase 3).
+const ALWAYS_EXCLUDED_KINDS = ['plan', 'settings-asset', 'document-template', 'company-stamp', 'signature'] as const;
 
 // Billing-priced kinds — hidden from non-admins (spec §Decisions "Role
 // visibility"). change-order-photo and printout are deliberately NOT here:

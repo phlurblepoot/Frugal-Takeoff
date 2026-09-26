@@ -199,6 +199,10 @@ describe('POST /api/onlyoffice/config/:fileId', () => {
     putBuffer(db, dataDir, 'inv', Buffer.from('%PDF'), 'application/pdf', { name: 'Invoice.pdf', kind: 'invoice' });
     expect((await openConfig('inv', {}, mkApp('user'))).status).toBe(404);
     expect((await openConfig('inv', {}, mkApp('admin'))).status).toBe(200);
+    // Templates are admins' to change (Settings → Document Templates).
+    putBuffer(db, dataDir, 'tpl', Buffer.from('docx'), DOCX, { name: 'Letterhead.docx', kind: 'document-template' });
+    expect((await openConfig('tpl', {}, mkApp('user'))).status).toBe(404);
+    expect((await openConfig('tpl', {}, mkApp('admin'))).status).toBe(200);
     expect((await openConfig('missing')).status).toBe(404);
     putBuffer(db, dataDir, 'pic', Buffer.from('png'), 'image/png', { name: 'site.png' });
     const r = await openConfig('pic');

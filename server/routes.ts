@@ -67,6 +67,8 @@ import { dashboardAttention, dashboardMoney, projectHappenings } from './dashboa
 import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource, NON_ADMIN_EXCLUDED_KINDS } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import { registerProposalRoutes } from './proposalRoutes';
+import { registerDocumentLibraryRoutes } from './documentLibraryRoutes';
+import { LIBRARY_KINDS, mayReadLibraryFile } from './documentLibrary';
 import { getProposal } from './proposalStore';
 import { send as mailSend, MailSendError, type SendRequest as MailSendRequest, type SendResult } from './mail/sendService';
 import { AuthExpiredError } from './mail/providers/types';
@@ -1197,11 +1199,13 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const header = req.headers['authorization'];
       const bearer = header && header.split(' ')[1];
       const token = bearer || String(req.query.token || '');
-      if (!token || !verifyToken(token)) return res.status(401).json({ error: 'Authentication required' });
+      const viewer = token ? verifyToken(token) : null;
+      if (!viewer) return res.status(401).json({ error: 'Authentication required' });
 
       const meta = getMeta(db, req.params.id);
       const st = statFile(dataDir, req.params.id);
-      if (!meta || !st) return res.status(404).json({ error: 'File not found' });
+      // A signature is its owner's alone (ONLYOFFICE Phase 3).
+      if (!meta || !st || !mayReadLibraryFile(meta, viewer as { id?: unknown })) return res.status(404).json({ error: 'File not found' });
 
       const filePath = pathFor(dataDir, req.params.id);
       res.set('Accept-Ranges', 'bytes');
@@ -1459,6 +1463,13 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       'SELECT id FROM files WHERE projectId IS NOT NULL AND projectId IN (SELECT id FROM projects)'
     ).all() as { id: string }[];
     for (const r of projectFileRows) referenced.add(r.id);
+    // The document library (templates, company stamps, signatures) belongs to
+    // no project and nothing links to it by id, yet it is anything but
+    // orphaned.
+    const libraryRows = db.prepare(
+      `SELECT id FROM files WHERE kind IN (${LIBRARY_KINDS.map(() => '?').join(',')})`
+    ).all(...LIBRARY_KINDS) as { id: string }[];
+    for (const r of libraryRows) referenced.add(r.id);
     return referenced;
   };
 
@@ -1707,6 +1718,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
 
   registerProposalRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
+  registerDocumentLibraryRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
 }
 
 // ── Item send routes ─────────────────────────────────────────────────────────
