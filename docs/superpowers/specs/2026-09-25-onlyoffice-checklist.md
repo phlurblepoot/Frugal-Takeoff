@@ -641,7 +641,8 @@ container next to the app, and build the extras agreed below on top of it.
     "still working" once); thumbnails 202 → PNG, also for the converted file;
     pay app PDF en-US from the workbook, found by source, a second run with a
     changed workbook → v2
-  - full unit suite 3289/3289
+  - full unit suite 3289/3289; full e2e suite 110 passed, 1 skipped (the
+    same conditional spec), 0 failed
 - [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
   - upload an .xls, a .doc and (if you have one) a Pages or Numbers file: each
     becomes .xlsx/.docx with the original as version 1
