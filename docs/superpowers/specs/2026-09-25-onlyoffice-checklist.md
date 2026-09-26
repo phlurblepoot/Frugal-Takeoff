@@ -430,8 +430,12 @@ container next to the app, and build the extras agreed below on top of it.
     no Restore), `DocumentActionsBar`, `useGeneratedDocument`, proposal and
     punch tests updated for the missing prompt
   - full unit suite 3215/3215 (269 files)
-  - e2e: `document-actions.spec.ts` regenerates without a prompt;
-    `documents.spec.ts` new "version history: restore … delete" test
+  - e2e: `document-actions.spec.ts` and `mail-item-send.spec.ts` regenerate
+    without a prompt; `documents.spec.ts` new "version history: restore …
+    delete" test
+  - full e2e suite: 102 passed, 1 skipped (the same conditional spec), 1
+    failed: `mail-item-send.spec.ts` still clicked the removed prompt. Fixed
+    in the same commit as this line; that spec then passed (2/2)
   - smoke against the real server and a stand-in Document Server over HTTP
     (13 checks): session → one "edited" version with its log; history list and
     signed data; the log downloads cross-origin; restore blocked from the
