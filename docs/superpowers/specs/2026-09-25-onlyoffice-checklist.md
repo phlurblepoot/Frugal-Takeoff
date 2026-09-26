@@ -243,7 +243,7 @@ container next to the app, and build the extras agreed below on top of it.
   `replaceLiveContent` updates size and hash on in-place saves.
 - [x] `broadcastChange` on every save, so Documents refreshes live.
 
-**Client** (this commit):
+**Client** (`330802e`):
 - [x] `src/pages/DocumentEditor.tsx` at `/tools/edit?fileId=`:
   - loads `api.js` from the public URL the server returns
   - mounts the editor into a plain placeholder node
@@ -253,6 +253,10 @@ container next to the app, and build the extras agreed below on top of it.
     found) get a clear message, a Settings link for admins ("ask an admin" for
     others) and **Download instead**
   - the sidebar collapses to the rail while a file is open, like the canvas
+  - renders nothing in PageTransition's outgoing copy (`useIsPresent`): that
+    wrapper briefly renders a newly entered route a second time, which started
+    ONLYOFFICE twice on every in-app "Open" and dropped a dialog opened in that
+    first moment. The e2e test asserts one config request. (follow-up commit)
 - [x] `/tools/pdf`, `/tools/sheets`, `/pdf-editor` and `/spreadsheet-editor`
   redirect to `/tools/edit`, keeping `fileId`.
 - [x] `openTargetFor` sends every office format to `/tools/edit`:
@@ -275,7 +279,7 @@ container next to the app, and build the extras agreed below on top of it.
   Documents "being edited" dots work for every file type; the presence label is
   "Document editor".
 
-**Remove the old editors** (this commit):
+**Remove the old editors** (`330802e`):
 - [x] Moved `removeWhiteBackground` into `src/utils/removeWhiteBackground.ts`,
   with its pixel rule split out and unit-tested.
 - [x] Deleted `PdfEditor.tsx` and `SpreadsheetEditor.tsx` (and their tests).

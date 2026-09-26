@@ -8,24 +8,33 @@ import { test, expect, seedProjectWithPage } from './fixtures/test';
 // and src/pages/DocumentEditor.test.tsx (fake Document Server / fake DocsAPI).
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-test('a file that cannot open says why, points an admin at Settings, and still downloads', async ({ authedPage, apiToken, request }) => {
-  const upload = await request.post('/api/files/e2e-editor-scope?kind=document&name=Scope.docx', {
+test('opened from Documents, a file that cannot open says why, points an admin at Settings, and still downloads', async ({ authedPage, apiToken, request }) => {
+  const upload = await request.post(`/api/files/e2e-editor-scope?kind=document&name=${encodeURIComponent('E2E Editor Scope.docx')}`, {
     headers: { Authorization: `Bearer ${apiToken.token}`, 'Content-Type': DOCX },
     data: Buffer.from('not really a docx'),
   });
   expect(upload.ok()).toBe(true);
+  const configCalls: string[] = [];
+  authedPage.on('request', r => { if (r.url().includes('/api/onlyoffice/config/')) configCalls.push(r.url()); });
 
-  await authedPage.goto('/tools/edit?fileId=e2e-editor-scope');
+  await authedPage.goto('/documents');
+  await authedPage.getByText('E2E Editor Scope.docx').first().click();
+  await authedPage.getByTestId('doc-viewer-open-editor').click();
+  await expect(authedPage).toHaveURL(/\/tools\/edit\?fileId=e2e-editor-scope$/);
+
   const error = authedPage.getByTestId('document-editor-error');
   await expect(error).toContainText("Couldn't open this file");
   await expect(error).toContainText("isn't set up yet");
   await expect(error.getByRole('link', { name: 'Settings → Document Editor' })).toHaveAttribute('href', '/settings?tab=document-editor');
+  // The page transition renders a newly entered route twice; the editor must
+  // only start (ask for its config) in the copy that stays.
+  expect(configCalls).toHaveLength(1);
 
   const [download] = await Promise.all([
     authedPage.waitForEvent('download'),
     error.getByRole('button', { name: /Download instead/ }).click(),
   ]);
-  expect(download.suggestedFilename()).toBe('Scope.docx');
+  expect(download.suggestedFilename()).toBe('E2E Editor Scope.docx');
 });
 
 test('old PDF and spreadsheet editor links land in the document editor, keeping the file', async ({ authedPage }) => {

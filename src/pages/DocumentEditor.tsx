@@ -10,6 +10,7 @@
 // open from Documents, or upload a file from the computer into a project.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useIsPresent } from 'motion/react';
 import { AlertTriangle, ArrowLeft, Download, FileEdit, Upload, X } from 'lucide-react';
 import { Button, Card, CardBody, CardHeader, EmptyState } from '../components/ui';
 import { AddFilesButton } from '../components/documents/AddFilesButton';
@@ -35,7 +36,14 @@ const FULL_HEIGHT = 'h-[calc(100dvh-3.5rem-env(safe-area-inset-top))] md:h-dvh';
 
 export const DocumentEditor: React.FC = () => {
   const [params] = useSearchParams();
+  const present = useIsPresent();
   const fileId = params.get('fileId');
+  // PageTransition (AnimatePresence mode="wait") first renders a newly
+  // entered route inside the OUTGOING page's wrapper while that fades out,
+  // then mounts it again in its own. Rendering nothing in the outgoing copy
+  // keeps ONLYOFFICE from being started twice on every in-app "Open", and the
+  // landing page from losing a dialog opened in that first moment.
+  if (!present) return null;
   // Keyed: switching files tears the old editor down and builds a new one.
   return fileId ? <EditorView key={fileId} fileId={fileId} /> : <EditorLanding />;
 };

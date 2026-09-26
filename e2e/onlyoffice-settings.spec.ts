@@ -27,8 +27,11 @@ test('Document Editor tab: admin sees what is missing; regular users get neither
       localStorage.setItem('user', u);
     }, [user.token, JSON.stringify(user.user)] as const);
     await page.goto('/settings?tab=document-editor');
-    await expect(page.getByRole('button', { name: 'User Preferences' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Document Editor' })).toHaveCount(0);
+    // Scoped to the Settings tab list: the sidebar's Document Editor tool
+    // shares the name and is for everyone.
+    const settingsTabs = page.getByRole('button', { name: 'User Preferences' }).locator('..');
+    await expect(settingsTabs.getByRole('button', { name: 'User Preferences' })).toBeVisible();
+    await expect(settingsTabs.getByRole('button', { name: 'Document Editor' })).toHaveCount(0);
     await expect(page.getByText('Connection checks')).toHaveCount(0);
   } finally {
     await ctx.close();
