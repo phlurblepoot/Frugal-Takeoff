@@ -1,7 +1,7 @@
 // Conversions (ONLYOFFICE Phase 4): the polling conversion client, old
 // formats converted on upload (the original kept as version 1), the pay app
-// PDF, and first-page thumbnails. A fake fetch plays the Document Server's
-// conversion service and file cache.
+// PDF, first-page thumbnails, and photos shrunk with sharp. A fake fetch plays
+// the Document Server's conversion service and file cache.
 import { describe, it, expect, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
@@ -9,6 +9,7 @@ import jwt from 'jsonwebtoken';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import sharp from 'sharp';
 import type Database from 'better-sqlite3';
 import { openDb } from '../db';
 import { runMigrations } from '../migrations';
@@ -20,6 +21,8 @@ import { registerOnlyofficeRoutes } from './routes';
 import { createOnlyofficeServices, type OnlyofficeServices } from './services';
 import { convert } from './client';
 import { uploadConversionTarget } from './conversions';
+import { PHOTO_THUMBNAIL_SIZE } from './thumbnails';
+import { SIGNATURE_KIND } from '../documentLibrary';
 
 const SECRET = 'shared-oo-secret';
 const ENV = {
@@ -253,3 +256,74 @@ describe('thumbnails', () => {
   });
 });
 
+describe('photo thumbnails', () => {
+  const thumb = (a: express.Express, id = 'pic') => request(a).get(`/api/images/${id}/thumb`).buffer(true).parse((res, cb) => {
+    const chunks: Buffer[] = [];
+    res.on('data', (c: Buffer) => chunks.push(c));
+    res.on('end', () => cb(null, Buffer.concat(chunks)));
+  });
+  const photo = (width: number, height: number, opts: { orientation?: number } = {}) =>
+    sharp({ create: { width, height, channels: 3, background: '#3a7' } }).jpeg().withMetadata(opts).toBuffer();
+
+  it('shrinks a photo to a WebP, with no Document Server needed', async () => {
+    putBuffer(db, dataDir, 'pic', await photo(2000, 1500), 'image/jpeg', { projectId: 'p1', kind: 'photo', name: 'site.jpg' });
+    const r = await thumb(mkApp('admin', {}));
+    expect(r.status).toBe(200);
+    expect(r.headers['content-type']).toBe('image/webp');
+    expect(r.headers['cache-control']).toBe('public, max-age=31536000');
+    const m = await sharp(r.body).metadata();
+    expect([m.format, m.width, m.height]).toEqual(['webp', PHOTO_THUMBNAIL_SIZE, 360]);
+    expect(r.body.length).toBeLessThan(20_000);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('turns a photo upright by its EXIF orientation, and never enlarges a small one', async () => {
+    // Taken sideways: stored 400×200, meant to be seen 200×400.
+    putBuffer(db, dataDir, 'pic', await photo(400, 200, { orientation: 6 }), 'image/jpeg', { name: 'sideways.jpg' });
+    const r = await thumb(mkApp());
+    const m = await sharp(r.body).metadata();
+    expect([m.width, m.height, m.orientation ?? 1]).toEqual([200, 400, 1]);
+  });
+
+  it('keeps a transparent PNG transparent', async () => {
+    const png = await sharp({ create: { width: 600, height: 300, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toBuffer();
+    putBuffer(db, dataDir, 'pic', png, 'image/png', { name: 'logo.png' });
+    const m = await sharp((await thumb(mkApp())).body).metadata();
+    expect(m.hasAlpha).toBe(true);
+  });
+
+  it('sends the original for anything it cannot shrink, and nothing for a signature or a missing file', async () => {
+    const a = mkApp();
+    putBuffer(db, dataDir, 'svg', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), 'image/svg+xml', { name: 'logo.svg' });
+    putBuffer(db, dataDir, 'bad', Buffer.from('not a jpeg'), 'image/jpeg', { name: 'broken.jpg' });
+    putBuffer(db, dataDir, 'doc', Buffer.from('docx'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', { name: 'a.docx' });
+    for (const id of ['svg', 'bad', 'bad', 'doc']) {
+      const r = await request(a).get(`/api/images/${id}/thumb`);
+      expect([r.status, r.headers.location]).toEqual([302, `/api/images/${id}/raw`]);
+    }
+    putBuffer(db, dataDir, 'sig', await photo(300, 100), 'image/png', { kind: SIGNATURE_KIND, name: 'Signature.png' });
+    expect((await request(a).get('/api/images/sig/thumb')).status).toBe(404);
+    expect((await request(a).get('/api/images/nope/thumb')).status).toBe(404);
+    expect(fs.existsSync(path.join(dataDir, 'thumbnails'))).toBe(false);
+  });
+
+  it('makes one thumbnail however many ask at once', async () => {
+    putBuffer(db, dataDir, 'pic', await photo(1200, 900), 'image/jpeg', { name: 'site.jpg' });
+    for (let i = 0; i < 4; i++) putBuffer(db, dataDir, `pic${i}`, await photo(800 + i, 600), 'image/jpeg', { name: `p${i}.jpg` });
+    const a = mkApp();
+    const all = await Promise.all(['pic', 'pic', 'pic', 'pic0', 'pic1', 'pic2', 'pic3'].map(id => thumb(a, id)));
+    expect(all.map(r => r.status)).toEqual([200, 200, 200, 200, 200, 200, 200]);
+    expect(fs.readdirSync(path.join(dataDir, 'thumbnails')).filter(n => n.endsWith('.webp'))).toHaveLength(5);
+  });
+
+  it('are made after an upload, and swept once their file is gone', async () => {
+    const a = mkApp('admin', {});
+    await request(a).post('/api/files/up3?kind=photo&projectId=p1&name=site.jpg').set('Content-Type', 'image/jpeg').send(await photo(900, 600));
+    await services.thumbnails.idle();
+    const sha = getMeta(db, 'up3')!.sha256;
+    expect(fs.existsSync(services.thumbnails.photoPathFor(sha))).toBe(true);
+    db.prepare("DELETE FROM files WHERE id = 'up3'").run();
+    expect(services.thumbnails.sweep()).toBe(1);
+    expect(fs.existsSync(services.thumbnails.photoPathFor(sha))).toBe(false);
+  });
+});

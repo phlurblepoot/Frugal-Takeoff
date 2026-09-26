@@ -228,7 +228,7 @@ describe('pj-punch-ring', () => {
 });
 
 describe('pj-photo-strip', () => {
-  it('sources photos from getDocuments with issue-photo/punch-photo kinds and renders thumbs via getImageUrl', async () => {
+  it('sources photos from getDocuments with issue-photo/punch-photo kinds and renders shrunk photos via getImageThumbUrl', async () => {
     getDocuments.mockResolvedValue({
       rows: [
         { id: 'f1', name: 'a.jpg', mime: 'image/jpeg', size: 1, kind: 'issue-photo', createdAt: 2, versionNumber: 1, archived: false, projectId: 'p1', projectName: null, customerId: null, customerName: null, source: null },
@@ -239,7 +239,7 @@ describe('pj-photo-strip', () => {
 
     await waitFor(() => expect(container.querySelectorAll('img')).toHaveLength(2));
     const imgs = container.querySelectorAll('img');
-    expect(imgs[0]).toHaveAttribute('src', '/api/images/f1/raw');
+    expect(imgs[0]).toHaveAttribute('src', '/api/images/f1/thumb');
     expect(getDocuments).toHaveBeenCalledWith({ projectIds: ['p1'], kinds: ['issue-photo', 'punch-photo'], limit: 8 });
   });
 

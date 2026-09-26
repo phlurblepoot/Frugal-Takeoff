@@ -8,7 +8,7 @@
 // (spec docs/superpowers/specs/2026-08-29-document-actions-rollout).
 import React, { useState } from 'react';
 import { Trash2 } from 'lucide-react';
-import { getImageUrl } from '../../utils/store';
+import { getImageThumbUrl, getImageUrl } from '../../utils/store';
 import { FilePickerUploadConfig } from '../FilePickerModal';
 import { AddFilesButton } from './AddFilesButton';
 import { useAttachFiles } from './useAttachFiles';
@@ -83,7 +83,7 @@ export const PhotoDropCard: React.FC<PhotoDropCardProps> = ({
           {photos.map((p, i) => (
             <div key={p.id} className="group relative">
               <img
-                src={getImageUrl(p.fileId)}
+                src={getImageThumbUrl(p.fileId)}
                 alt=""
                 onClick={() => setLightboxIndex(i)}
                 className="h-24 w-full cursor-pointer rounded-lg border border-edge object-cover"

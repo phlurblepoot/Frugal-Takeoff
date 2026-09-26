@@ -1132,6 +1132,24 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
+  // A photo shrunk for tiles and lists: tens of KB instead of the several-MB
+  // original (server/onlyoffice/thumbnails.ts). No login, like /raw, and never
+  // a signature. Anything it can't shrink (not a photo, a format the server
+  // can't read) sends the browser to the original instead.
+  app.get('/api/images/:id/thumb', async (req, res) => {
+    try {
+      const meta = getMeta(db, req.params.id);
+      if (!meta || meta.kind === SIGNATURE_KIND) return res.status(404).send('Image not found');
+      const thumb = await deps.onlyoffice?.thumbnails.photo(meta.id) ?? null;
+      if (!thumb) return res.redirect(302, `/api/images/${encodeURIComponent(meta.id)}/raw`);
+      res.set('Content-Type', 'image/webp');
+      res.set('Cache-Control', 'public, max-age=31536000');
+      res.sendFile(thumb);
+    } catch (e) {
+      res.status(500).send('Failed to fetch image');
+    }
+  });
+
   app.post('/api/images', authenticateToken, (req, res) => {
     try {
       const { id, data } = req.body;

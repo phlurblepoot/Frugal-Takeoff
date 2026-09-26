@@ -629,6 +629,25 @@ container next to the app, and build the extras agreed below on top of it.
     demand).
   - Shown in the Documents table and the phone cards (loaded as rows scroll
     into view), and in the hover card for Word/Excel files.
+- [x] **Photo thumbnails** (Nathan asked 2026-09-26; no ONLYOFFICE needed):
+  - `sharp` (new dependency, prebuilt libvips, nothing to add to the Docker
+    image) shrinks JPEG, PNG, WebP, GIF, TIFF and AVIF photos to a 480 px
+    WebP, upright by EXIF orientation, transparency kept, cached as
+    `<dataDir>/thumbnails/<sha256>.webp` and swept like the others. About
+    0.1 s for a 12-megapixel photo; two at a time; made on first ask and after
+    an upload.
+  - `GET /api/images/:id/thumb`: no login, like `/raw` (plain `<img>` tags),
+    never a signature. Anything it can't shrink (HEIC, which this sharp
+    build can't read; SVG; a broken file, not retried for an hour) redirects
+    to the original.
+  - Used by the photo tiles (issue/punch/task/RFI/CO/invoice/daily report
+    photos, the project page's Recent photos, proposal photos), the
+    Documents list and phone cards, and the hover card. Lightboxes and the
+    viewer still show the full photo.
+  - Tests: `server/onlyoffice/conversions.test.ts` +6 (WebP size, EXIF
+    rotation, transparency, fallbacks, signature 404, one job per photo,
+    after upload + sweep), `src/utils/photoFormats.test.ts` (2), `FileThumb`
+    +2, e2e `documents.spec.ts` (the photo row shows a loaded WebP).
 - [x] Tests: conversion client (mocked Document Server), upload conversion keeps
   the original, thumbnail cache.
   - `server/onlyoffice/conversions.test.ts` (13, fake converter and cache):
@@ -667,6 +686,9 @@ container next to the app, and build the extras agreed below on top of it.
   - the pay app PDF again after the layout fix: landscape, G702 on page one,
     the G703 after it fitted to the width, and the change orders starting on
     a new page (try one with enough lines to run past a page)
+  - photos: Documents rows and the photo tiles on an issue or punch item show
+    the photo (small and quick), turned the right way up; clicking still
+    opens the full-size photo
 
 ## Phase 5 — Notification bell
 

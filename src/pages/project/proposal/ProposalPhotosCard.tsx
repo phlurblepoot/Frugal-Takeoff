@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { ArrowLeft, ArrowRight, X } from 'lucide-react';
 import {
   type Proposal, type ProposalPhoto,
-  addProposalPhoto, updateProposalPhoto, removeProposalPhoto, getImageUrl,
+  addProposalPhoto, updateProposalPhoto, removeProposalPhoto, getImageUrl, getImageThumbUrl,
 } from '../../../utils/store';
 import { Button, Card, CardBody, CardHeader, Input } from '../../../components/ui';
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
@@ -36,7 +36,7 @@ const PhotoTile: React.FC<{
     <div className="group relative rounded-lg border border-edge bg-sunken p-2" data-testid={`proposal-photo-${photo.id}`}>
       <div className="relative">
         <img
-          src={getImageUrl(photo.fileId)}
+          src={getImageThumbUrl(photo.fileId)}
           alt=""
           onClick={onOpen}
           className="h-28 w-full cursor-pointer rounded-md object-cover"

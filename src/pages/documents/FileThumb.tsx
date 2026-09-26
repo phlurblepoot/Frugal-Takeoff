@@ -1,14 +1,19 @@
-// src/pages/documents/FileThumb.tsx — a document's first page as a small
-// picture in the Documents list (ONLYOFFICE Phase 4), falling back to the
-// type icon. The server makes thumbnails with ONLYOFFICE in the background:
-// the first ask may answer "not ready yet" (202), so this waits and asks again
-// a few times before settling for the icon.
+// src/pages/documents/FileThumb.tsx — a small picture of a file in the
+// Documents list (ONLYOFFICE Phase 4), falling back to the type icon:
 //
-// Loaded only once the row scrolls into view, and remembered for the session
-// per file version, so a list refresh or a remount doesn't ask again.
+//   * Documents: page one. The server makes these with ONLYOFFICE in the
+//     background, so the first ask may answer "not ready yet" (202): this
+//     waits and asks again a few times before settling for the icon.
+//     Remembered for the session per file version, so a list refresh or a
+//     remount doesn't ask again.
+//   * Photos: the photo shrunk (/api/images/:id/thumb), a plain <img> the
+//     browser caches.
+//
+// Loaded only once the row scrolls into view.
 import React, { useEffect, useRef, useState } from 'react';
-import { getAuthHeaders } from '../../utils/store';
+import { getAuthHeaders, getImageThumbUrl } from '../../utils/store';
 import { officeFormatOf } from '../../utils/officeFormats';
+import { hasPhotoThumbnail } from '../../utils/photoFormats';
 import { MimeIcon } from './MimeIcon';
 
 interface ThumbRow { id: string; mime: string; name: string | null; versionNumber: number; createdAt: number }
@@ -76,14 +81,30 @@ function useSeen<T extends Element>(): [React.RefObject<T | null>, boolean] {
   return [ref, seen];
 }
 
+/** A photo's shrunk picture, versioned so new content isn't hidden by the
+ *  browser's cache; null when the row isn't a photo the server can shrink. */
+export const photoThumbUrl = (row: ThumbRow): string | null =>
+  hasPhotoThumbnail(row) ? getImageThumbUrl(row.id, `${row.versionNumber}-${row.createdAt}`) : null;
+
 /** A row's thumbnail, or its type icon. `box` sizes the thumbnail frame. */
 export const FileThumb: React.FC<{ row: ThumbRow; box?: string; iconSize?: number }> = ({
   row, box = 'h-9 w-7', iconSize = 15,
 }) => {
   const [ref, seen] = useSeen<HTMLSpanElement>();
-  const url = useThumbnail(row, seen);
+  const officeUrl = useThumbnail(row, seen);
+  const photoUrl = photoThumbUrl(row);
+  const [photoFailed, setPhotoFailed] = useState<string | null>(null);
+  const url = officeUrl ?? (seen && photoUrl && photoFailed !== photoUrl ? photoUrl : null);
   if (!url) {
     return <span ref={ref} className="inline-flex shrink-0"><MimeIcon mime={row.mime} size={iconSize} /></span>;
+  }
+  if (url === photoUrl) {
+    // A photo fills its frame, cropped, like the photo tiles elsewhere.
+    return (
+      <span ref={ref} className={`inline-flex shrink-0 overflow-hidden rounded-sm border border-edge bg-sunken ${box}`} data-testid="file-thumb">
+        <img src={url} alt="" loading="lazy" className="h-full w-full object-cover" onError={() => setPhotoFailed(url)} />
+      </span>
+    );
   }
   return (
     <span ref={ref} className={`inline-flex shrink-0 items-center justify-center overflow-hidden rounded-sm border border-edge bg-white ${box}`} data-testid="file-thumb">

@@ -19,6 +19,12 @@ export const getImageUrl = (id: string) => {
   return `/api/images/${id}/raw`;
 };
 
+/** A photo shrunk for tiles and lists (a few tens of KB); the server sends
+ *  anything it can't shrink as the original. `version` busts the browser's
+ *  cache when a file gets new content under the same id. */
+export const getImageThumbUrl = (id: string, version?: string | number) =>
+  `/api/images/${id}/thumb${version !== undefined ? `?v=${encodeURIComponent(String(version))}` : ''}`;
+
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 // HTTP statuses that indicate the server is willing to retry the same request.

@@ -1,9 +1,10 @@
-// src/pages/documents/FileThumb.test.tsx — page-one thumbnails in the
-// Documents list: asked for only for editor files, waited for while being
-// made (202), remembered per file version, and the type icon otherwise.
+// src/pages/documents/FileThumb.test.tsx — thumbnails in the Documents list:
+// page one of editor files, waited for while being made (202) and remembered
+// per file version; photos shrunk by the server, as a plain <img>; the type
+// icon otherwise.
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { FileThumb, resetThumbnailCache, useThumbnail } from './FileThumb';
 
 const row = (over: Record<string, unknown> = {}) => ({
@@ -65,5 +66,22 @@ describe('FileThumb', () => {
     responses = [200];
     render(<FileThumb row={row({ id: 'f2' })} />);
     expect(await screen.findByTestId('file-thumb')).toBeInTheDocument();
+  });
+
+  it('shows a photo shrunk, straight from its thumb url with the file version', () => {
+    render(<FileThumb row={row({ id: 'p', mime: 'image/jpeg', name: 'site.jpg' })} />);
+    const img = screen.getByTestId('file-thumb').querySelector('img')!;
+    expect(img).toHaveAttribute('src', '/api/images/p/thumb?v=2-100');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the icon when the photo fails to load, or cannot be shrunk', () => {
+    const { unmount } = render(<FileThumb row={row({ id: 'p', mime: 'image/png', name: 'site.png' })} />);
+    fireEvent.error(screen.getByTestId('file-thumb').querySelector('img')!);
+    expect(screen.queryByTestId('file-thumb')).toBeNull();
+    unmount();
+
+    render(<FileThumb row={row({ id: 'h', mime: 'image/heic', name: 'IMG_0001.HEIC' })} />);
+    expect(screen.queryByTestId('file-thumb')).toBeNull();
   });
 });

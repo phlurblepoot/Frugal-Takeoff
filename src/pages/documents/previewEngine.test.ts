@@ -16,7 +16,8 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
 vi.mock('pdfjs-dist/legacy/build/pdf.worker.mjs?url', () => ({ default: 'worker-url' }));
 
 const fetchFileBlob = vi.fn();
-vi.mock('../../utils/store', () => ({
+vi.mock('../../utils/store', async (orig) => ({
+  getImageThumbUrl: (await orig<typeof import('../../utils/store')>()).getImageThumbUrl,
   fetchFileBlob: (...args: unknown[]) => fetchFileBlob(...args),
 }));
 
@@ -82,9 +83,9 @@ describe('previewKindFor', () => {
 });
 
 describe('getPreviewThumb', () => {
-  it('images resolve to a raw-url thumb without any fetch', async () => {
+  it('images resolve to the shrunk photo url without any fetch', async () => {
     const thumb = await getPreviewThumb({ id: 'f1', versionNumber: 1, mime: 'image/png', size: 1000 });
-    expect(thumb).toEqual({ kind: 'image', url: '/api/images/f1/raw' });
+    expect(thumb).toEqual({ kind: 'image', url: '/api/images/f1/thumb?v=1' });
     expect(fetchFileBlob).not.toHaveBeenCalled();
     expect(getDocument).not.toHaveBeenCalled();
   });

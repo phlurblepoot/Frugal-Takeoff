@@ -517,10 +517,18 @@ test('document previews: hover shows a thumbnail card, click opens the viewer mo
   await authedPage.goto(`/documents?projectIds=${seeded.inProgressProjectId}`);
   await expect(photoRow).toHaveCount(1);
 
+  // The photo's row shows it shrunk (/api/images/:id/thumb, a WebP the
+  // server makes with sharp), not the type icon.
+  const rowThumb = photoRow.getByTestId('file-thumb').locator('img');
+  await expect(rowThumb).toHaveAttribute('src', new RegExp(`/api/images/${seeded.issuePhotoFileId}/thumb\\?v=`));
+  await expect.poll(() => rowThumb.evaluate((img: HTMLImageElement) => img.complete ? img.naturalWidth : 0)).toBeGreaterThan(0);
+  const shrunk = await request.get(`/api/images/${seeded.issuePhotoFileId}/thumb`);
+  expect(shrunk.headers()['content-type']).toBe('image/webp');
+
   // (a) Hover the image row: the card appears (past the 350ms delay) showing
-  // an <img> (previewEngine's image kind never fetches — it's the raw
-  // /api/images/:id/raw URL), then hides again once the pointer leaves the
-  // row for somewhere the row doesn't cover.
+  // an <img> (previewEngine's image kind never fetches — the <img> loads the
+  // shrunk /api/images/:id/thumb itself), then hides again once the pointer
+  // leaves the row for somewhere the row doesn't cover.
   await photoRow.hover();
   await expect(hoverCard).toBeVisible();
   await expect(hoverCard.locator('img')).toBeVisible();
