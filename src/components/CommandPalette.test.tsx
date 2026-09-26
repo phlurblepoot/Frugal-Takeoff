@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { CommandPalette } from './CommandPalette';
 import { ToastProvider } from './Toast';
 
@@ -228,5 +228,38 @@ describe('CommandPalette search results group', () => {
 
     await waitFor(() => expect(screen.getByText('Search results')).toBeInTheDocument());
     expect(screen.getByText('Big Bear Job')).toBeInTheDocument();
+  });
+});
+
+describe('CommandPalette — new documents (ONLYOFFICE Phase 3)', () => {
+  const LocationProbe: React.FC = () => {
+    const loc = useLocation();
+    return <div data-testid="location">{loc.pathname + loc.search}</div>;
+  };
+  const renderWithProbe = (path: string) =>
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <ToastProvider>
+          <CommandPalette />
+          <LocationProbe />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+
+  it('opens the New document dialog on the type picked, in the project you are in', () => {
+    renderWithProbe('/project/p1');
+    openPalette();
+    fireEvent.click(screen.getByRole('button', { name: /New spreadsheet/ }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/documents?projectIds=p1&new=xlsx');
+  });
+
+  it('keeps the Documents page filters it was opened from', () => {
+    renderWithProbe('/documents?projectIds=p2');
+    openPalette();
+    fireEvent.click(screen.getByRole('button', { name: /New PDF form/ }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/documents?projectIds=p2&new=pdf');
+    openPalette();
+    fireEvent.click(screen.getByRole('button', { name: /New Word document/ }));
+    expect(screen.getByTestId('location')).toHaveTextContent('new=docx');
   });
 });

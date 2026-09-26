@@ -68,7 +68,7 @@ import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocu
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import { registerProposalRoutes } from './proposalRoutes';
 import { registerDocumentLibraryRoutes } from './documentLibraryRoutes';
-import { LIBRARY_KINDS, mayReadLibraryFile } from './documentLibrary';
+import { LIBRARY_KINDS, SIGNATURE_KIND, mayReadLibraryFile } from './documentLibrary';
 import { getProposal } from './proposalStore';
 import { send as mailSend, MailSendError, type SendRequest as MailSendRequest, type SendResult } from './mail/sendService';
 import { AuthExpiredError } from './mail/providers/types';
@@ -1117,7 +1117,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const meta = getMeta(db, req.params.id);
       const st = statFile(dataDir, req.params.id);
-      if (!meta || !st) return res.status(404).send('Image not found');
+      // No login here (plain <img> tags), so a signature, which only its owner
+      // may read, is never served this way (ONLYOFFICE Phase 3).
+      if (!meta || !st || meta.kind === SIGNATURE_KIND) return res.status(404).send('Image not found');
       res.set('Content-Type', meta.mime);
       res.set('Content-Length', String(st.size));
       res.set('Cache-Control', 'public, max-age=31536000');

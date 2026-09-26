@@ -469,30 +469,40 @@ container next to the app, and build the extras agreed below on top of it.
     new system kinds (`document-template`, `company-stamp`, `signature`):
     hidden from Documents, kept by the Storage orphan cleanup, versions and
     backups work unchanged. Templates open in the editor for admins only.
-- [ ] "New document" dialog:
+- [x] "New document" dialog:
   - type: Word / Excel / PDF form
   - start from: Blank or a template of that type
   - name
   - project: preselected inside a project, required on the main page
   - document type
   - then opens the editor
-- [ ] Buttons on **Project → Documents** and the **main Documents page**.
+  - (`src/pages/documents/NewDocumentModal.tsx`. A company document needs no
+    project. Archived projects aren't offered.)
+- [x] Buttons on **Project → Documents** and the **main Documents page**.
   Command-palette actions "New Word document", "New spreadsheet" and "New PDF
   form".
-- [ ] Settings → new admin-only **Document Templates** tab (the AIA Template tab
+  - Project → Documents is the Documents page filtered to that project, so it
+    is one "New document" button; filtered to one project, that project is
+    preselected. The palette opens it with `?new=docx|xlsx|pdf`, keeping the
+    project you are in (or the Documents filters you came from).
+- [x] Settings → new admin-only **Document Templates** tab (the AIA Template tab
   stays):
   - add, rename and delete templates
   - templates open in the editor for changes
   - stored as a system file kind so they don't show up in project Documents
-- [ ] Offer `docs/Template.docx` (letterhead) as a one-click starter template.
-- [ ] Profile signatures under Settings → User Preferences → "My signatures":
+- [x] Offer `docs/Template.docx` (letterhead) as a one-click starter template.
+  ("Add company letterhead", shown until a `Letterhead.docx` template exists.)
+- [x] Profile signatures under Settings → User Preferences → "My signatures":
   - upload several
   - name each one
   - pick a default
   - white background removed on upload
-- [ ] One-time import of any browser-saved `pdfEditorSignatures` from the old
-  editor.
-- [ ] Company stamps: managed in the Document Templates tab (admins upload, with
+  - Private to their owner: the list, changes and the bytes (also blocked on
+    the login-free `/api/images/:id/raw` route). Removed with their user.
+- [x] One-time import of any browser-saved `pdfEditorSignatures` from the old
+  editor. (When My signatures first opens in that browser; a signature that
+  fails to upload stays for the next try.)
+- [x] Company stamps: managed in the Document Templates tab (admins upload, with
   the same background removal). Everyone can insert them.
 - [ ] Editor **Insert → Image → From storage** (`onRequestInsertImage`) opens a
   picker with: My signatures (default first), Company stamps, Project photos,

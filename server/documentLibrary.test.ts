@@ -194,6 +194,8 @@ describe('signatures', () => {
     expect((await read('crew')).status).toBe(200);
     expect((await read('other')).status).toBe(404);
     expect((await read('admin')).status).toBe(404);
+    // Nor through the login-free image route.
+    expect((await request(as('crew')).get(`/api/images/${sig.id}/raw`)).status).toBe(404);
   });
 
   it('stay out of Documents, survive orphan cleanup, and go when their owner is removed', async () => {

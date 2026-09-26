@@ -5,7 +5,7 @@ import {
   Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
   ListTodo, Clock, CornerDownLeft, X, Keyboard,
   AlertCircle, ClipboardCheck, StickyNote, DollarSign, SlidersHorizontal, LayoutGrid,
-  MessageCircleQuestion, CalendarDays, Mail,
+  MessageCircleQuestion, CalendarDays, Mail, FilePlus2,
 } from 'lucide-react';
 import { searchAll, SearchResult, getMyTimeEntries, clockIn, clockOut } from '../utils/store';
 import { useToast } from './Toast';
@@ -100,6 +100,19 @@ export const CommandPalette: React.FC = () => {
     { id: 'a:projects', type: 'action', title: 'Projects', icon: <FolderOpen size={16} />, run: () => navigate('/projects') },
     { id: 'a:settings', type: 'action', title: 'Settings', icon: <SettingsIcon size={16} />, run: () => navigate('/settings') },
     { id: 'a:editor', type: 'action', title: 'Document editor', subtitle: 'Open a PDF, Word or Excel file', icon: <FileText size={16} />, run: () => navigate('/tools/edit') },
+    // Open the New document dialog on the Documents page, filed in the
+    // project you are in (ONLYOFFICE Phase 3).
+    ...([['docx', 'New Word document'], ['xlsx', 'New spreadsheet'], ['pdf', 'New PDF form']] as const).map(([type, title]) => ({
+      id: `a:new-${type}`, type: 'action' as const, title, icon: <FilePlus2 size={16} />,
+      run: () => {
+        // Already on Documents: keep its filters (a project's Documents tab
+        // preselects that project).
+        const params = new URLSearchParams(location.pathname === '/documents' ? location.search : '');
+        if (projectId) params.set('projectIds', projectId);
+        params.set('new', type);
+        navigate(`/documents?${params.toString()}`);
+      },
+    })),
     { id: 'a:tasks', type: 'action', title: 'Tasks', icon: <ListTodo size={16} />, run: () => navigate('/tasks') },
     { id: 'a:documents', type: 'action', title: 'Documents', icon: <FolderOpen size={16} />, run: () => navigate('/documents') },
     { id: 'a:mail', type: 'action', title: 'Mail', icon: <Mail size={16} />, run: () => navigate('/mail') },
@@ -119,7 +132,7 @@ export const CommandPalette: React.FC = () => {
         finally { clockInFlight.current = false; }
       },
     },
-  ], [navigate, toast]);
+  ], [navigate, toast, projectId, location.pathname, location.search]);
 
   // Contextual actions: surfaced only when the user is inside a project.
   const contextualActions: Action[] = useMemo(() => {

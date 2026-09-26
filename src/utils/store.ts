@@ -754,6 +754,61 @@ export const getEditorHistoryData = async (fileId: string, version: number): Pro
   return res.json();
 };
 
+// ── Document library (ONLYOFFICE Phase 3) ─────────────────────────────────
+
+export interface LibraryItem {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  createdAt: number;
+  createdBy: string | null;
+}
+export interface DocumentTemplate extends LibraryItem { ext: 'docx' | 'xlsx' | 'pdf' }
+export interface Signature extends LibraryItem { isDefault: boolean }
+
+const jsonRequest = async <T>(url: string, init: RequestInit = {}): Promise<T> => {
+  const res = await fetchWithRetry(url, {
+    ...init,
+    headers: { ...(init.body && !(init.body instanceof Blob) ? { 'Content-Type': 'application/json' } : {}), ...getAuthHeaders(), ...(init.headers || {}) },
+  });
+  await handleResponse(res);
+  return res.json();
+};
+const uploadTo = <T>(url: string, blob: Blob, name: string): Promise<T> =>
+  jsonRequest<T>(`${url}?name=${encodeURIComponent(name)}`, {
+    method: 'POST', body: blob, headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+  });
+
+/** A new document from a blank file or a template; returns the stored file. */
+export const createNewDocument = (input: {
+  type: 'docx' | 'xlsx' | 'pdf'; templateId?: string; name: string; projectId?: string; kind: string;
+}): Promise<{ fileId: string; name: string }> =>
+  jsonRequest('/api/documents/new', { method: 'POST', body: JSON.stringify(input) });
+
+export const listDocumentTemplates = (): Promise<DocumentTemplate[]> => jsonRequest('/api/document-templates');
+export const uploadDocumentTemplate = (file: File): Promise<DocumentTemplate> => uploadTo('/api/document-templates', file, file.name);
+export const addLetterheadTemplate = (): Promise<DocumentTemplate> => jsonRequest('/api/document-templates/letterhead', { method: 'POST' });
+export const renameDocumentTemplate = (id: string, name: string): Promise<DocumentTemplate> =>
+  jsonRequest(`/api/document-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+export const deleteDocumentTemplate = (id: string): Promise<void> =>
+  jsonRequest(`/api/document-templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+export const listCompanyStamps = (): Promise<LibraryItem[]> => jsonRequest('/api/company-stamps');
+export const uploadCompanyStamp = (png: Blob, name: string): Promise<LibraryItem> => uploadTo('/api/company-stamps', png, name);
+export const renameCompanyStamp = (id: string, name: string): Promise<LibraryItem> =>
+  jsonRequest(`/api/company-stamps/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+export const deleteCompanyStamp = (id: string): Promise<void> =>
+  jsonRequest(`/api/company-stamps/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+/** Your own signatures, oldest first, the default flagged. */
+export const listSignatures = (): Promise<Signature[]> => jsonRequest('/api/signatures');
+export const addSignature = (png: Blob, name: string): Promise<Signature> => uploadTo('/api/signatures', png, name);
+export const updateSignature = (id: string, patch: { name?: string; isDefault?: true }): Promise<Signature> =>
+  jsonRequest(`/api/signatures/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+export const deleteSignature = (id: string): Promise<void> =>
+  jsonRequest(`/api/signatures/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
 // Recently opened documents (client-only, newest first) — the editor's
 // landing list. Same shape and idiom as recent projects above.
 export interface RecentDocument { id: string; name: string; mime: string; at: number }
