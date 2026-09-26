@@ -17,11 +17,11 @@ import { AddFilesButton } from '../components/documents/AddFilesButton';
 import { useToast } from '../components/Toast';
 import { useTheme } from '../context/ThemeContext';
 import {
-  EditorOpenError, fetchFileBlob, forgetRecentDocument, getFileMeta, getRecentDocuments, openInEditor,
-  recordRecentDocument, type RecentDocument,
+  EditorOpenError, RestoreError, fetchFileBlob, forgetRecentDocument, getEditorHistory, getEditorHistoryData,
+  getFileMeta, getRecentDocuments, openInEditor, recordRecentDocument, restoreFileVersion, type RecentDocument,
 } from '../utils/store';
 import { downloadBlob } from '../utils/download';
-import { loadDocsApi } from '../utils/onlyofficeApi';
+import { loadDocsApi, type DocsEditorInstance } from '../utils/onlyofficeApi';
 import { officeFormatByExt } from '../utils/officeFormats';
 import { MimeIcon } from './documents/MimeIcon';
 import { OpenFromComputerModal } from './documentEditor/OpenFromComputerModal';
@@ -57,11 +57,41 @@ type ViewState =
 
 let placeholderSeq = 0;
 
+/** The date as ONLYOFFICE's version list shows it (it displays the string as given). */
+const historyDate = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+
+/** refreshHistory's argument, from the server's version list. */
+async function loadHistory(fileId: string): Promise<Record<string, unknown>> {
+  try {
+    const { currentVersion, versions } = await getEditorHistory(fileId);
+    return {
+      currentVersion,
+      history: versions.map(v => ({
+        version: v.version,
+        key: v.key,
+        created: historyDate(v.createdAt),
+        ...(v.user ? { user: v.user } : {}),
+        ...(v.changes !== undefined ? { changes: v.changes } : {}),
+        ...(v.serverVersion !== undefined ? { serverVersion: v.serverVersion } : {}),
+      })),
+    };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't load the version history" };
+  }
+}
+
 const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const { mode: themeMode } = useTheme();
   const hostRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<ViewState>({ phase: 'loading' });
+  // Bumped to start the editor again: ONLYOFFICE has to be re-created when
+  // its version history closes. After a restore that also opens the restored
+  // file, in a fresh session.
+  const [generation, setGeneration] = useState(0);
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
 
   // Read once at open: ONLYOFFICE takes its theme when it starts, and
   // rebuilding the editor on a theme toggle would interrupt the person typing.
@@ -75,8 +105,9 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
 
   useEffect(() => {
     let cancelled = false;
-    let editor: { destroyEditor?: () => void } | null = null;
+    let editor: DocsEditorInstance | null = null;
     const host = hostRef.current;
+    setState({ phase: 'loading' });
 
     (async () => {
       try {
@@ -100,13 +131,47 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
         const placeholder = document.createElement('div');
         placeholder.id = `oo-editor-${++placeholderSeq}`;
         host.appendChild(placeholder);
+        const canRestore = opening.file.mode === 'edit';
+        const restart = () => { if (!cancelled) setGeneration(g => g + 1); };
         editor = new window.DocsAPI.DocEditor(placeholder.id, {
           ...opening.config,
           events: {
             // The editor's own Close button (customization.close).
             onRequestClose: () => closeRef.current(),
+            // File → Version History (ONLYOFFICE Phase 2).
+            onRequestHistory: async () => {
+              const history = await loadHistory(fileId);
+              if (!cancelled) editor?.refreshHistory?.(history);
+            },
+            onRequestHistoryData: async (event: { data: number }) => {
+              const version = event.data;
+              let data: Record<string, unknown>;
+              try {
+                data = await getEditorHistoryData(fileId, version);
+              } catch (e) {
+                data = { version, error: e instanceof Error ? e.message : "Couldn't open that version" };
+              }
+              if (!cancelled) editor?.setHistoryData?.(data);
+            },
+            // Leaving the history view needs a fresh editor (ONLYOFFICE docs).
+            onRequestHistoryClose: restart,
+            // Declaring this is what shows Restore; only where editing is allowed.
+            ...(canRestore ? {
+              onRequestRestore: async (event: { data: { version: number } }) => {
+                const version = event.data.version;
+                try {
+                  const r = await restoreFileVersion(fileId, { version }, 'editor');
+                  toastRef.current(`Version ${version} restored as version ${r.versionNumber}`, { type: 'success' });
+                } catch (e) {
+                  toastRef.current(e instanceof RestoreError ? e.message : "Couldn't restore that version", { type: 'error' });
+                }
+                // ONLYOFFICE waits for a fresh list either way.
+                const history = await loadHistory(fileId);
+                if (!cancelled) editor?.refreshHistory?.(history);
+              },
+            } : {}),
           },
-        }) as { destroyEditor?: () => void };
+        });
         recordRecentDocument({
           id: opening.file.id,
           name: opening.file.name || 'Document',
@@ -129,7 +194,7 @@ const EditorView: React.FC<{ fileId: string }> = ({ fileId }) => {
       try { editor?.destroyEditor?.(); } catch { /* already gone */ }
       if (host) host.replaceChildren();
     };
-  }, [fileId]);
+  }, [fileId, generation]);
 
   return (
     <div className={`relative ${FULL_HEIGHT} bg-sunken`} data-testid="document-editor">

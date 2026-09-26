@@ -271,7 +271,9 @@ describe('POST /api/files/:id/restore', () => {
     threeVersions();
     const key = await openEditor();
     await callback('doc1', { key, status: 1, users: ['u-admin'] });
-    expect((await restore({ version: 1 })).status).toBe(409);
+    const r = await restore({ version: 1 });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toContain('You have this file open in the Document Editor');
   });
 
   it('ignores a session ONLYOFFICE no longer has', async () => {

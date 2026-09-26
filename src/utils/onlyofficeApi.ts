@@ -6,9 +6,16 @@
 // attempt (e.g. "Check again" in Settings) really retries.
 import type { OnlyofficeCheck } from './store';
 
+/** The methods this app calls on a running editor (ONLYOFFICE Docs API). */
+export interface DocsEditorInstance {
+  destroyEditor?: () => void;
+  refreshHistory?: (data: unknown) => void;
+  setHistoryData?: (data: unknown) => void;
+}
+
 declare global {
   interface Window {
-    DocsAPI?: { DocEditor: { new (placeholderId: string, config: unknown): unknown; version?: () => string } };
+    DocsAPI?: { DocEditor: { new (placeholderId: string, config: unknown): DocsEditorInstance; version?: () => string } };
   }
 }
 

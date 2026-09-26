@@ -7,7 +7,7 @@ import { DocumentActionsBar, DocumentActionsBarProps } from './DocumentActionsBa
 
 const h = vi.hoisted(() => ({
   state: {
-    file: null as null | { id: string; name: string | null; mime: string; size: number; createdAt: number; versionNumber: number },
+    file: null as null | { id: string; name: string | null; mime: string; size: number; createdAt: number; versionNumber: number; versionOrigin?: string | null },
     upToDate: null as boolean | null,
     loading: false,
     refresh: vi.fn(async () => {}),
@@ -27,8 +27,8 @@ const h = vi.hoisted(() => ({
   accountsLoading: false,
   // Which item ids useReplyFlags reports as flagged — controlled per test.
   replyFlags: new Set<string>(),
-  // Whatever the composer's onSend rejected with — how a test observes that an
-  // awaited version choice actually settled.
+  // Whatever the composer's onSend rejected with — how a test observes that a
+  // stopped send settled as a cancel.
   sendErrors: [] as unknown[],
   toast: vi.fn(),
 }));
@@ -202,33 +202,19 @@ describe('DocumentActionsBar — generate', () => {
     expect(build).not.toHaveBeenCalled();
   });
 
-  it('asks version-or-overwrite when a file already exists', async () => {
+  it('regenerates straight into a new version when a file already exists: no prompt, nothing replaced', async () => {
     h.state.file = FILE;
     h.state.upToDate = true;
-    const { unmount } = renderBar();
-
-    fireEvent.click(screen.getByTestId('doc-generate'));
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }));
-    await waitFor(() => expect((persistGeneratedDocument as any).mock.calls[0][1].mode).toBe('overwrite'));
-    unmount();
-
-    vi.clearAllMocks();
-    const second = renderBar();
-    fireEvent.click(screen.getByTestId('doc-generate'));
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Save as new version' }));
-    await waitFor(() => expect((persistGeneratedDocument as any).mock.calls[0][1].mode).toBe('version'));
-    second.unmount();
-
-    vi.clearAllMocks();
     renderBar();
+
     fireEvent.click(screen.getByTestId('doc-generate'));
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await waitFor(() => expect(screen.queryByText('Replace the existing PDF?')).toBeNull());
-    expect(persistGeneratedDocument).not.toHaveBeenCalled();
-    expect(build).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(persistGeneratedDocument).toHaveBeenCalled());
+    expect((persistGeneratedDocument as any).mock.calls[0][1].mode).toBeUndefined();
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith(
+      'PDF regenerated. The previous version is kept in its history.', { type: 'success' },
+    ));
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
 
@@ -249,7 +235,7 @@ describe('DocumentActionsBar — send', () => {
     await waitFor(() => expect(screen.queryByTestId('composer')).toBeNull());
   });
 
-  it('rebuilds a stale file through the version dialog and sends the new id', async () => {
+  it('rebuilds a stale file as a new version and sends the new id', async () => {
     h.state.file = FILE;
     h.state.upToDate = false;
     renderBar({ send: sendProp() });
@@ -257,12 +243,9 @@ describe('DocumentActionsBar — send', () => {
     fireEvent.click(screen.getByTestId('doc-send'));
     fireEvent.click(screen.getByTestId('composer-send'));
 
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Save as new version' }));
-
     await waitFor(() => expect(sendFn).toHaveBeenCalled());
     expect(build).toHaveBeenCalled();
-    expect((persistGeneratedDocument as any).mock.calls[0][1].mode).toBe('version');
+    expect((persistGeneratedDocument as any).mock.calls[0][1].mode).toBeUndefined();
     expect(onGenerated).toHaveBeenCalledWith('new-file');
     expect(sendFn.mock.calls[0][0]).toBe('new-file');
   });
@@ -288,47 +271,8 @@ describe('DocumentActionsBar — send', () => {
     });
     fireEvent.click(screen.getByTestId('composer-send'));
 
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }));
-
     await waitFor(() => expect(build).toHaveBeenCalledWith({ headerEmail: 'other@example.com' }));
     await waitFor(() => expect(sendFn.mock.calls[0][0]).toBe('new-file'));
-  });
-
-  it('settles the awaited version choice when the bar unmounts mid-send', async () => {
-    h.state.file = FILE;
-    h.state.upToDate = false;
-    const { unmount } = renderBar({ send: sendProp() });
-
-    fireEvent.click(screen.getByTestId('doc-send'));
-    fireEvent.click(screen.getByTestId('composer-send'));
-    await screen.findByText('Replace the existing PDF?');
-
-    // The host went away (an editor remount, a closed modal) while the choice
-    // was pending: the promise must settle as a cancel, not dangle forever.
-    unmount();
-
-    await waitFor(() => expect(h.sendErrors).toHaveLength(1));
-    expect(h.sendErrors[0]).toBeInstanceOf(DocumentGenerationCancelled);
-    expect(build).not.toHaveBeenCalled();
-    expect(sendFn).not.toHaveBeenCalled();
-  });
-
-  it('keeps the composer open when the version dialog is cancelled mid-send', async () => {
-    h.state.file = FILE;
-    h.state.upToDate = false;
-    renderBar({ send: sendProp() });
-
-    fireEvent.click(screen.getByTestId('doc-send'));
-    fireEvent.click(screen.getByTestId('composer-send'));
-
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-
-    await waitFor(() => expect(screen.queryByText('Replace the existing PDF?')).toBeNull());
-    expect(sendFn).not.toHaveBeenCalled();
-    expect(build).not.toHaveBeenCalled();
-    expect(screen.getByTestId('composer')).toBeInTheDocument();
   });
 
   // Spec §2: Generate AND Send save first. A dirty editor no longer blocks
@@ -351,10 +295,7 @@ describe('DocumentActionsBar — send', () => {
 
     await waitFor(() => expect(save).toHaveBeenCalled());
     // The stored file predates the pending edit, so it can't be reused: the
-    // dialog is how the freshly saved record gets its document.
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }));
-
+    // freshly saved record gets a new version of its document.
     await waitFor(() => expect(sendFn).toHaveBeenCalled());
     expect(save.mock.invocationCallOrder[0]).toBeLessThan(build.mock.invocationCallOrder[0]);
     expect(sendFn.mock.calls[0][0]).toBe('new-file');
@@ -372,9 +313,6 @@ describe('DocumentActionsBar — send', () => {
     fireEvent.click(screen.getByTestId('composer-send'));
 
     await waitFor(() => expect(save).toHaveBeenCalled());
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }));
-
     await waitFor(() => expect(sendFn).toHaveBeenCalled());
     expect(build).toHaveBeenCalled();
     expect(sendFn.mock.calls[0][0]).toBe('new-file');
@@ -435,33 +373,11 @@ describe('DocumentActionsBar — staleness unknown', () => {
     fireEvent.click(screen.getByTestId('doc-send'));
     fireEvent.click(screen.getByTestId('composer-send'));
 
-    // A file exists, so the version/overwrite prompt still stands between the
-    // send and the stored document (spec §2).
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Save as new version' }));
-
     await waitFor(() => expect(sendFn).toHaveBeenCalled());
     expect(build).toHaveBeenCalled();
     expect(sendFn.mock.calls[0][0]).toBe('new-file');
   });
 });
-
-  it('Escape during the version dialog closes only the dialog, not the composer', async () => {
-    h.state.file = FILE;
-    h.state.upToDate = false;
-    renderBar({ send: sendProp() });
-
-    fireEvent.click(screen.getByTestId('doc-send'));
-    fireEvent.click(screen.getByTestId('composer-send'));
-    await screen.findByText('Replace the existing PDF?');
-
-    fireEvent.keyDown(window, { key: 'Escape' });
-
-    await waitFor(() => expect(screen.queryByText('Replace the existing PDF?')).toBeNull());
-    expect(screen.getByTestId('composer')).toBeInTheDocument();
-    expect(sendFn).not.toHaveBeenCalled();
-    expect(h.toast).not.toHaveBeenCalledWith('Failed to send', expect.anything());
-  });
 
 // The editors still build their prefill the way they always have (comma
 // separated strings, a plain-text body). The bar is what turns that into what
@@ -654,12 +570,32 @@ describe('DocumentActionsBar — open / download / formats', () => {
     expect(screen.queryByTestId('doc-send')).toBeNull();
   });
 
-  it('words the version dialog for the xlsx format', async () => {
+  it('words the regenerate message for the xlsx format', async () => {
     h.state.file = { ...FILE, name: 'PayApp-3.xlsx' };
     h.state.upToDate = true;
     renderBar({ format: 'xlsx', fileName: 'PayApp-3.xlsx' });
     fireEvent.click(screen.getByTestId('doc-generate'));
-    await screen.findByText('Replace the existing Excel file?');
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith(
+      'Excel regenerated. The previous version is kept in its history.', { type: 'success' },
+    ));
+  });
+
+  it('says when the document was edited in the Document Editor, or an earlier one restored', () => {
+    h.state.file = { ...FILE, versionOrigin: 'editor' };
+    h.state.upToDate = true;
+    const first = renderBar();
+    expect(screen.getByTestId('doc-status')).toHaveTextContent('PDF edited');
+    expect(screen.getByTestId('doc-status').firstElementChild).toHaveAttribute('title', expect.stringContaining('Edited in the Document Editor'));
+    first.unmount();
+
+    h.state.upToDate = false;
+    const second = renderBar();
+    expect(screen.getByTestId('doc-status')).toHaveTextContent('PDF edited, out of date');
+    second.unmount();
+
+    h.state.file = { ...FILE, versionOrigin: 'restore' };
+    renderBar();
+    expect(screen.getByTestId('doc-status')).toHaveTextContent('Earlier PDF restored');
   });
 
   it('blocks Generate and Send until the record has an id', () => {

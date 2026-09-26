@@ -36,10 +36,11 @@ describe('by-source document helpers', () => {
     expect(url).toContain('sourceIds=a%2Cb');
   });
 
-  it('saveBinaryFile with mode: overwrite appears in the upload URL', async () => {
+  it('saveBinaryFile never asks to overwrite: a regenerate always versions', async () => {
     const fn = mockFetch(200, { fileId: 'f1', versioned: true });
-    await saveBinaryFile('f1', new Blob(['x']), { sourceType: 'invoice', sourceId: 'inv-1', kind: 'invoice', mode: 'overwrite' });
+    await saveBinaryFile('f1', new Blob(['x']), { sourceType: 'invoice', sourceId: 'inv-1', kind: 'invoice' });
     const url = String(fn.mock.calls[0][0]);
-    expect(url).toContain('mode=overwrite');
+    expect(url).toContain('sourceId=inv-1');
+    expect(url).not.toContain('mode=');
   });
 });

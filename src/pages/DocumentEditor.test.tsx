@@ -11,11 +11,20 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ToastProvider } from '../components/Toast';
 
-const h = vi.hoisted(() => ({ openInEditor: vi.fn(), loadDocsApi: vi.fn(), theme: 'light' as 'light' | 'dark' }));
-vi.mock('../utils/store', async (orig) => ({ ...(await orig<typeof import('../utils/store')>()), openInEditor: h.openInEditor }));
+const h = vi.hoisted(() => ({
+  openInEditor: vi.fn(), loadDocsApi: vi.fn(), theme: 'light' as 'light' | 'dark',
+  getEditorHistory: vi.fn(), getEditorHistoryData: vi.fn(), restoreFileVersion: vi.fn(),
+}));
+vi.mock('../utils/store', async (orig) => ({
+  ...(await orig<typeof import('../utils/store')>()),
+  openInEditor: h.openInEditor,
+  getEditorHistory: h.getEditorHistory,
+  getEditorHistoryData: h.getEditorHistoryData,
+  restoreFileVersion: h.restoreFileVersion,
+}));
 vi.mock('../utils/onlyofficeApi', () => ({ loadDocsApi: h.loadDocsApi }));
 vi.mock('../context/ThemeContext', () => ({ useTheme: () => ({ mode: h.theme }) }));
-import { EditorOpenError, getRecentDocuments } from '../utils/store';
+import { EditorOpenError, RestoreError, getRecentDocuments } from '../utils/store';
 import { DocumentEditor } from './DocumentEditor';
 
 const opening = (over: Record<string, unknown> = {}) => ({
@@ -25,7 +34,7 @@ const opening = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-let constructed: { placeholderId: string; config: any }[];
+let constructed: { placeholderId: string; config: any; instance: any }[];
 let destroyed: number;
 
 const mount = (url = '/tools/edit?fileId=f1') => render(
@@ -53,8 +62,10 @@ beforeEach(() => {
   h.openInEditor.mockResolvedValue(opening());
   window.DocsAPI = {
     DocEditor: function DocEditor(this: any, placeholderId: string, config: any) {
-      constructed.push({ placeholderId, config });
+      constructed.push({ placeholderId, config, instance: this });
       this.destroyEditor = () => { destroyed++; };
+      this.refreshHistory = vi.fn();
+      this.setHistoryData = vi.fn();
     } as any,
   };
 });
@@ -153,5 +164,88 @@ describe('DocumentEditor — landing', () => {
     expect(screen.getByRole('button', { name: /Open from Documents/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Open from computer/ })).toBeInTheDocument();
     expect(screen.getByText('Nothing opened yet')).toBeInTheDocument();
+  });
+});
+
+describe('DocumentEditor — version history', () => {
+  const HISTORY = {
+    currentVersion: 2,
+    versions: [
+      { version: 1, key: 'k1', createdAt: Date.UTC(2026, 8, 25, 9), user: { id: 'u1', name: 'nathan' }, origin: null },
+      { version: 2, key: 'k2', createdAt: Date.UTC(2026, 8, 26, 9), user: { id: 'u2', name: 'crew' }, origin: 'editor', changes: [{ created: 'x' }], serverVersion: '9.4.0' },
+    ],
+  };
+  const events = async () => {
+    await waitFor(() => expect(constructed).toHaveLength(1));
+    return constructed[0].config.events;
+  };
+
+  beforeEach(() => {
+    h.getEditorHistory.mockResolvedValue(HISTORY);
+    h.getEditorHistoryData.mockResolvedValue({ version: 1, key: 'k1', url: 'http://app/file', fileType: 'docx', token: 't' });
+    h.restoreFileVersion.mockResolvedValue({ versionNumber: 3, restoredFrom: 1 });
+  });
+
+  it('lists the versions the server knows, with authors and change logs', async () => {
+    mount();
+    await (await events()).onRequestHistory();
+    const arg = constructed[0].instance.refreshHistory.mock.calls[0][0];
+    expect(arg.currentVersion).toBe(2);
+    expect(arg.history).toHaveLength(2);
+    expect(arg.history[0]).toMatchObject({ version: 1, key: 'k1', user: { id: 'u1', name: 'nathan' } });
+    expect(typeof arg.history[0].created).toBe('string');
+    expect(arg.history[0].changes).toBeUndefined();
+    expect(arg.history[1]).toMatchObject({ version: 2, changes: [{ created: 'x' }], serverVersion: '9.4.0' });
+  });
+
+  it('shows the history as an error when it cannot be loaded', async () => {
+    h.getEditorHistory.mockRejectedValue(new Error('Server down'));
+    mount();
+    await (await events()).onRequestHistory();
+    expect(constructed[0].instance.refreshHistory).toHaveBeenCalledWith({ error: 'Server down' });
+  });
+
+  it('hands ONLYOFFICE the signed data for the version picked', async () => {
+    mount();
+    const ev = await events();
+    await ev.onRequestHistoryData({ data: 1 });
+    expect(h.getEditorHistoryData).toHaveBeenCalledWith('f1', 1);
+    expect(constructed[0].instance.setHistoryData).toHaveBeenCalledWith(expect.objectContaining({ version: 1, token: 't' }));
+
+    h.getEditorHistoryData.mockRejectedValue(new Error('That version no longer exists.'));
+    await ev.onRequestHistoryData({ data: 7 });
+    expect(constructed[0].instance.setHistoryData).toHaveBeenLastCalledWith({ version: 7, error: 'That version no longer exists.' });
+  });
+
+  it('starts the editor again when the history closes', async () => {
+    mount();
+    (await events()).onRequestHistoryClose();
+    await waitFor(() => expect(constructed).toHaveLength(2));
+    expect(destroyed).toBe(1);
+    expect(h.openInEditor).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores from inside the editor as a new version, then shows the new list', async () => {
+    mount();
+    await (await events()).onRequestRestore({ data: { version: 1 } });
+    expect(h.restoreFileVersion).toHaveBeenCalledWith('f1', { version: 1 }, 'editor');
+    expect(await screen.findByText('Version 1 restored as version 3')).toBeInTheDocument();
+    expect(constructed[0].instance.refreshHistory).toHaveBeenCalled();
+  });
+
+  it('says why a restore has to wait, and keeps the history usable', async () => {
+    h.restoreFileVersion.mockRejectedValue(new RestoreError('crew is editing this file. Restore once the editor is closed.', 409, 'open-in-editor', ['crew']));
+    mount();
+    await (await events()).onRequestRestore({ data: { version: 1 } });
+    expect(await screen.findByText(/crew is editing this file/)).toBeInTheDocument();
+    expect(constructed[0].instance.refreshHistory).toHaveBeenCalled();
+  });
+
+  it('offers no Restore where the file only opens for viewing', async () => {
+    h.openInEditor.mockResolvedValue(opening({ file: { ...opening().file, mode: 'view' } }));
+    mount();
+    const ev = await events();
+    expect(ev.onRequestRestore).toBeUndefined();
+    expect(typeof ev.onRequestHistory).toBe('function');
   });
 });

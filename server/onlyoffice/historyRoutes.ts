@@ -198,14 +198,13 @@ export function registerOnlyofficeHistoryRoutes(app: express.Express, deps: Only
       const others = users.filter(u => u !== me);
       if (!fromEditor || others.length > 0 || users.length === 0) {
         const names = usernames(db);
-        const who = (others.length ? others : users).map(u => names.get(u) ?? 'someone');
-        return res.status(409).json({
-          error: who.length
-            ? `${listNames(who)} ${who.length === 1 ? 'is' : 'are'} editing this file. Restore once the editor is closed.`
-            : 'This file is open in the editor. Restore once the editor is closed.',
-          code: 'open-in-editor',
-          users: who,
-        });
+        const who = [...new Set(others.map(u => names.get(u) ?? 'someone'))];
+        const error = who.length
+          ? `${listNames(who)} ${who.length === 1 ? 'is' : 'are'} editing this file. Restore once the editor is closed.`
+          : users.includes(me)
+            ? 'You have this file open in the Document Editor. Restore from its Version History there, or close it first.'
+            : 'This file is open in the Document Editor. Restore once the editor is closed.';
+        return res.status(409).json({ error, code: 'open-in-editor', users: who });
       }
       // Keep what is open as a version before replacing it.
       const saved = waiters.wait(session.docKey, forcesaveTimeoutMs);

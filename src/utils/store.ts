@@ -256,10 +256,6 @@ export interface FileUploadOpts {
   customerId?: string;
   sourceType?: string;
   sourceId?: string;
-  // Only meaningful on an upsert-by-source hit — see server/files.ts's
-  // `store`. 'version' (default) keeps prior versions as history; 'overwrite'
-  // replaces the current version in place (regenerate-in-place flows).
-  mode?: 'version' | 'overwrite';
 }
 
 export interface UploadResult {
@@ -275,7 +271,6 @@ const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
   if (opts?.customerId) q.set('customerId', opts.customerId);
   if (opts?.sourceType) q.set('sourceType', opts.sourceType);
   if (opts?.sourceId) q.set('sourceId', opts.sourceId);
-  if (opts?.mode) q.set('mode', opts.mode);
   return q;
 };
 
@@ -690,6 +685,75 @@ export const openInEditor = async (
   return res.json();
 };
 
+// ── Version history (ONLYOFFICE Phase 2) ──────────────────────────────────
+
+/** Deletes one older version. Admins, or whoever made that version. */
+export const deleteFileVersion = async (fileId: string, versionId: string): Promise<void> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeaders() },
+  });
+  await handleResponse(res);
+};
+
+/** Why a restore didn't happen, with the server's reason code
+ *  ('open-in-editor' | 'save-timeout' | 'current' | …) and, when the file is
+ *  open, who has it open. */
+export class RestoreError extends Error {
+  constructor(message: string, public status: number, public code?: string, public users: string[] = []) {
+    super(message);
+    this.name = 'RestoreError';
+  }
+}
+
+/** Restores an older version as a NEW version on top; nothing is lost. `from`
+ *  says where the person is: only someone inside the open editor may restore a
+ *  file that is open there. */
+export const restoreFileVersion = async (
+  fileId: string,
+  target: { versionId: string } | { version: number },
+  from: 'documents' | 'editor',
+): Promise<{ versionNumber: number; restoredFrom: number }> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(fileId)}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ ...target, from }),
+  }, { timeoutMs: 60_000 });
+  if (res.status === 401) await handleResponse(res);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new RestoreError(body.error || "Couldn't restore that version", res.status, body.code, body.users ?? []);
+  return body;
+};
+
+/** One entry of the editor's version list (GET /api/onlyoffice/history/:id). */
+export interface EditorHistoryVersion {
+  version: number;
+  key: string;
+  createdAt: number;
+  user: { id: string; name: string } | null;
+  origin: string | null;
+  changes?: unknown;
+  serverVersion?: unknown;
+}
+
+export const getEditorHistory = async (fileId: string): Promise<{ currentVersion: number; versions: EditorHistoryVersion[] }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/history/${encodeURIComponent(fileId)}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return res.json();
+};
+
+/** The signed object for the editor's setHistoryData. The change-log link in
+ *  it is fetched by the browser, so the server builds it on this page's
+ *  address. */
+export const getEditorHistoryData = async (fileId: string, version: number): Promise<Record<string, unknown>> => {
+  const q = new URLSearchParams({ origin: window.location.origin });
+  const res = await fetchWithRetry(`/api/onlyoffice/history/${encodeURIComponent(fileId)}/${version}?${q.toString()}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  await handleResponse(res);
+  return res.json();
+};
+
 // Recently opened documents (client-only, newest first) — the editor's
 // landing list. Same shape and idiom as recent projects above.
 export interface RecentDocument { id: string; name: string; mime: string; at: number }
@@ -902,6 +966,10 @@ export interface ProjectFile {
   parentFileId: string | null;
   versionNumber: number;
   createdAt: number;
+  /** User id of whoever made this version (null for older history). */
+  createdBy?: string | null;
+  /** 'editor' | 'restore' | null — see GeneratedDoc.versionOrigin. */
+  versionOrigin?: string | null;
 }
 
 export const getProjectSummary = async (id: string): Promise<ProjectSummary | null> => {
@@ -1034,6 +1102,10 @@ export interface GeneratedDoc {
   size: number;
   createdAt: number;
   versionNumber: number;
+  /** 'editor' once edited in the Document Editor since it was generated,
+   *  'restore' when an older version was restored; null straight after a
+   *  generate (and from servers before ONLYOFFICE Phase 2). */
+  versionOrigin?: string | null;
 }
 
 export const getDocumentBySource = async (

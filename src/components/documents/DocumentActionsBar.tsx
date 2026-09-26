@@ -9,8 +9,9 @@
 //  - Generating from a dirty editor would produce a document that disagrees
 //    with the record, so Generate AND Send both save first and abort if that
 //    save fails (spec §2, "Dirty rule").
-//  - A record that already has a document never gets silently replaced — the
-//    version/overwrite dialog is the only way past it.
+//  - Regenerating never replaces a document: the fresh bytes become a new
+//    version and the old ones stay in its history (ONLYOFFICE decision
+//    2026-09-25; unwanted versions are deleted from the Documents page).
 //  - Send reuses the stored file only when it is genuinely current, no save was
 //    needed on the way in, AND the header email wasn't overridden in the
 //    composer; anything else rebuilds, so the recipient always gets bytes that
@@ -19,7 +20,7 @@
 //    current, so Send always rebuilds rather than mailing a stale file.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, ExternalLink, FileText, Mail } from 'lucide-react';
-import { GeneratedDoc, fetchFileBlob, persistGeneratedDocument } from '../../utils/store';
+import { fetchFileBlob, persistGeneratedDocument } from '../../utils/store';
 import { useGeneratedDocument } from '../../hooks/useGeneratedDocument';
 import { useItemThreadLinks } from '../../hooks/useItemThreadLinks';
 import { useReplyFlags } from '../../hooks/useReplyFlags';
@@ -34,7 +35,6 @@ import { DocFormat, DocumentStatusChip, FORMAT_WORD } from './DocumentStatusChip
 import { DocumentGenerationCancelled } from './errors';
 import { ReplyFlagChip } from './ReplyFlagChip';
 import { SentThreadChip } from './SentThreadChip';
-import { VersionOrOverwriteDialog } from './VersionOrOverwriteDialog';
 import { useDocumentViewer } from './useDocumentViewer';
 
 export type { DocFormat };
@@ -92,12 +92,6 @@ export interface DocumentActionsBarProps {
   testIdPrefix?: string;
 }
 
-type PendingChoice = {
-  fileName: string;
-  versionNumber: number;
-  resolve: (mode: 'version' | 'overwrite' | null) => void;
-};
-
 export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   source, kind, format, projectId, fileName, build, dirty, save, updatedAt,
   staleness, readOnly = false, onGenerated, send, size, testIdPrefix = 'doc',
@@ -115,7 +109,6 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   const unsaved = !source.sourceId;
 
   const [busy, setBusy] = useState<string | null>(null);
-  const [pending, setPending] = useState<PendingChoice | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   // Which address the LETTERHEAD shows — not who the mail is from. It lived in
   // the old composer; the shared mail composer has no idea about documents, so
@@ -140,19 +133,11 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   const replyFlags = useReplyFlags(itemType, replyFlagIds);
   const hasReplyFlag = !!source.sourceId && replyFlags.has(source.sourceId);
 
-  // The awaited version/overwrite choice, mirrored in a ref so unmounting can
-  // settle it — a dangling promise would strand the generate/send flow that is
-  // waiting on it (and, for send, the composer's `sending` state with it).
-  const pendingRef = useRef<PendingChoice | null>(null);
+  // The flows below are async; a bar unmounted mid-flow must not set state.
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      const p = pendingRef.current;
-      pendingRef.current = null;
-      p?.resolve(null);
-    };
+    return () => { mountedRef.current = false; };
   }, []);
   const set = useCallback(<T,>(fn: (v: T) => void, v: T) => { if (mountedRef.current) fn(v); }, []);
 
@@ -160,27 +145,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   const btnSize = size === 'sm' ? 'sm' : 'md';
   const p = testIdPrefix;
 
-  // A dialog rendered by state, awaited like a confirm(): the async flows read
-  // top-to-bottom instead of splintering into callbacks per branch.
-  const askMode = (existing: GeneratedDoc) =>
-    new Promise<'version' | 'overwrite' | null>(resolve => {
-      // Unmounted before we could ask: treat it as a cancel rather than
-      // waiting on a dialog that will never render.
-      if (!mountedRef.current) { resolve(null); return; }
-      const next = { fileName: existing.name ?? fileName, versionNumber: existing.versionNumber, resolve };
-      pendingRef.current = next;
-      setPending(next);
-    });
-  const settle = (mode: 'version' | 'overwrite' | null) => {
-    pendingRef.current = null;
-    pending?.resolve(mode);
-    setPending(null);
-  };
-
-  const buildAndPersist = async (
-    mode: 'version' | 'overwrite' | undefined,
-    headerEmail?: string,
-  ): Promise<string> => {
+  const buildAndPersist = async (headerEmail?: string): Promise<string> => {
     const blob = await build(headerEmail ? { headerEmail } : {});
     const { fileId } = await persistGeneratedDocument(blob, {
       projectId,
@@ -188,9 +153,6 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
       name: fileName,
       sourceType: source.sourceType,
       sourceId: source.sourceId,
-      // Only meaningful on an upsert hit — omitted entirely for a first save
-      // so the server keeps its own default.
-      ...(mode ? { mode } : {}),
     });
     // The bytes are stored by this point. If the editor's own bookkeeping
     // (proposal fileId, a parent refresh) then fails, saying "failed to
@@ -230,17 +192,11 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
       return;
     }
 
-    let mode: 'version' | 'overwrite' | undefined;
-    if (file) {
-      const choice = await askMode(file);
-      if (!choice) return;
-      mode = choice;
-    }
-
+    const regenerating = !!file;
     set(setBusy, `Generating ${word}…`);
     try {
-      await buildAndPersist(mode);
-      toast(`${word} generated`, { type: 'success' });
+      await buildAndPersist();
+      toast(regenerating ? `${word} regenerated. The previous version is kept in its history.` : `${word} generated`, { type: 'success' });
     } catch {
       toast(`Failed to generate the ${word}`, { type: 'error' });
     } finally {
@@ -275,8 +231,8 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     const wasDirty = dirty;
     // Emailing from a dirty editor would attach bytes that disagree with the
     // record, so Send commits first exactly like Generate. A failed save throws
-    // the same sentinel a cancelled dialog does, so the composer keeps the
-    // typed message on screen instead of reporting a send failure.
+    // the cancel sentinel, so the composer keeps the typed message on screen
+    // instead of reporting a send failure.
     if (!(await saveFirst())) {
       toast('Save failed — nothing sent', { type: 'error' });
       throw new DocumentGenerationCancelled();
@@ -292,17 +248,9 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     if (reusable && file) {
       fileId = file.id;
     } else {
-      let mode: 'version' | 'overwrite' | undefined;
-      if (file) {
-        const choice = await askMode(file);
-        // Rethrown, not swallowed: the composer keeps its window (and the typed
-        // message) open when onSend rejects — a cancel isn't a failed send.
-        if (!choice) throw new DocumentGenerationCancelled();
-        mode = choice;
-      }
       set(setBusy, `Generating ${word}…`);
       try {
-        fileId = await buildAndPersist(mode, headerOverride);
+        fileId = await buildAndPersist(headerOverride);
       } catch (e) {
         // The composer shows whatever this rejects with, so it has to be a
         // sentence a sender can act on — a renderer's internal message
@@ -427,18 +375,6 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
         {busy && <span className="text-xs text-ink-faint" data-testid={`${p}-busy`}>{busy}</span>}
       </div>
 
-      {pending && (
-        <VersionOrOverwriteDialog
-          open
-          fileName={pending.fileName}
-          versionNumber={pending.versionNumber}
-          format={format}
-          testIdPrefix={p}
-          onChoose={settle}
-          onCancel={() => settle(null)}
-        />
-      )}
-
       {send && composerOpen && (
         // Mounted only while open, so every Email click starts from the
         // editor's current defaults rather than whatever was typed and
@@ -462,10 +398,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
           // thread — replying into someone else's would 404 at the server.
           existingThread={threads.myThread ? { ...threads.myThread, subject: threads.myThread.subject || fileName } : undefined}
           extraHeader={headerSelect}
-          // Both Modals listen for Escape on window, so an Escape aimed at the
-          // version dialog would otherwise also close the composer and lose the
-          // typed message. While a choice is pending, only the dialog closes.
-          onClose={() => { if (!pending) setComposerOpen(false); }}
+          onClose={() => setComposerOpen(false)}
           onSend={handleSend}
         />
       )}

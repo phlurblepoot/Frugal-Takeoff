@@ -348,20 +348,57 @@ container next to the app, and build the extras agreed below on top of it.
 
 ## Phase 2 — Versions and generated documents
 
-- [ ] Regenerate always creates a new version. Remove the
+- [x] Regenerate always creates a new version. Remove the
   `VersionOrOverwriteDialog` prompt from the `DocumentActionsBar` regenerate
   paths, and stop sending `mode=overwrite` for generated documents.
-- [ ] Update `useGeneratedDocument` / `DocumentStatusChip` so an ONLYOFFICE edit
+  - The dialog and its test are deleted. The server's overwrite mode
+    (`overwriteLive`, `PutOpts.mode`) is gone too, so an old client asking
+    for it still gets a new version.
+  - The toast after a regenerate says the previous version is kept.
+  - Archived versions now keep the date their bytes were made, not the date
+    they were archived (the history showed every version at the time of the
+    next one).
+- [x] Update `useGeneratedDocument` / `DocumentStatusChip` so an ONLYOFFICE edit
   reads correctly ("edited after generating").
-- [ ] Delete older versions: `DELETE /api/files/:id/versions/:versionId`.
+  - Editor saves stamp `files.versionOrigin = 'editor'`; a restore stamps
+    `'restore'`; an upload or generate clears it. `/api/documents/by-source`
+    returns it.
+  - Chip: "PDF edited" (blue), or "PDF edited, out of date" once the record
+    changes after the edit; "Earlier PDF restored" (amber). Tooltips explain.
+  - An edited document counts as current until the record changes after the
+    edit, so Send mails the edited copy (the edit is deliberate, e.g. a
+    signature). A restored older version never counts as current, so Send
+    rebuilds.
+- [x] Delete older versions: `DELETE /api/files/:id/versions/:versionId`.
   - Allowed for admins, or the version's `createdBy`. Old versions with no
     `createdBy` are admin-only.
   - The live version can't be deleted this way.
   - Add a trash button in the Documents version history list, with a confirm.
-- [ ] In-editor version history:
+  - The Documents version list (`src/pages/documents/VersionHistory.tsx`) also
+    shows who made each version, an "edited"/"restored" tag, download (named
+    `Scope (v2).docx`) and **restore** with a confirm.
+- [x] In-editor version history:
   - `onRequestHistory` lists `/api/files/:id/versions`
   - `onRequestHistoryData` returns a signed per-version URL
   - `onRequestRestore` restores **as a new version**, so nothing is lost
+  - Built as: `GET /api/onlyoffice/history/:fileId` (the list, with authors
+    and change logs; the current version carries the open session's key) and
+    `GET /api/onlyoffice/history/:fileId/:version` (signed `setHistoryData`,
+    with `previous` and `changesUrl` when a log was kept). Leaving the history
+    view restarts the editor, as ONLYOFFICE requires. Restore is only offered
+    where the file opens for editing.
+  - Restore is `POST /api/files/:id/restore` (Documents page and editor):
+    - No editing session: the version's bytes become a new version on top.
+    - Open in the editor: only the person restoring, from inside that editor,
+      alone in it, may restore. Anyone else gets "X is editing this file";
+      the Documents page tells you to use the editor's Version History.
+    - Then ONLYOFFICE is asked to save what is open (command `forcesave`), and
+      the restore waits for that save (30 s, else nothing changes). So typing
+      that hadn't been saved yet is kept as its own version.
+    - The session is then retired (`editor_superseded_sessions`); the next
+      open starts fresh on the restored file. ONLYOFFICE's late closing save
+      for the old session is dropped unless it holds changes made after the
+      restore (by the change dates it sends; by the bytes when it sends none).
 - [x] Store the callback's `history` / `changesurl` per version, so version
   history can highlight what changed. (server, 2026-09-26)
   - Kept in `editor_changes` (migration 38) when a session closes (status 2
@@ -372,8 +409,44 @@ container next to the app, and build the extras agreed below on top of it.
   - The editor frame downloads the zip itself, cross-origin:
     `GET /api/onlyoffice/changes/:fileId/:version?t=` answers with
     `Access-Control-Allow-Origin` set to ONLYOFFICE's public address.
-- [ ] Tests: regenerate → new version; delete-version permissions; restore
+- [x] Tests: regenerate → new version; delete-version permissions; restore
   creates a version.
+  - `server/onlyoffice/historyRoutes.test.ts` (21, fake Document Server that
+    answers `info` and `forcesave` and posts the save back): the list, signed
+    data, change-log CORS and link scope, admin-only files, restore by number
+    and by row id, current/other-file refusals, extension follows the bytes,
+    others editing → 409, Documents-page restore while open → 409, stale
+    session ignored, save-first-then-restore, nothing unsaved, save timeout →
+    nothing changes, late closing save dropped / kept by date / judged by
+    bytes, `changeTimes`
+  - `editorRoutes.test.ts` +6: users tracked, `versionOrigin`, change log
+    stored (also when the close brings no new bytes), not stored when the
+    session made two versions, a failed log download never fails the save
+  - `files.test.ts`: regenerate always versions (even with `mode=overwrite`),
+    archived dates, delete-version permissions (author, non-author, admin,
+    no author, live row, other file)
+  - client: `VersionHistory.test.tsx` (7), `DocumentEditor.test.tsx` +7
+    (history, data, close → restart, restore, restore refused, view-only has
+    no Restore), `DocumentActionsBar`, `useGeneratedDocument`, proposal and
+    punch tests updated for the missing prompt
+  - full unit suite 3215/3215 (269 files)
+  - e2e: `document-actions.spec.ts` regenerates without a prompt;
+    `documents.spec.ts` new "version history: restore … delete" test
+  - smoke against the real server and a stand-in Document Server over HTTP
+    (13 checks): session → one "edited" version with its log; history list and
+    signed data; the log downloads cross-origin; restore blocked from the
+    Documents page while open; in-editor restore kept the unsaved typing as
+    v3 and restored v1 as v4; the old session's late close was dropped; the
+    next open got a fresh key; blocked while someone else edits; delete v2;
+    the live version can't be deleted
+- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  - edit a document, close it, then File → Version History: the versions show
+    with names, and the edited one highlights its changes
+  - restore an older version from the editor, and from the Documents page
+    (with the file closed)
+  - regenerate an invoice PDF: no prompt, a new version appears; delete an old
+    one from Documents
+  - edit a generated PDF in the editor: its chip says "PDF edited"
 
 ## Phase 3 — New documents, templates, signatures and stamps
 

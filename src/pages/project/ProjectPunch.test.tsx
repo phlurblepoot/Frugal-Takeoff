@@ -166,10 +166,7 @@ describe('ProjectPunch — document actions', () => {
     fireEvent.click(screen.getByTestId('doc-send'));
     fireEvent.click(await screen.findByTestId('composer-send'));
 
-    // A file exists, so the version/overwrite prompt still guards it.
-    await screen.findByText('Replace the existing PDF?');
-    fireEvent.click(screen.getByRole('button', { name: 'Save as new version' }));
-
+    // The rebuild becomes a new version of the stored report (no prompt).
     await waitFor(() => expect(h.buildPunchPdf).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(h.sendPunchReport).toHaveBeenCalledTimes(1));
     // The freshly built file goes out, not the stored one.

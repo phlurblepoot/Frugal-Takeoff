@@ -15,7 +15,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { History } from 'lucide-react';
-import { DocumentRow, ProjectFile, createShare, fetchFileBlob, formatBytes, getSettings, listFileVersions } from '../../utils/store';
+import { DocumentRow, createShare, fetchFileBlob, formatBytes, getSettings } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { useShareLink } from '../../components/ShareLinkModal';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -27,6 +27,7 @@ import { DocumentViewerModal } from './DocumentViewerModal';
 import { MimeIcon } from './MimeIcon';
 import { openTargetFor } from './openTarget';
 import { RowContextMenu, RowContextMenuState } from './RowContextMenu';
+import { VersionHistory } from './VersionHistory';
 import { downloadBlob } from '../../utils/download';
 
 // Moved to src/utils/download.ts (shared with DocumentActionsBar); re-exported
@@ -39,33 +40,6 @@ const iconBtnCls = 'flex min-h-9 min-w-9 items-center justify-center rounded-md 
 // scroll/drag instead — mirrors the timer-ref idiom in PdfCanvas.tsx.
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_TOLERANCE = 10;
-
-const VersionHistory: React.FC<{ fileName: string | null; versions: ProjectFile[] | null }> = ({
-  fileName, versions,
-}) => {
-  const { toast } = useToast();
-  if (versions === null) return <Skeleton className="h-6 w-48" />;
-  if (versions.length <= 1) return <span className="text-xs text-ink-faint">No earlier versions.</span>;
-  return (
-    <ul className="space-y-1">
-      {versions.slice(1).map(v => (
-        <li key={v.id} className="flex items-center gap-3 text-xs text-ink-soft">
-          <span>v{v.versionNumber}</span>
-          <span>{new Date(v.createdAt).toLocaleString()}</span>
-          <button
-            onClick={async () => {
-              try { downloadBlob(await fetchFileBlob(v.id), `${fileName ?? v.id} (v${v.versionNumber})`); }
-              catch { toast('Download failed', { type: 'error' }); }
-            }}
-            className="text-accent-600 hover:underline dark:text-accent-400"
-          >
-            download
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
-};
 
 // Row actions column: the version-history toggle is the only affordance left
 // here (spec: "ONLY the version-history toggle remains, rendered ONLY when
@@ -96,7 +70,6 @@ export const DocumentsTable: React.FC<{
   const confirm = useConfirm();
   const shareLink = useShareLink();
   const [historyFor, setHistoryFor] = useState<string | null>(null);
-  const [versions, setVersions] = useState<ProjectFile[] | null>(null);
   const [contextMenu, setContextMenu] = useState<RowContextMenuState | null>(null);
   // Viewer state lives here rather than in DocumentsPage: the row click, the
   // openTargetFor navigation and the archive callback the modal needs are all
@@ -163,12 +136,8 @@ export const DocumentsTable: React.FC<{
     }
   };
 
-  const handleHistory = async (row: DocumentRow) => {
-    if (historyFor === row.id) { setHistoryFor(null); setVersions(null); return; }
-    setHistoryFor(row.id);
-    setVersions(null);
-    try { setVersions(await listFileVersions(row.id)); }
-    catch { setVersions([]); }
+  const handleHistory = (row: DocumentRow) => {
+    setHistoryFor(historyFor === row.id ? null : row.id);
   };
 
   // ── Long-press → context menu (touch/mobile cards). A timer armed on
@@ -326,7 +295,7 @@ export const DocumentsTable: React.FC<{
                 {historyFor === row.id && (
                   <TR>
                     <TD colSpan={7} className="bg-sunken/50">
-                      <VersionHistory fileName={row.name} versions={versions} />
+                      <VersionHistory fileId={row.id} fileName={row.name} />
                     </TD>
                   </TR>
                 )}
@@ -386,7 +355,7 @@ export const DocumentsTable: React.FC<{
             )}
             {historyFor === row.id && (
               <div className="mt-2 rounded-lg bg-sunken/50 p-2">
-                <VersionHistory fileName={row.name} versions={versions} />
+                <VersionHistory fileId={row.id} fileName={row.name} />
               </div>
             )}
           </li>
