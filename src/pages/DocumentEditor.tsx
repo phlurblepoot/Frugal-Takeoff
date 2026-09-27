@@ -43,11 +43,10 @@ export const DocumentEditor: React.FC = () => {
   const fileId = params.get('fileId');
   // ?comment=: open at a comment (a notification's link, or a comment's "Get link").
   const comment = params.get('comment');
-  // PageTransition (AnimatePresence mode="wait") first renders a newly
-  // entered route inside the OUTGOING page's wrapper while that fades out,
-  // then mounts it again in its own. Rendering nothing in the outgoing copy
-  // keeps ONLYOFFICE from being started twice on every in-app "Open", and the
-  // landing page from losing a dialog opened in that first moment.
+  // Nothing in a page that is on its way out: PageTransition used to mount a
+  // newly entered route in the outgoing wrapper first, which started
+  // ONLYOFFICE twice on every in-app "Open". It renders nothing there now
+  // (see PageTransition.tsx); this keeps the editor safe either way.
   if (!present) return null;
   // Keyed: switching files (or following a link to a comment in the same
   // file) tears the old editor down and builds a new one.

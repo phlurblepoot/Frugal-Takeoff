@@ -1061,8 +1061,20 @@ container next to the app, and build the extras agreed below on top of it.
 ## Phase 8 — Finish and merge
 
 - [ ] `npm run lint`, `npm test` and `npm run test:e2e` all passing.
-  - lint clean and unit 3427/3427 on the Phase 8 code; full e2e: running,
-    results to follow
+  - The first full e2e run on the Phase 8 code (`ba90541`) failed one test,
+    `e2e/mail-phase2.spec.ts` "convert-from-thread": the RFI editor opened
+    and closed a moment later. Cause: `PageTransition` mounted every newly
+    entered page twice (first inside the fading-out wrapper, whose `<Outlet>`
+    renders the route that matches now, then in its own), so a page acting
+    on a one-shot `?open=` lost what it opened. The same double mount was
+    behind the Phase 1 editor workaround (`051352f`) and RestorePage's. Not
+    ONLYOFFICE work and live on `testing`, so fixed there (`181d537`: the
+    outgoing wrapper renders nothing; a `PageTransition` test reproduces the
+    mail → RFI case and fails without the fix; plus the Sunday "my hours"
+    test fix `testing` lacked), verified on `testing` (unit 3203/3203, e2e
+    101 passed, 1 skipped), then merged into `onlyoffice` (`409f1d6`).
+    `DocumentEditor`'s guard stays, its comment updated.
+  - On the merged code: lint clean; unit 3428/3428; full e2e running, results to follow
 - [ ] **(Nathan)** Full walkthrough on the test container:
   - edit PDF, xlsx and docx
   - two people editing at once
@@ -1117,8 +1129,8 @@ container next to the app, and build the extras agreed below on top of it.
     reopens stopped or expired share links; or restore the backup).
 - [ ] Merge `onlyoffice` into `testing`. Remove the ONLYOFFICE note from
   `CLAUDE.md`.
-  - `testing` has nothing `onlyoffice` lacks (checked 2026-09-27), so this is
-    a fast-forward. Also drop `onlyoffice` from the branches in
+  - `testing` has nothing `onlyoffice` lacks (checked 2026-09-27, and again
+    after merging the transition fix in), so this is a fast-forward. Also drop `onlyoffice` from the branches in
     `.github/workflows/docker.yml`, and switch the test container back to
     `:testing`.
   - Only after Nathan's walkthrough above.
