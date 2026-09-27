@@ -88,8 +88,11 @@ container next to the app, and build the extras agreed below on top of it.
     only if reply detection is added later (at save, or the Word/PDF add-on).
 - [x] **Test subdomain name** for ONLYOFFICE on the test setup (Phase 0):
   **`docs-test.<domain>`**. (Nathan, 2026-09-25)
-- [ ] **ONLYOFFICE version to pin** (Phase 0): latest 9.4.x at the time. Never
-  `latest`.
+- [x] **ONLYOFFICE version to pin** (Phase 0): latest 9.4.x at the time. Never
+  `latest`. **`9.4.0.1`**, pinned in `docker-compose.yml` and the setup guide
+  since Phase 0; checked again on Docker Hub 2026-09-27: still the newest 9.4.x
+  tag (`9.4` and `9.4.0` are older builds), and what the test container ran
+  through every manual check.
 
 ## Key technical facts (verified 2026-09-25)
 
@@ -933,10 +936,10 @@ container next to the app, and build the extras agreed below on top of it.
     phone) and the stand-in downloads it; an image share keeps its preview.
   - full unit suite 3393/3393; full e2e suite 118 passed, 2 skipped (the
     conditional specs), 0 failed (with phone push included)
-- [~] **(Nathan)** Manual check on the test container with the real ONLYOFFICE
-  (with the phone notification check above). Share link done (Nathan,
-  2026-09-27: "opened perfectly even when logged out"); mail attachments
-  still to try:
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE
+  (with the phone notification check above). Share link (Nathan, 2026-09-27:
+  "opened perfectly even when logged out"); mail attachments with the Phase 7
+  check (Nathan, 2026-09-27: "tested it all, everything works"):
   - Mail: open a message with a Word or Excel attachment and click it; it
     opens read-only in a new tab. Try an old .doc/.xls if you have one.
     "Save to Documents…" still works.
@@ -1044,7 +1047,8 @@ container next to the app, and build the extras agreed below on top of it.
   - on the final code: lint clean; full unit suite 3427/3427; full e2e suite
     122 passed, 1 skipped (a conditional spec), 0 failed. (The run before
     caught the bell race fixed under Phase 5.)
-- [ ] **(Nathan)** Manual check on the test container:
+- [x] **(Nathan)** Manual check on the test container (Nathan, 2026-09-27:
+  "tested it all, everything works"):
   - Documents: right-click any document, **Share…**. Pick 7 days, **Create
     link**, copy it, and open it on a phone signed out. Then **Stop sharing**
     and reload the phone: it says the link was turned off.
@@ -1057,6 +1061,8 @@ container next to the app, and build the extras agreed below on top of it.
 ## Phase 8 — Finish and merge
 
 - [ ] `npm run lint`, `npm test` and `npm run test:e2e` all passing.
+  - lint clean and unit 3427/3427 on the Phase 8 code; full e2e: running,
+    results to follow
 - [ ] **(Nathan)** Full walkthrough on the test container:
   - edit PDF, xlsx and docx
   - two people editing at once
@@ -1070,19 +1076,52 @@ container next to the app, and build the extras agreed below on top of it.
   - mail attachment viewer
   - share link with expiry and stop-sharing
   - bell notifications (mention, task, RFI)
-- [ ] Docs:
+- [x] Docs:
   - README (feature overview, editor sections, tech stack, deployment)
+    - Feature table: Document editor, Documents, Notifications rows replace
+      PDF editor and Spreadsheet editor; Self-host says two containers.
+    - "Documents and the document editor" and "Notifications" sections
+      replace the PDF and spreadsheet editor sections; the dead
+      `pdf-editor.png` link is gone (`docs/screenshots/` is empty).
+    - Docker deployment: the ONLYOFFICE container, its shared secret, 4 GB,
+      its own subdomain, and what works without it. First-time setup checks
+      Settings → Document Editor. Settings table matches the real tabs.
+      Tech stack: ONLYOFFICE Docs API instead of Fortune Sheet; web-push,
+      sharp, the pinned ONLYOFFICE image.
+    - Not touched: the older "Bid pipeline and email" section, which predates
+      the Mail client and is stale for reasons outside this project (offered
+      to Nathan as a separate task).
   - `docs/onlyoffice-setup.md` final pass
+    - Written for test and production; the test container goes back to the
+      `:testing` image after the merge (`:onlyoffice` stops updating).
   - `.env.example`
-- [ ] Changelog entry in `src/pages/Settings.tsx`, and version bump to **4.0.0**
+    - `APP_PUBLIC_URL` added (ONLYOFFICE and push fall back on it); a note
+      that editing needs the ONLYOFFICE container.
+- [x] Changelog entry in `src/pages/Settings.tsx`, and version bump to **4.0.0**
   (the editors are replaced and a new container is required).
-- [ ] Production rollout notes:
+  - 12 entries, dated 2026-09-27 (**change the date if the merge lands on
+    another day**). `package.json` and the root of `package-lock.json` are
+    4.0.0; `src/pages/appVersion.test.ts` checks they agree.
+- [x] Production rollout notes:
   - back up
   - add the production ONLYOFFICE container and subdomain
   - set env vars
   - switch image
+  - `docs/onlyoffice-setup.md` §7 "Production: upgrading to 4.0.0": back up
+    (the app also copies its database before migrating, but on the same disk
+    and without files), a new secret, RAM; the container, DNS, proxy host and
+    healthcheck; the four variables; the image, the automatic migrations
+    37–41 (additive); checks; what to tell everyone (new editor, old
+    signatures move to My signatures, phone notifications per device, old
+    share links); and going back (the old image runs on the new database but
+    reopens stopped or expired share links; or restore the backup).
 - [ ] Merge `onlyoffice` into `testing`. Remove the ONLYOFFICE note from
   `CLAUDE.md`.
+  - `testing` has nothing `onlyoffice` lacks (checked 2026-09-27), so this is
+    a fast-forward. Also drop `onlyoffice` from the branches in
+    `.github/workflows/docker.yml`, and switch the test container back to
+    `:testing`.
+  - Only after Nathan's walkthrough above.
 
 ---
 

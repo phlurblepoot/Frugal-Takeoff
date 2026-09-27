@@ -1,6 +1,6 @@
 # Frugal Takeoff
 
-A self-hosted construction takeoff and bid-management application. Import PDF plans, measure quantities directly on the drawings, generate proposals, manage site checklists with photos, and collaborate with your team in real time — all from a single web app you run on your own infrastructure.
+A self-hosted construction takeoff and bid-management application. Import PDF plans, measure quantities directly on the drawings, generate proposals, edit PDFs, Word files and spreadsheets together in the browser, manage site checklists with photos, and collaborate with your team in real time — all from a web app you run on your own infrastructure.
 
 > The displayed app name is configurable — the default is **Takeoff Pro**, but it can be changed under Settings → General along with a custom logo.
 
@@ -19,10 +19,10 @@ A self-hosted construction takeoff and bid-management application. Import PDF pl
   - [Creating a project](#creating-a-project)
   - [The canvas: takeoffs and measurements](#the-canvas-takeoffs-and-measurements)
   - [Proposals and Excel export](#proposals-and-excel-export)
-  - [PDF editor](#pdf-editor)
-  - [Spreadsheet editor](#spreadsheet-editor)
+  - [Documents and the document editor](#documents-and-the-document-editor)
   - [Checklists](#checklists)
   - [Sharing](#sharing)
+  - [Notifications](#notifications)
   - [Real-time collaboration](#real-time-collaboration)
   - [Bid pipeline and email](#bid-pipeline-and-email)
 - [Settings](#settings)
@@ -58,16 +58,17 @@ Everything runs on your own server — there is no SaaS dependency, no external 
 | **Legends**                | Per-page or project-wide legend that lists each measurement with its colour swatch, quantity, and price — styled, resizeable, snap-to-corner.                    |
 | **Proposals**              | Generate a branded multi-page PDF proposal with cover page, scope, optional takeoff list, optional cost detail, terms, and signature block.                      |
 | **Excel export**           | Export takeoffs to `.xlsx` with the same columns and grouping as the Takeoffs tab, including advanced-pricing detail rows.                                       |
-| **PDF editor**             | Open any PDF, annotate with freehand, shapes, text, images, and saved signatures. Reorder / delete / import pages. Save back to a PDF.                           |
-| **Spreadsheet editor**     | Edit `.xlsx` printouts inline using Fortune Sheet — formulas, formatting, multi-sheet — then save over the original.                                             |
+| **Document editor**        | Edit PDFs, Word files, spreadsheets and presentations in the browser with ONLYOFFICE Docs: several people at once, comments, @mentions, track changes and form filling. Phones open documents to read. |
+| **Documents**              | Every project file in one place, with thumbnails, version history (restore, delete older versions), new documents from blanks or templates, personal signatures and company stamps, and old formats (.doc, .xls, Pages, Numbers…) converted on upload. |
 | **Checklists**             | Per-project punch lists with Before / In Progress / After photo sections, per-item comments, drag-to-reorder, and a printable PDF.                               |
 | **Sharing**                | Share any document, several documents under one link, or plan pages with a read-only link that lasts 7, 30 or 90 days, or never; stop sharing any time. Recipients don't need an account. |
 | **Bid pipeline**           | The Projects list is a lifecycle board — Bidding, In Progress, and Archive as tabs, each with its own sort (bid due date, last updated, name, date added) and a "Recently opened" shortcut — so nothing needs to be re-triaged by hand as a project moves from bid to job to close-out.       |
 | **Mail**                   | A full mailbox inside the app — each person connects Google Workspace, Microsoft 365, or any IMAP/SMTP host, and sends and replies from their own address, including straight from proposals, invoices, RFIs, and other project documents. Replies to a sent RFI show up as a pending answer to accept or dismiss. |
 | **Collaboration**          | Real-time cursors, presence, and per-page notes via Socket.io.                                                                                                   |
+| **Notifications**          | A bell for @mentions, tasks and RFIs, live in the app, and optionally as notifications on your phone or computer.                                                  |
 | **Users & permissions**    | JWT auth with bcrypt hashing, admin-managed users, per-user login attempt rate limiting with real-IP detection behind Cloudflare.                                |
 | **Mobile friendly**        | One-finger draws, two-finger pans/zooms; toolbar and dock layouts adapt for phones and tablets.                                                                  |
-| **Self-host**              | Single Docker image, SQLite for storage, no external services required.                                                                                          |
+| **Self-host**              | Two Docker containers (the app, and ONLYOFFICE Docs Community Edition for documents), SQLite for storage, no external services required.                          |
 
 ---
 
@@ -101,13 +102,18 @@ The app is served from <http://localhost:3000>. The first boot auto-generates a 
 
 ## Docker deployment
 
-A `Dockerfile` and `docker-compose.yml` are included.
+A `Dockerfile` and `docker-compose.yml` are included. The compose file runs two containers: the app, and **ONLYOFFICE Docs** (Community Edition, pinned to a tested version), which the app uses to edit and view documents.
 
 ```bash
+# Once: a secret the two containers share
+echo "ONLYOFFICE_JWT_SECRET=$(openssl rand -hex 32)" >> .env
+# Set ONLYOFFICE_PUBLIC_URL in docker-compose.yml to ONLYOFFICE's HTTPS address
 docker compose up -d
 ```
 
-The container exposes port `3000` and mounts `./data` for the SQLite database, uploaded PDFs, images, and generated PDFs. Behind Cloudflare (or any reverse proxy that sets `X-Forwarded-For`), the rate limiter will correctly see the real client IP — the app trusts one proxy hop by default.
+The app container exposes port `3000` and mounts `./data` for the SQLite database, uploaded files, versions, thumbnails and generated PDFs. Behind Cloudflare (or any reverse proxy that sets `X-Forwarded-For`), the rate limiter will correctly see the real client IP — the app trusts one proxy hop by default.
+
+ONLYOFFICE needs its own HTTPS subdomain (browsers load the editor from it) and about 4 GB of RAM; it keeps nothing permanent, since documents live in the app's data folder. **[docs/onlyoffice-setup.md](docs/onlyoffice-setup.md)** walks through it on Unraid behind Cloudflare and Nginx Proxy Manager, including upgrading from a version without it. Without ONLYOFFICE everything else works, and documents can still be previewed and downloaded, but not edited.
 
 ---
 
@@ -120,6 +126,7 @@ On first launch:
 3. Log in and open **Settings** to:
    - Set the app name and logo (replaces "Takeoff Pro" everywhere, including the sidebar and the proposal PDF header).
    - Set the **Public Host URL** so share links point to the right domain.
+   - Check **Document Editor** shows three green **Working** checks (see [docs/onlyoffice-setup.md](docs/onlyoffice-setup.md)).
    - Configure **Email** (SMTP + IMAP) if you want the bid-pipeline integration.
    - Invite additional users under the **Users** tab.
 
@@ -174,21 +181,29 @@ From the project view, click **Generate Proposal**:
 
 ![Proposal PDF](docs/screenshots/proposal.png)
 
-### PDF editor
+### Documents and the document editor
 
-Accessible from the side dock, the PDF editor is a full client-side annotation tool.
+**Documents** (in the sidebar, and on each project's Documents tab) lists every file: uploads, printouts, proposals, invoices, pay apps, RFIs and photos, each with a thumbnail. Hover a row for a bigger preview; right-click for its actions.
 
-- **Open** any PDF from your computer, or open a saved printout from a project.
-- **Draw** freehand, lines, arrows, rectangles, ellipses, text, and stamp images.
-- **Signatures** — add a scanned signature; the tool removes the white background automatically. Saved signatures persist across sessions in browser storage.
-- **Pages** — the sidebar shows a thumbnail for every page. Delete a page with the trash icon, reorder by dragging the grip handle (mouse or touch), or append new pages from a PDF file or image with the **+** button.
-- **Save** writes back to the originating printout; **Save As** uses the File System Access API to open a proper save dialog where supported, and falls back to a direct download elsewhere.
+**Editing.** Opening a PDF, Word file, spreadsheet or presentation starts the **document editor** (ONLYOFFICE Docs):
 
-![PDF editor](docs/screenshots/pdf-editor.png)
+- Several people can edit the same file at once and see each other's changes. Comments, **@mentions** (the person is notified), track changes and PDF form filling all work.
+- Each editing session saves **one new version**; the file as it was before stays in its history. Editing a generated document (an invoice, pay app, proposal…) keeps the generated original as a version, and regenerating always makes a new version.
+- **Insert → Image → From storage** adds one of your signatures, a company stamp, a project photo or any other image in the app. **File → Save Copy as** (e.g. a PDF of a spreadsheet) saves the copy into the same project.
+- On phones, documents open to read.
+- The sidebar's **Document Editor** lists recently opened files, and opens one from Documents or from your computer (uploaded into a project you pick first).
 
-### Spreadsheet editor
+**Versions.** A document's history (in Documents, or **Version history** inside the editor) lists every version with who made it. Restore any version (as a new version, so nothing is lost), download it, or delete older ones (admins, and whoever made that version).
 
-For `.xlsx` printouts, click **Open in Spreadsheet Editor** to edit inline. Powered by Fortune Sheet — supports formulas, cell formatting, multiple sheets, and saves straight back over the original file.
+**New documents.** **New document** on the Documents page, a project's Documents tab, or the command palette makes a blank Word file, spreadsheet or fillable PDF form, or starts from one of the templates admins keep under **Settings → Document Templates**.
+
+**Signatures and stamps.** Everyone keeps their own named signatures, with a default, under **Settings → User Preferences → My signatures**; the white background is removed on upload. Admins upload company stamps (APPROVED, REVIEWED, a company seal…) under Document Templates, and anyone can insert them. ONLYOFFICE's own signature fields work too.
+
+**Old formats.** An uploaded .doc, .xls, .rtf, .odt, .ods, .ppt, Pages, Numbers or Keynote file is converted to .docx, .xlsx or .pptx, and the original is kept as the previous version.
+
+**AIA pay apps.** **Make PDF** in the pay app editor turns the workbook into a PDF, which is attached when you email the pay app.
+
+**Viewer.** Word, Excel and PowerPoint attachments in Mail open read-only in a new tab, and share links show shared documents in the same viewer, on phones too.
 
 ### Checklists
 
@@ -214,6 +229,12 @@ Any document, several documents at once, a plan page, or a selection of pages ca
 Each new link lasts **7, 30 or 90 days, or never expires** (30 by default); the share window shows when it expires and can change it. A document's share window lists every link that opens it, including several-documents links it is part of, with **Stop sharing** on each. Someone opening an expired or stopped link is told which, rather than getting an error. Links made before expiry existed never expire, but can still be stopped.
 
 Share URLs use the **Public Host URL** configured under Settings, so the link is correct regardless of internal hostnames.
+
+### Notifications
+
+The **bell** in the sidebar, next to who's online, rings when someone @mentions you in a document comment, assigns you a task or an RFI, or when a GC answers an RFI you sent or own. Clicking one opens what it's about.
+
+Each person can also get them as **phone notifications**, turned on per device under **Settings → User Preferences → Phone notifications** (on iPhone, from the app added to the Home Screen). See [docs/onlyoffice-setup.md §9](docs/onlyoffice-setup.md#9-phone-notifications).
 
 ### Real-time collaboration
 
@@ -244,13 +265,19 @@ Provider presets for Gmail, Outlook, Yahoo, and iCloud autofill the server detai
 
 The **Settings** page has the following tabs:
 
-| Tab          | What lives here                                                                                     |
-| ------------ | --------------------------------------------------------------------------------------------------- |
-| **General**  | App name, logo URL, Public Host URL (used in share links).                                          |
-| **Appearance** | Theme (light / dark), accent colour.                                                               |
-| **Email**    | SMTP (outgoing) and IMAP (incoming) account configuration, poll interval, provider setup guide.     |
-| **Users**    | Create / disable / delete users, set roles, reset passwords.                                        |
-| **History**  | Recent changes — the in-app changelog for each released version.                                    |
+| Tab                    | What lives here                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| **User Preferences**   | Dark mode, accent colour, password, **My signatures**, **Phone notifications**.                                |
+| **Takeoff Templates**  | Reusable takeoff templates.                                                                               |
+| **General Settings**   | App name, logo URL, Public Host URL (used in share links). Admins only.                                   |
+| **Mail**               | Connecting your mailbox; server setup guide.                                                              |
+| **Storage**            | Disk use by projects and file types. Admins only.                                                         |
+| **Backup**             | Snapshots of the database and files, and restoring them. Admins only.                                     |
+| **Document Editor**    | ONLYOFFICE's addresses, version and three connection checks, with what to fix when one fails. Admins only. |
+| **Document Templates** | Templates for **New document**, and company stamps. Admins only.                                          |
+| **AIA Template**       | The workbook layout for AIA pay apps. Admins only.                                                        |
+| **User Management**    | Create / disable / delete users, set roles, reset passwords. Admins only.                                 |
+| **Changelog**          | Recent changes — the in-app changelog for each released version.                                         |
 
 ---
 
@@ -272,7 +299,7 @@ The **Settings** page has the following tabs:
 - Konva / react-konva (canvas annotations)
 - pdfjs-dist (PDF rendering) + pdf-lib (PDF writing)
 - jsPDF (proposal / checklist generation)
-- Fortune Sheet (spreadsheet editor)
+- ONLYOFFICE Docs API (document editor and viewer)
 - lucide-react (icons), motion (animations)
 - Tesseract.js (OCR for page label detection)
 - Google Maps React bindings (project location picker)
@@ -281,13 +308,15 @@ The **Settings** page has the following tabs:
 
 - Node.js 22 + Express 4
 - better-sqlite3 (single-file database)
-- Socket.io (real-time collaboration)
+- Socket.io (real-time collaboration and live notifications)
 - nodemailer (SMTP send) + imapflow (IMAP poll) + mailparser
 - JSON Web Tokens + bcryptjs
+- web-push (phone notifications), sharp (photo thumbnails), ExcelJS / SheetJS (workbooks)
 
 **Deploy**
 
 - Docker (single-stage build on `node:22-bookworm-slim`)
+- ONLYOFFICE Docs Community Edition (`onlyoffice/documentserver`, pinned) as a second container
 - docker-compose for local / on-prem
 - Cloud Run compatible (`APP_URL` is injected at runtime)
 

@@ -5,15 +5,21 @@ Frugal Takeoff's document editing (PDFs, Word files, spreadsheets) runs in
 **second container** next to the app. Your documents stay in the app's data
 folder; ONLYOFFICE only holds a temporary working copy while a file is open.
 
-This guide sets up the **test** environment on Unraid behind Cloudflare and
-Nginx Proxy Manager, using the subdomain **`docs-test.<your-domain>`**.
-Production is the same steps with its own subdomain and secret (§7).
+It arrived in version **4.0.0**, replacing the old built-in PDF and
+spreadsheet editors. Without ONLYOFFICE the rest of the app works, and
+documents can still be previewed and downloaded, but not edited.
+
+This guide sets it up on Unraid behind Cloudflare and Nginx Proxy Manager. The
+examples use the **test** setup (subdomain **`docs-test.<your-domain>`**);
+production is the same steps with its own container, subdomain and secret.
+**Upgrading production to 4.0.0: follow §7**, which links back to the steps
+here.
 
 When you're done, **Settings → Document Editor** in the app should show three
 green **Working** checks. If one fails, its message says what to fix, and §6
 covers the common cases.
 
-Project checklist: `docs/superpowers/specs/2026-09-25-onlyoffice-checklist.md`.
+How it was built, and why: `docs/superpowers/specs/2026-09-25-onlyoffice-checklist.md`.
 
 ---
 
@@ -55,9 +61,11 @@ value.
 
   Keep the output somewhere safe; you'll paste it into both containers. Use a
   different secret for production.
-- **The test app image.** Every push to the `onlyoffice` branch builds
-  `ghcr.io/phlurblepoot/frugal-takeoff:onlyoffice`. Point your existing test
-  container at that tag (§4).
+- **The app image.** ONLYOFFICE support is in the app from 4.0.0: the
+  `testing` image (`ghcr.io/phlurblepoot/frugal-takeoff:testing`) for the test
+  container, and production once 4.0.0 reaches `main`. (During the project the
+  test container ran the `:onlyoffice` tag, which no longer updates; switch it
+  back to `:testing`.)
 
 ---
 
@@ -120,7 +128,7 @@ Edit your existing test container:
 
 | Field | Value |
 |---|---|
-| Repository | `ghcr.io/phlurblepoot/frugal-takeoff:onlyoffice` |
+| Repository | `ghcr.io/phlurblepoot/frugal-takeoff:testing` (4.0.0 or later) |
 | Network Type | `Custom: frugal` (the same network as ONLYOFFICE) |
 | Variable `ONLYOFFICE_PUBLIC_URL` | `https://docs-test.<your-domain>` |
 | Variable `ONLYOFFICE_INTERNAL_URL` | `http://onlyoffice-test` |
@@ -213,15 +221,68 @@ purge Cloudflare's cache for `docs-test`.
 
 ---
 
-## 7. Production (later, when the project is merged)
+## 7. Production: upgrading to 4.0.0
 
-Repeat §3–§6 for production with:
-- its own ONLYOFFICE container (e.g. `onlyoffice`)
-- its own subdomain (e.g. `docs.<your-domain>`)
-- its **own secret**
+Do this when 4.0.0 is on `main`, after it has run on the test setup.
+ONLYOFFICE's first download (about 1.3 GB) and first start take the longest.
 
-The production app container gets the same four variables pointing at those.
-Take a backup first (Settings → Backup), as for any release.
+**Before**
+1. **Back up.** Settings → Backup → back up now, to `BACKUP_PATH` on the other
+   disk. (The app also copies its database to `data/backups/` by itself before
+   it changes it on the first start, but that copy is on the same disk and has
+   no files.)
+2. Make a **new secret** for production (`openssl rand -hex 32`); don't reuse
+   the test one.
+3. Check the server has about **4 GB of RAM** to spare with the test setup
+   still running (§2).
+
+**ONLYOFFICE**
+4. Add the production ONLYOFFICE container as in §4.1: name e.g.
+   `onlyoffice`, the same pinned image, the new secret as `JWT_SECRET`,
+   `ALLOW_PRIVATE_IP_ADDRESS=true`, on the same Docker network as the
+   production app (§3). If the host port `8088` is taken by the test
+   container, map another (e.g. `8089`).
+5. Cloudflare: a `docs` DNS record like the app's (§5.1). Nginx Proxy Manager:
+   a proxy host for `docs.<your-domain>` with Websockets on and SSL (§5.2).
+   `https://docs.<your-domain>/healthcheck` should show `true` (§5.3).
+
+**The app**
+6. Add the four variables to the production app container (§4.2), with
+   production values:
+   - `ONLYOFFICE_PUBLIC_URL=https://docs.<your-domain>`
+   - `ONLYOFFICE_INTERNAL_URL=http://onlyoffice` (the container's name)
+   - `APP_INTERNAL_URL=http://<production app container name>:3000`
+   - `ONLYOFFICE_JWT_SECRET=` the new secret
+7. Switch the container to the 4.0.0 image and start it. On first start it
+   updates the database by itself (new version and notification tables, share
+   link expiry; nothing is removed) and logs `[migrations] applied …`.
+8. Settings → **Document Editor**: three green **Working** checks (§6 if not).
+
+**Check**
+9. Open a Word file and a spreadsheet from Documents, change something, close
+   it, and see the new version in its history. Share a document and open the
+   link signed out. Assign yourself a task and watch the bell.
+
+**Tell everyone**
+- Documents now open in the new editor. PDF editor and Spreadsheet in the
+  sidebar are replaced by **Document Editor**.
+- Signatures saved in the old PDF editor move to **Settings → User
+  Preferences → My signatures** the first time each person opens it in the
+  browser they used.
+- Phone notifications are off until each person turns them on per device
+  (§9). On iPhone, add the app to the Home Screen first.
+- Share links made before 4.0.0 keep working with no expiry; new ones last 30
+  days unless changed.
+
+**If something goes wrong**
+- ONLYOFFICE not working stops only editing: the rest of the app keeps going
+  while you fix it (§6).
+- To go back to 3.x, switch the image back. The older version runs on the
+  updated database (the additions are ignored), but it doesn't know about
+  stopped or expired share links, so those open again. To undo everything
+  instead, restore the backup from step 1 (changes made since are lost).
+- Once production is settled, the test setup can stay as it is for trying
+  future releases.
 
 ## 8. Upgrading ONLYOFFICE
 
