@@ -866,17 +866,73 @@ container next to the app, and build the extras agreed below on top of it.
 
 ## Phase 6 — Viewers: mail attachments and share links
 
-- [ ] **Mail attachments:** Word, Excel and PowerPoint attachments (and old
+- [x] **Mail attachments:** Word, Excel and PowerPoint attachments (and old
   formats) open in the ONLYOFFICE viewer (`mode: view`) instead of downloading.
   - They're served to the Document Server with a short-lived per-attachment
     token.
   - "Save to project" (`SaveAttachmentsModal`) stays.
   - Change `src/pages/mail/AttachmentChips.tsx`, which currently opens only
     PDFs and images inline.
-- [ ] **Share links:** `/share/:id` opens the ONLYOFFICE embedded viewer
+  - The chip opens `/tools/view?message=…&att=…&name=…`
+    (`src/pages/AttachmentViewer.tsx`) in a new tab, for any format ONLYOFFICE
+    reads except PDF (the type or, for a generic type, the name decides; .txt
+    and .csv too). PDFs and images still open in the browser, the rest
+    download. When the viewer can't open, the page says why and offers the
+    download.
+  - `POST /api/mail/messages/:id/attachments/:attId/viewer` (the message's
+    owner only) returns a signed view-only config
+    (`server/onlyoffice/viewers.ts`): no callback, nothing editable, key from
+    message + name + size (reopening uses ONLYOFFICE's cache), phones get the
+    phone viewer. Its download link is
+    `GET /api/mail/viewer-file/:id/:attId?t=…`, a link token for that one
+    attachment (`mailatt:<message>:<attachment>`) that lasts an hour; it
+    streams through the same provider path as a download (the attachment
+    streaming was shared out of the download route for this). Nothing is
+    stored.
+- [x] **Share links:** `/share/:id` opens the ONLYOFFICE embedded viewer
   (`type: embedded`, view-only, anonymous) for any document type. This works on
   phones.
-- [ ] Tests: attachment token scope; the share viewer config never grants edit.
+  - `GET /api/share/:shareId/viewer` (public, like the link): for a
+    single-file share of anything ONLYOFFICE reads (PDF printouts now; any
+    document once Phase 7 shares them). Anonymous "Guest", view only, no
+    Close button, its own document key (the editor's would join a live editing
+    session and show unsaved edits to anyone with the link).
+  - `/api/share/:id/info` now says `viewer: true|false`; `ShareView` shows the
+    viewer under its header (Download kept) and falls back to its own preview
+    (the PDF `<object>`, the image) when the viewer isn't set up or fails.
+    Page-set and image shares are unchanged.
+  - Shared building block: `src/components/OnlyofficeViewer.tsx`.
+- [x] Tests: attachment token scope; the share viewer config never grants edit.
+  - `server/onlyoffice/viewers.test.ts` (8): share viewer embedded, view only
+    (plain and signed config), Guest, own key, ONLYOFFICE can fetch exactly
+    the shared file, images/page sets/unknown shares/not set up; attachments
+    view only for the owner, fetchable by ONLYOFFICE, old format by name,
+    phone viewer, PDF refused, other people's mail 404, not set up; the link
+    opens that one attachment only (another attachment, another message, no
+    token, a login token, an expired token all refused) and lasts an hour.
+  - `server/mail/routes.test.ts` unchanged and passing after the streaming was
+    shared.
+  - client: `AttachmentViewer` (7: config, phone, download fallback, missing
+    link; the share page's viewer, fallback on failure, images kept),
+    `AttachmentChips` +1 (Word and an old .xls sent as a generic type open the
+    viewer in a new tab).
+  - e2e `e2e/viewers.spec.ts` (2): a Word attachment opens the viewer tab,
+    which (without ONLYOFFICE here) explains and downloads the right bytes; a
+    shared PDF keeps its own preview when the viewer isn't set up.
+  - smoke against the real server and the stand-in Document Server (9
+    checks): a seeded Word attachment opens view only and the stand-in
+    downloads exactly its bytes through the link, which won't open the other
+    attachment; an old .xls opens in the phone viewer; someone else's mail
+    404s; a shared PDF gets the embedded viewer (view only, own key, on a
+    phone) and the stand-in downloads it; an image share keeps its preview.
+- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE
+  (with the phone notification check above):
+  - Mail: open a message with a Word or Excel attachment and click it; it
+    opens read-only in a new tab. Try an old .doc/.xls if you have one.
+    "Save to Documents…" still works.
+  - Share a takeoff print from Documents (Share link) and open the link on a
+    phone and a computer, signed out: the PDF shows in the viewer, with
+    Download.
 
 ## Phase 7 — Sharing upgrades
 

@@ -22,6 +22,10 @@ import { NOTIFICATION_EVENT, registerRealtime, userRoom } from './server/realtim
 import { Notifier } from './server/notifications';
 import { registerNotificationRoutes } from './server/notificationRoutes';
 import { PushService } from './server/push';
+import { createAttachmentViewer } from './server/onlyoffice/viewers';
+import { readOnlyofficeConfig } from './server/onlyoffice/config';
+import { officeFormatOf } from './src/utils/officeFormats';
+import { getMeta as getFileMeta } from './server/files';
 import { registerPushRoutes } from './server/pushRoutes';
 import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
@@ -532,7 +536,11 @@ async function startServer() {
           return res.json({ type: row.type, name: row.name, count: pages.length });
         } catch { /* fall through */ }
       }
-      res.json({ type: row.type, name: row.name });
+      // viewer: the shared file opens in the ONLYOFFICE embedded viewer
+      // (/api/share/:shareId/viewer, Phase 6), which also works on phones.
+      const meta = getFileMeta(db, row.resourceId);
+      const viewer = !!meta && !!officeFormatOf(meta) && !!readOnlyofficeConfig(process.env).config;
+      res.json({ type: row.type, name: row.name, viewer });
     } catch {
       res.status(500).json({ error: 'Server error' });
     }
@@ -652,6 +660,8 @@ async function startServer() {
     publicUrl: process.env.APP_PUBLIC_URL || null,
     env: process.env,
     jwtSecret: JWT_SECRET,
+    // Word/Excel/PowerPoint attachments open in the ONLYOFFICE viewer (Phase 6).
+    attachmentViewer: createAttachmentViewer(process.env, onlyofficeServices.tokens),
   });
 
   registerEmailRoutes(app, {

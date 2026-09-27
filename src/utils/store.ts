@@ -431,7 +431,7 @@ export const createShare = async (type: string, resourceId: string, name: string
   return id;
 };
 
-export const getShareInfo = async (shareId: string): Promise<{ type: string; name: string; count?: number }> => {
+export const getShareInfo = async (shareId: string): Promise<{ type: string; name: string; count?: number; viewer?: boolean }> => {
   const res = await fetch(`/api/share/${shareId}/info`);
   await handleResponse(res);
   return res.json();
@@ -682,6 +682,42 @@ export class EditorOpenError extends Error {
     this.name = 'EditorOpenError';
   }
 }
+
+/** ONLYOFFICE as a read-only viewer (Phase 6): a mail attachment or a shared file. */
+export interface ViewerOpening {
+  publicUrl: string;
+  config: Record<string, unknown>;
+  file: { name: string; ext: string };
+}
+
+async function viewerOpening(res: Response, fallback: string): Promise<ViewerOpening> {
+  if (res.status === 401) await handleResponse(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new EditorOpenError(body.error || fallback, res.status, body.code);
+  }
+  return res.json();
+}
+
+/** The viewer for a Word, Excel or PowerPoint mail attachment. */
+export const openAttachmentViewer = async (
+  messageId: string, attId: string, opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark' },
+): Promise<ViewerOpening> => viewerOpening(
+  await fetchWithRetry(`/api/mail/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attId)}/viewer`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify(opts),
+  }),
+  "Couldn't open the attachment",
+);
+
+/** The embedded viewer for a share link (public: no sign-in). */
+export const openShareViewer = async (shareId: string, opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark' }): Promise<ViewerOpening> => {
+  const res = await fetch(`/api/share/${encodeURIComponent(shareId)}/viewer?device=${opts.device}&theme=${opts.theme}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new EditorOpenError(body.error || "Couldn't open the viewer", res.status, body.code);
+  }
+  return res.json();
+};
 
 export const openInEditor = async (
   fileId: string,

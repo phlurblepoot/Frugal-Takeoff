@@ -44,13 +44,16 @@ export interface EditorConfigInput {
   /** Where to scroll on opening: a comment's action link (onMakeActionLink /
    *  onRequestSendNotify), from a notification or a shared comment link. */
   actionLink?: Record<string, unknown> | null;
+  /** ONLYOFFICE's light embedded viewer (share links, Phase 6): view only,
+   *  no Close button (the page around it has its own header). */
+  embedded?: boolean;
 }
 
 export function buildEditorConfig(input: EditorConfigInput): Record<string, unknown> {
   const { format, mode } = input;
   const editing = mode === 'edit';
   const config: Record<string, any> = {
-    type: input.device === 'phone' ? 'mobile' : 'desktop',
+    type: input.embedded ? 'embedded' : input.device === 'phone' ? 'mobile' : 'desktop',
     documentType: format.documentType,
     width: '100%',
     height: '100%',
@@ -86,6 +89,7 @@ export function buildEditorConfig(input: EditorConfigInput): Record<string, unkn
   };
   if (input.callbackUrl) config.editorConfig.callbackUrl = input.callbackUrl;
   if (input.actionLink) config.editorConfig.actionLink = input.actionLink;
+  if (input.embedded) delete config.editorConfig.customization.close;
   config.token = jwt.sign(config, input.cfg.jwtSecret, { algorithm: 'HS256' });
   return config;
 }

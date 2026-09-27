@@ -1,10 +1,22 @@
-import React, { useEffect, useState } from 'react';
+// src/pages/ShareView.tsx — /share/:shareId, the public page behind a share
+// link. A shared file ONLYOFFICE can read (PDFs, Word, Excel…) shows in its
+// embedded viewer, which works on phones too (ONLYOFFICE Phase 6); images,
+// page sets, and anything when the viewer isn't set up keep the page's own
+// preview. The Download button is always there.
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { getShareInfo } from '../utils/store';
+import { getShareInfo, openShareViewer } from '../utils/store';
+import { OnlyofficeViewer } from '../components/OnlyofficeViewer';
 
 export const ShareView: React.FC = () => {
   const { shareId } = useParams<{ shareId: string }>();
-  const [info, setInfo] = useState<{ type: string; name: string; count?: number } | null>(null);
+  const [info, setInfo] = useState<{ type: string; name: string; count?: number; viewer?: boolean } | null>(null);
+  // The viewer said no after all (e.g. ONLYOFFICE unreachable): the page's own preview.
+  const [viewerFailed, setViewerFailed] = useState(false);
+  const loadViewer = useCallback(() => openShareViewer(shareId!, {
+    device: window.matchMedia('(max-width: 767px)').matches ? 'phone' : 'desktop',
+    theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
+  }), [shareId]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -70,7 +82,14 @@ export const ShareView: React.FC = () => {
         </a>
       </div>
       <div className="flex-1">
-        {info.type === 'printout' ? (
+        {info.viewer && !viewerFailed ? (
+          <OnlyofficeViewer
+            load={loadViewer}
+            testId="share-viewer"
+            className="h-[calc(100dvh-57px)] w-full"
+            renderError={() => <ViewerFallback onShow={() => setViewerFailed(true)} />}
+          />
+        ) : info.type === 'printout' ? (
           <object
             data={fileUrl}
             type="application/pdf"
@@ -141,4 +160,10 @@ const PageCard: React.FC<PageCardProps> = ({ shareId, index }) => {
       </div>
     </div>
   );
+};
+
+/** The viewer couldn't open: switch to the page's own preview straight away. */
+const ViewerFallback: React.FC<{ onShow: () => void }> = ({ onShow }) => {
+  useEffect(() => { onShow(); }, [onShow]);
+  return null;
 };

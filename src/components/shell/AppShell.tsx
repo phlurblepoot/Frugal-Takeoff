@@ -18,7 +18,8 @@ export const AppShell: React.FC<{ appName: string; children: React.ReactNode }> 
   const isCanvasPage = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
   // A file open in the document editor gets the same thin rail as the canvas:
   // ONLYOFFICE's toolbar wants the width.
-  const isEditorOpen = location.pathname === '/tools/edit' && new URLSearchParams(location.search).has('fileId');
+  const isEditorOpen = (location.pathname === '/tools/edit' && new URLSearchParams(location.search).has('fileId'))
+    || location.pathname === '/tools/view';
 
   const [sidebarState, setSidebarState] = useState<SidebarState>(() => {
     const saved = localStorage.getItem(SIDEBAR_STORAGE_KEY) as SidebarState | null;

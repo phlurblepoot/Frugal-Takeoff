@@ -32,3 +32,7 @@ export function parseActionLinkParam(param: string | null | undefined): Record<s
   if (!param) return null;
   try { return normalizeActionLink(JSON.parse(param)); } catch { return null; }
 }
+
+/** /tools/view: a mail attachment in the document viewer (Phase 6). */
+export const attachmentViewerPath = (messageId: string, attId: string, name: string): string =>
+  `/tools/view?message=${encodeURIComponent(messageId)}&att=${encodeURIComponent(attId)}&name=${encodeURIComponent(name)}`;

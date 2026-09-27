@@ -30,6 +30,7 @@ import { TasksPage } from './pages/TasksPage';
 import { TimeKeeping } from './pages/TimeKeeping';
 import { CustomersSplitView } from './pages/customers/CustomersSplitView';
 import { ShareView } from './pages/ShareView';
+import { AttachmentViewer } from './pages/AttachmentViewer';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotificationsProvider } from './context/NotificationsContext';
 import { NotesProvider } from './context/NotesContext';
@@ -163,6 +164,11 @@ const router = createBrowserRouter([
         {
           path: 'tools/edit',
           element: <DocumentEditor />,
+        },
+        {
+          // A mail attachment in the ONLYOFFICE viewer (Phase 6).
+          path: 'tools/view',
+          element: <AttachmentViewer />,
         },
         // The ONLYOFFICE editor replaced the separate PDF and spreadsheet
         // editors; their old addresses (bookmarks, emailed links) still work.

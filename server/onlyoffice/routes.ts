@@ -23,6 +23,7 @@ import { registerOnlyofficeEditorRoutes } from './editorRoutes';
 import { registerOnlyofficeHistoryRoutes } from './historyRoutes';
 import { registerOnlyofficeExtrasRoutes } from './extrasRoutes';
 import { registerOnlyofficeMentionRoutes } from './mentionRoutes';
+import { registerShareViewerRoute } from './viewers';
 import type { Notifier } from '../notifications';
 import { EditorSessions, FileQueue, ForcesaveWaiters } from './sessions';
 import { createOnlyofficeServices, type OnlyofficeServices } from './services';
@@ -88,6 +89,7 @@ export function registerOnlyofficeRoutes(app: express.Express, deps: OnlyofficeR
   registerOnlyofficeHistoryRoutes(app, { ...editor, forcesaveTimeoutMs: deps.forcesaveTimeoutMs });
   registerOnlyofficeExtrasRoutes(app, editor);
   registerOnlyofficeMentionRoutes(app, { db: deps.db, authenticateToken, notifier: deps.notifier });
+  registerShareViewerRoute(app, { env: deps.env, db: deps.db, tokens });
   registerOnlyofficeConversionRoutes(app, {
     db: deps.db, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange, services,
   });
