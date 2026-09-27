@@ -925,6 +925,8 @@ container next to the app, and build the extras agreed below on top of it.
     attachment; an old .xls opens in the phone viewer; someone else's mail
     404s; a shared PDF gets the embedded viewer (view only, own key, on a
     phone) and the stand-in downloads it; an image share keeps its preview.
+  - full unit suite 3393/3393; full e2e suite 118 passed, 2 skipped (the
+    conditional specs), 0 failed (with phone push included)
 - [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE
   (with the phone notification check above):
   - Mail: open a message with a Word or Excel attachment and click it; it
