@@ -439,7 +439,7 @@ export function ProjectPagesTab({
                               <button
                                 onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
                                 className="text-ink-faint hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
-                                title="Copy share link"
+                                title="Share page"
                               >
                                 <LinkIcon size={14} />
                               </button>
@@ -607,7 +607,7 @@ export function ProjectPagesTab({
                                 <button
                                   onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
                                   className="text-ink-faint hover:text-accent-600 p-1 rounded hover:bg-accent-50"
-                                  title="Copy share link"
+                                  title="Share page"
                                 >
                                   <LinkIcon size={14} />
                                 </button>
@@ -674,7 +674,7 @@ export function ProjectPagesTab({
                     onClick={() => { setPageContextMenu(null); handleSharePage(ctxPage as any); }}
                     className="w-full text-left px-3 py-1.5 text-ink hover:bg-hover flex items-center gap-2"
                   >
-                    <LinkIcon size={14} /> Copy share link
+                    <LinkIcon size={14} /> Share page…
                   </button>
                   <button
                     onClick={(e) => { setPageContextMenu(null); handleStartRenamePage(e as any, ctxPage); }}

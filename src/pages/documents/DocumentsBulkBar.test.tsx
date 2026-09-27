@@ -31,6 +31,7 @@ const renderBar = (selected: DocumentRow[], customTypes: { id: string; label: st
     onArchive: vi.fn(async () => {}),
     onDelete: vi.fn(async () => {}),
     onChangeKind: vi.fn(async () => {}),
+    onShare: vi.fn(),
   };
   render(<DocumentsBulkBar {...props} />);
   return props;
@@ -63,5 +64,19 @@ describe('DocumentsBulkBar change type', () => {
     fireEvent.click(btn);
     expect(screen.queryByRole('menuitem', { name: 'Document' })).toBeNull();
     expect(onChangeKind).not.toHaveBeenCalled();
+  });
+});
+
+describe('DocumentsBulkBar share (ONLYOFFICE Phase 7)', () => {
+  it('shares the whole selection under one link, whatever kinds it holds', () => {
+    const { onShare } = renderBar([docA, docB, invoice]);
+    fireEvent.click(screen.getByTestId('documents-bulk-share'));
+    expect(onShare).toHaveBeenCalledWith([docA, docB, invoice]);
+  });
+
+  it('stops at fifty documents in one link', () => {
+    renderBar(Array.from({ length: 51 }, (_, i) => row({ id: `r${i}` })));
+    expect(screen.getByTestId('documents-bulk-share')).toBeDisabled();
+    expect(screen.getByTestId('documents-bulk-share')).toHaveAttribute('title', 'Share up to 50 documents in one link');
   });
 });

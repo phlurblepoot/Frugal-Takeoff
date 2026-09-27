@@ -856,7 +856,8 @@ container next to the app, and build the extras agreed below on top of it.
     served; the real service worker registers in Chromium; turning on
     registers the device with the server (only the browser's call to Google
     stood in for) and turning off removes it; the bell links to the section.
-- [ ] **(Nathan)** Phone notifications on real phones (with the Phase 6 check):
+- [x] **(Nathan)** Phone notifications on real phones (with the Phase 6 check):
+  (Nathan, 2026-09-27: "push notifications worked too")
   - Android: Settings → User Preferences → Phone notifications → Turn on for
     this device → Send a test; then have someone assign you a task with the
     app closed, and tap the notification
@@ -927,29 +928,125 @@ container next to the app, and build the extras agreed below on top of it.
     phone) and the stand-in downloads it; an image share keeps its preview.
   - full unit suite 3393/3393; full e2e suite 118 passed, 2 skipped (the
     conditional specs), 0 failed (with phone push included)
-- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE
-  (with the phone notification check above):
+- [~] **(Nathan)** Manual check on the test container with the real ONLYOFFICE
+  (with the phone notification check above). Share link done (Nathan,
+  2026-09-27: "opened perfectly even when logged out"); mail attachments
+  still to try:
   - Mail: open a message with a Word or Excel attachment and click it; it
     opens read-only in a new tab. Try an old .doc/.xls if you have one.
     "Save to Documents…" still works.
-  - Share a takeoff print from Documents (Share link) and open the link on a
-    phone and a computer, signed out: the PDF shows in the viewer, with
-    Download.
+  - Share a takeoff print from Documents (right-click, Share…) and open the
+    link on a phone and a computer, signed out: the PDF shows in the viewer,
+    with Download.
 
 ## Phase 7 — Sharing upgrades
 
-- [ ] Share button for **every document** (Documents row menu and preview
+- [x] Share button for **every document** (Documents row menu and preview
   modal), not just takeoff printouts.
-- [ ] Migration: add `expiresAt` and `revokedAt` to `shares`.
-  - Choose 7 / **30 (default)** / 90 days / never when creating a link.
+  - Row menu "Share…" on every row (`RowContextMenu.tsx`); "Share" in the
+    preview modal (`DocumentViewerModal.tsx`, `doc-viewer-share`). The server
+    decides what may be shared (`mayShareFile`, `server/shares.ts`): what the
+    person can see (non-admins never invoices, pay apps and the like), and
+    never signatures, templates or stamps.
+  - Plan pages keep their link buttons, now titled "Share page" (they opened
+    the old dialog; they now open the new one with the link already made).
+- [x] **Several documents under one link** (Nathan asked 2026-09-27: "can it
+  also be possible to select multiple files and share them with a single
+  link?").
+  - Select documents, then **Share** in the bulk bar (`documents-bulk-share`,
+    up to 50). New share kind `files`: `resourceId` holds the file ids. The
+    link's name is "<project>: N documents" when they're all from one
+    project, else "N documents".
+  - Public page (`ShareView.tsx` `SharedFiles`): a list with sizes and a
+    download for each; a file opens like a single-file link (the viewer,
+    else the PDF/image preview, else a download card), with a back button
+    (`?f=<n>`). Routes `GET /api/share/:id/file/:index` and
+    `/api/share/:id/viewer/:index`.
+  - The link shows in each of its documents' links lists ("with 2 other
+    documents"); stopping it there stops it for all, after a warning.
+- [x] Migration: add `expiresAt` and `revokedAt` to `shares`.
+  - Migration 41 `share-expiry`: `expiresAt`, `revokedAt`, `createdBy`, and an
+    index on `resourceId`.
+  - Choose 7 / **30 (default)** / 90 days / never when creating a link; the
+    share window shows the expiry and can change it (counted from now).
   - Public share routes return a friendly "link expired" page.
-- [ ] Existing links migrate with `expiresAt = NULL` (never expire), keep
+    - Every public route asks `activeShare()` first: 410 with
+      `code: expired|revoked`, 404 `missing`. The page says which ("This link
+      has expired", "This link was turned off", "This link doesn't exist")
+      and what to do.
+- [x] Existing links migrate with `expiresAt = NULL` (never expire), keep
   working, and appear in the active-links list, where they can be turned off.
-- [ ] Creating a share no longer silently reuses an old link (`server.ts:547`)
+- [x] Creating a share no longer silently reuses an old link (`server.ts:547`)
   once expiry exists.
-- [ ] Per-file **active links list** with "Stop sharing".
-- [ ] Fix the README's sharing description to match.
-- [ ] Tests: expiry, revoke, public routes reject expired or revoked links.
+  - The old share routes moved out of `server.ts` and `server/routes.ts` into
+    `server/shareRoutes.ts`; `POST /api/shares` always makes a new link.
+- [x] Per-file **active links list** with "Stop sharing".
+  - `GET /api/shares?fileId=` lists a file's working links (its own and
+    several-documents links it's in), newest first, with who made each.
+    "Stop sharing" (`DELETE /api/shares/:id`) keeps the row so the link can
+    say it was turned off.
+  - One window for all of it (`src/components/ShareLinkModal.tsx`,
+    `useShare()`): the links list, a new link with its expiry, and the chosen
+    link's QR code, address and Copy.
+- [x] Only people who can see every file a link opens can list, change or
+  stop it (a non-admin never sees an invoice's links, or a several-documents
+  link that includes one). Found in review; before, any signed-in person
+  could list any file's links.
+- [x] Downloads by name work for any file name (found in review: a hand-built
+  `Content-Disposition` made Node throw on an en dash; now `res.attachment`).
+- [x] A viewer already open can't keep downloading after sharing stops.
+  - Found while testing: the share viewer's config (which reaches the
+    browser) held a signed file link good for 8 hours. The Document Server now
+    fetches a shared file through the share link itself
+    (`shareFileLink`, `server/onlyoffice/links.ts`), which checks the link on
+    every fetch. A viewer already on screen keeps showing what it loaded.
+- [x] Fix the README's sharing description to match.
+- [x] Tests: expiry, revoke, public routes reject expired or revoked links.
+  - `server/shares.test.ts` (12): 30 days by default, 7/90/never, anything
+    else refused; never reused; a new expiry from now or never; an expired
+    link is 410 with its reason on every public route (single, several,
+    pages, viewer, info); stopped vs never existed; links from before expiry
+    keep working, never expire, show in the list and can be stopped; several
+    documents listed, served, downloaded by name (an en dash too), opened in
+    the viewer (through the share link); a file's links include
+    several-documents links and drop them once stopped; 1 to 50 documents;
+    who may share what; links to what someone can't see aren't listed,
+    changed or stopped for them; page and page-set links unchanged.
+  - `server/onlyoffice/viewers.test.ts` +1: the viewer downloads through the
+    share link, and stops once sharing stops.
+  - client: `ShareLinkModal` (7: a document's links incl. several-documents
+    ones, new link with the chosen expiry and its QR, change expiry, stop with
+    the several-documents warning, a page link made at once, several
+    documents, errors), `ShareView` (9: expired / stopped / missing pages,
+    the several-documents list and missing files, open one and back, download
+    card, expiry note, older links), `DocumentsBulkBar` +2,
+    `DocumentViewerModal` +2, `RowContextMenu` (Share on every document),
+    `AttachmentViewer` updated (download link `?download=1`).
+  - e2e `e2e/sharing.spec.ts` (3): share a document from the row menu for 7
+    days, open it signed out, download the bytes, stop sharing, and the
+    signed-out page says it was turned off; several documents from the bulk
+    bar, listed in a document's links, opened one by one signed out, stopped
+    for both; a plan page's link made as its window opens.
+  - smoke against the real server and the stand-in Document Server (19
+    checks): several documents for 7 days; the signed-out list says which
+    open in the viewer; the Word file opens embedded, view only, on a phone,
+    own key; the stand-in downloads exactly the Word file and the PDF through
+    the share link; a zip is left to the page and downloads by name; the
+    PDF's links list it; expiry changed to never; stopping it cuts off the
+    viewer already handed out, says "turned off", and drops it from the list;
+    one document lasts 30 days and is never reused; a non-admin can't share an
+    invoice but can share documents; 45 days refused.
+  - full unit suite 3423/3423 before the two review fixes (share tests 21/21
+    after them); full e2e suite on the final code: running, results to follow
+- [ ] **(Nathan)** Manual check on the test container:
+  - Documents: right-click any document, **Share…**. Pick 7 days, **Create
+    link**, copy it, and open it on a phone signed out. Then **Stop sharing**
+    and reload the phone: it says the link was turned off.
+  - Select two or three documents, **Share** in the bar at the top, create
+    the link, and open it signed out: the list, each file in the viewer,
+    Download.
+  - A plan page's link button still gives a link straight away.
+  - An old share link from before this update still opens.
 
 ## Phase 8 — Finish and merge
 

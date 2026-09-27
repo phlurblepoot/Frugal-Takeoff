@@ -20,3 +20,10 @@ export const changesSubject = (fileId: string, version: number) => `changes:${fi
  *  version row), over the Docker network. */
 export const fileLink = (cfg: OnlyofficeConfig, tokens: LinkTokens, fileId: string): string =>
   `${cfg.appInternalUrl}/api/onlyoffice/file/${encodeURIComponent(fileId)}?t=${encodeURIComponent(tokens.sign(fileSubject(fileId), FILE_LINK_TTL_SECONDS))}`;
+
+/** ONLYOFFICE's download link for a shared file (Phase 7): the share link's
+ *  own public route, which checks the link still works on every fetch. A
+ *  viewer's config reaches the browser, so a signed file link there would keep
+ *  opening the file for hours after sharing stopped or the link expired. */
+export const shareFileLink = (cfg: OnlyofficeConfig, shareId: string, index?: number): string =>
+  `${cfg.appInternalUrl}/api/share/${encodeURIComponent(shareId)}${index === undefined ? '' : `/file/${index}`}`;

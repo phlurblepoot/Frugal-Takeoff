@@ -89,7 +89,7 @@ export function registerOnlyofficeRoutes(app: express.Express, deps: OnlyofficeR
   registerOnlyofficeHistoryRoutes(app, { ...editor, forcesaveTimeoutMs: deps.forcesaveTimeoutMs });
   registerOnlyofficeExtrasRoutes(app, editor);
   registerOnlyofficeMentionRoutes(app, { db: deps.db, authenticateToken, notifier: deps.notifier });
-  registerShareViewerRoute(app, { env: deps.env, db: deps.db, tokens });
+  registerShareViewerRoute(app, { env: deps.env, db: deps.db });
   registerOnlyofficeConversionRoutes(app, {
     db: deps.db, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange, services,
   });

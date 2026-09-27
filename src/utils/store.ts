@@ -420,20 +420,94 @@ export const saveProjectNotes = async (projectId: string, note: ProjectNote): Pr
   await handleResponse(res);
 };
 
-export const createShare = async (type: string, resourceId: string, name: string): Promise<string> => {
-  const res = await fetch('/api/shares', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ type, resourceId, name }),
-  });
-  await handleResponse(res);
-  const { id } = await res.json();
-  return id;
+// ── Share links (ONLYOFFICE Phase 7: expiry, stopping, several files) ──────
+
+/** How long a new link lasts: 7, 30 (the default) or 90 days, or never. */
+export type ShareExpiry = 7 | 30 | 90 | null;
+export const SHARE_EXPIRY_CHOICES: { days: ShareExpiry; label: string }[] = [
+  { days: 7, label: '7 days' }, { days: 30, label: '30 days' }, { days: 90, label: '90 days' }, { days: null, label: 'Never' },
+];
+
+/** What a new link opens (see server/shares.ts). */
+export type ShareTarget =
+  | { type: 'file'; resourceId: string }
+  | { type: 'page'; resourceId: string }
+  | { type: 'pages'; resourceId: string }
+  | { type: 'files'; fileIds: string[] };
+
+export interface ShareLink {
+  id: string;
+  type: string;
+  name: string | null;
+  createdAt: number;
+  expiresAt: number | null;
+  createdBy: string | null;
+  createdByName: string | null;
+  /** For a several-files link: how many files it opens. */
+  fileCount: number;
+}
+
+async function shareJson<T>(res: Response, fallback: string): Promise<T> {
+  if (res.status === 401) await handleResponse(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || fallback);
+  }
+  return res.json();
+}
+
+/** A new link; never reuses an old one. */
+export const createShareLink = async (
+  target: ShareTarget, name: string, expiresInDays: ShareExpiry = 30,
+): Promise<{ id: string; expiresAt: number | null }> => shareJson(await fetch('/api/shares', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+  body: JSON.stringify({ ...target, name, expiresInDays }),
+}), "Couldn't create the link");
+
+/** A file's working links (its own, and several-files links it is in). */
+export const listShareLinks = async (fileId: string): Promise<ShareLink[]> =>
+  (await shareJson<{ shares: ShareLink[] }>(await fetch(`/api/shares?fileId=${encodeURIComponent(fileId)}`, { headers: { ...getAuthHeaders() } }), "Couldn't load the links")).shares;
+
+export const setShareLinkExpiry = async (id: string, expiresInDays: ShareExpiry): Promise<{ expiresAt: number | null }> => shareJson(await fetch(`/api/shares/${encodeURIComponent(id)}`, {
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+  body: JSON.stringify({ expiresInDays }),
+}), "Couldn't change the expiry");
+
+/** "Stop sharing": the link then says it was turned off. */
+export const stopShareLink = async (id: string): Promise<void> => {
+  await shareJson(await fetch(`/api/shares/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { ...getAuthHeaders() } }), "Couldn't stop sharing");
 };
 
-export const getShareInfo = async (shareId: string): Promise<{ type: string; name: string; count?: number; viewer?: boolean }> => {
+/** The public address of a link: the Public Host URL from Settings, else this site. */
+export const shareUrlFor = (id: string, publicHost?: string | null): string =>
+  `${(publicHost || window.location.origin).replace(/\/$/, '')}/share/${id}`;
+
+export interface SharedFileInfo { name: string; mime: string; size: number; viewer: boolean; missing?: boolean }
+export interface ShareInfo {
+  type: string;
+  name: string;
+  count?: number;
+  viewer?: boolean;
+  mime?: string | null;
+  expiresAt?: number | null;
+  /** A several-files link's documents, in order. */
+  files?: SharedFileInfo[];
+}
+
+/** Why a link doesn't open: expired, turned off, or never existed. */
+export class ShareLinkError extends Error {
+  constructor(message: string, public code: 'expired' | 'revoked' | 'missing' | 'error') { super(message); }
+}
+
+export const getShareInfo = async (shareId: string): Promise<ShareInfo> => {
   const res = await fetch(`/api/share/${shareId}/info`);
-  await handleResponse(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const code = body.code === 'expired' || body.code === 'revoked' || body.code === 'missing' ? body.code : 'error';
+    throw new ShareLinkError(body.error || 'This share link is invalid or has expired.', code);
+  }
   return res.json();
 };
 
@@ -709,9 +783,13 @@ export const openAttachmentViewer = async (
   "Couldn't open the attachment",
 );
 
-/** The embedded viewer for a share link (public: no sign-in). */
-export const openShareViewer = async (shareId: string, opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark' }): Promise<ViewerOpening> => {
-  const res = await fetch(`/api/share/${encodeURIComponent(shareId)}/viewer?device=${opts.device}&theme=${opts.theme}`);
+/** The embedded viewer for a share link (public: no sign-in); `index` picks
+ *  one file of a several-files link. */
+export const openShareViewer = async (
+  shareId: string, opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark' }, index?: number,
+): Promise<ViewerOpening> => {
+  const which = index === undefined ? '' : `/${index}`;
+  const res = await fetch(`/api/share/${encodeURIComponent(shareId)}/viewer${which}?device=${opts.device}&theme=${opts.theme}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new EditorOpenError(body.error || "Couldn't open the viewer", res.status, body.code);

@@ -1690,40 +1690,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
-  // ── Public share file serving (metadata share routes stay in server.ts) ──
-
-  const sendFileById = (res: express.Response, id: string, cacheSeconds: number) => {
-    const meta = getMeta(db, id);
-    const st = statFile(dataDir, id);
-    if (!meta || !st) return res.status(404).send('File not found');
-    res.set('Content-Type', meta.mime);
-    res.set('Content-Length', String(st.size));
-    res.set('Cache-Control', `public, max-age=${cacheSeconds}`);
-    fsSync.createReadStream(pathFor(dataDir, id)).pipe(res);
-  };
-
-  app.get('/api/share/:shareId/image/:index', (req, res) => {
-    try {
-      const share = db.prepare('SELECT type, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; resourceId: string } | undefined;
-      if (!share || share.type !== 'pages') return res.status(404).send('Share not found');
-      const pages = JSON.parse(share.resourceId) as { imageId: string }[];
-      const idx = parseInt(req.params.index, 10);
-      if (isNaN(idx) || idx < 0 || idx >= pages.length) return res.status(404).send('Page not found');
-      sendFileById(res, pages[idx].imageId, 3600);
-    } catch {
-      res.status(500).send('Server error');
-    }
-  });
-
-  app.get('/api/share/:shareId', (req, res) => {
-    try {
-      const share = db.prepare('SELECT resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { resourceId: string } | undefined;
-      if (!share) return res.status(404).send('Share not found');
-      sendFileById(res, share.resourceId, 3600);
-    } catch {
-      res.status(500).send('Server error');
-    }
-  });
+  // Public share links: server/shareRoutes.ts.
 
   // ── Customers ────────────────────────────────────────────────────────────────
 

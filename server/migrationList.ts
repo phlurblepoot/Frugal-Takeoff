@@ -1798,4 +1798,22 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 41,
+    name: 'share-expiry',
+    // ADDITIVE (ONLYOFFICE Phase 7 — sharing upgrades):
+    //   * shares.expiresAt — when the link stops working; NULL = never. Links
+    //     made before this keep NULL, so they keep working (Nathan,
+    //     2026-09-25) and show in the file's active-links list to be turned off.
+    //   * shares.revokedAt — "Stop sharing": the row stays so the link can say
+    //     it was turned off, rather than that it never existed.
+    //   * shares.createdBy — who made it, shown in the links list.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(shares)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('expiresAt')) db.exec(`ALTER TABLE shares ADD COLUMN expiresAt INTEGER;`);
+      if (!cols.includes('revokedAt')) db.exec(`ALTER TABLE shares ADD COLUMN revokedAt INTEGER;`);
+      if (!cols.includes('createdBy')) db.exec(`ALTER TABLE shares ADD COLUMN createdBy TEXT;`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_shares_resourceId ON shares (resourceId);`);
+    },
+  },
 ];

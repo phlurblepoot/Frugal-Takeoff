@@ -5,7 +5,7 @@
 // mutations (patchFile/deleteFile calls + refresh); this component only
 // decides what's enabled via selectionPolicy and confirms before delete.
 import React, { useEffect, useRef, useState } from 'react';
-import { Archive, ArchiveRestore, Download, Tag, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Download, Share2, Tag, Trash2, X } from 'lucide-react';
 import { DocumentRow } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -25,7 +25,9 @@ export const DocumentsBulkBar: React.FC<{
   // a row locked to a system kind is never sent.
   onChangeKind: (rows: DocumentRow[], kind: string) => Promise<void>;
   onDelete: (rows: DocumentRow[]) => Promise<void>;
-}> = ({ selected, customTypes, archivedView, onClear, onDownload, onArchive, onChangeKind, onDelete }) => {
+  /** One public link to all of them (ONLYOFFICE Phase 7). */
+  onShare?: (rows: DocumentRow[]) => void;
+}> = ({ selected, customTypes, archivedView, onClear, onDownload, onArchive, onChangeKind, onDelete, onShare }) => {
   const { toast } = useToast();
   const confirm = useConfirm();
   const [busy, setBusy] = useState<Busy>(null);
@@ -110,6 +112,17 @@ export const DocumentsBulkBar: React.FC<{
         >
           <Download size={14} />{busy === 'download' ? 'Downloading…' : 'Download'}
         </button>
+        {onShare && (
+          <button
+            data-testid="documents-bulk-share"
+            onClick={() => onShare(selected)}
+            disabled={busy !== null || selected.length > 50}
+            title={selected.length > 50 ? 'Share up to 50 documents in one link' : 'One link to all of them'}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-slate-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Share2 size={14} />Share
+          </button>
+        )}
         <button
           onClick={handleArchive}
           disabled={busy !== null || archivable.length === 0}

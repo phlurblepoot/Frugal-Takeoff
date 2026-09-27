@@ -61,7 +61,7 @@ Everything runs on your own server — there is no SaaS dependency, no external 
 | **PDF editor**             | Open any PDF, annotate with freehand, shapes, text, images, and saved signatures. Reorder / delete / import pages. Save back to a PDF.                           |
 | **Spreadsheet editor**     | Edit `.xlsx` printouts inline using Fortune Sheet — formulas, formatting, multi-sheet — then save over the original.                                             |
 | **Checklists**             | Per-project punch lists with Before / In Progress / After photo sections, per-item comments, drag-to-reorder, and a printable PDF.                               |
-| **Sharing**                | Generate expiring read-only share links for a single page, a set of pages, or a printout — recipients don't need an account.                                     |
+| **Sharing**                | Share any document, several documents under one link, or plan pages with a read-only link that lasts 7, 30 or 90 days, or never; stop sharing any time. Recipients don't need an account. |
 | **Bid pipeline**           | The Projects list is a lifecycle board — Bidding, In Progress, and Archive as tabs, each with its own sort (bid due date, last updated, name, date added) and a "Recently opened" shortcut — so nothing needs to be re-triaged by hand as a project moves from bid to job to close-out.       |
 | **Mail**                   | A full mailbox inside the app — each person connects Google Workspace, Microsoft 365, or any IMAP/SMTP host, and sends and replies from their own address, including straight from proposals, invoices, RFIs, and other project documents. Replies to a sent RFI show up as a pending answer to accept or dismiss. |
 | **Collaboration**          | Real-time cursors, presence, and per-page notes via Socket.io.                                                                                                   |
@@ -204,11 +204,14 @@ Each item also has a **Comments** field for notes, blockers, or reasons the item
 
 ### Sharing
 
-Any page, a selection of pages, a printout, or an entire proposal can be shared with a read-only link. Recipients don't need an account.
+Any document, several documents at once, a plan page, or a selection of pages can be shared with a read-only link. Recipients don't need an account.
 
-- **Single page** — just that page's canvas with all takeoffs baked in.
-- **Multiple pages** — one combined link that opens a vertical scroll gallery of every selected page.
-- **Printout** — the raw PDF, served inline with a download button.
+- **A document** — right-click it in Documents (or use **Share** in its preview) and pick **Share…**. Word, Excel, PowerPoint and PDF files open in the document viewer (on phones too); anything else offers a download.
+- **Several documents** — select them in Documents and click **Share** in the bulk bar. One link opens a list of them (up to 50); each opens the same way.
+- **A plan page** — the link button on the page (or **Share page…** from its right-click menu). Just that page's canvas with all takeoffs baked in.
+- **Several pages** — select them and click **Share**. One link opens a scrolling gallery of every selected page.
+
+Each new link lasts **7, 30 or 90 days, or never expires** (30 by default); the share window shows when it expires and can change it. A document's share window lists every link that opens it, including several-documents links it is part of, with **Stop sharing** on each. Someone opening an expired or stopped link is told which, rather than getting an error. Links made before expiry existed never expire, but can still be stopped.
 
 Share URLs use the **Public Host URL** configured under Settings, so the link is correct regardless of internal hostnames.
 

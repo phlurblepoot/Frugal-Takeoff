@@ -23,10 +23,8 @@ import { Notifier } from './server/notifications';
 import { registerNotificationRoutes } from './server/notificationRoutes';
 import { PushService } from './server/push';
 import { createAttachmentViewer } from './server/onlyoffice/viewers';
-import { readOnlyofficeConfig } from './server/onlyoffice/config';
-import { officeFormatOf } from './src/utils/officeFormats';
-import { getMeta as getFileMeta } from './server/files';
 import { registerPushRoutes } from './server/pushRoutes';
+import { registerShareRoutes } from './server/shareRoutes';
 import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
 import { loadMailCrypto } from './server/mail/crypto';
@@ -267,6 +265,7 @@ async function startServer() {
   });
   registerNotificationRoutes(app, { authenticateToken, notifier });
   registerPushRoutes(app, { db, authenticateToken, push });
+  registerShareRoutes(app, { db, dataDir: DATA_DIR, env: process.env, authenticateToken });
 
   // The Playwright e2e harness logs in many times per run (per-worker session +
   // a few explicit logins per spec), which would trip a 10/min cap. Detect the
@@ -523,69 +522,7 @@ async function startServer() {
     }
   });
 
-  // ── Sharing API ───────────────────────────────────────────────────────────────
-
-  // Public: get share info (does not expose internal resourceId)
-  app.get('/api/share/:shareId/info', (req, res) => {
-    try {
-      const row = db.prepare('SELECT type, name, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; name: string; resourceId: string } | undefined;
-      if (!row) return res.status(404).json({ error: 'Share not found' });
-      if (row.type === 'pages') {
-        try {
-          const pages = JSON.parse(row.resourceId) as { imageId: string; name: string; pageNumber?: string }[];
-          return res.json({ type: row.type, name: row.name, count: pages.length });
-        } catch { /* fall through */ }
-      }
-      // viewer: the shared file opens in the ONLYOFFICE embedded viewer
-      // (/api/share/:shareId/viewer, Phase 6), which also works on phones.
-      const meta = getFileMeta(db, row.resourceId);
-      const viewer = !!meta && !!officeFormatOf(meta) && !!readOnlyofficeConfig(process.env).config;
-      res.json({ type: row.type, name: row.name, viewer });
-    } catch {
-      res.status(500).json({ error: 'Server error' });
-    }
-  });
-
-  // Public: return name/pageNumber metadata for one page in a 'pages' share
-  app.get('/api/share/:shareId/page-info/:index', (req, res) => {
-    try {
-      const share = db.prepare('SELECT type, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; resourceId: string } | undefined;
-      if (!share || share.type !== 'pages') return res.status(404).json({ error: 'Share not found' });
-      const pages = JSON.parse(share.resourceId) as { imageId: string; name: string; pageNumber?: string }[];
-      const idx = parseInt(req.params.index, 10);
-      if (isNaN(idx) || idx < 0 || idx >= pages.length) return res.status(404).json({ error: 'Page not found' });
-      const { name, pageNumber } = pages[idx];
-      res.json({ name, pageNumber });
-    } catch {
-      res.status(500).json({ error: 'Server error' });
-    }
-  });
-
-  // Authenticated: create a share
-  app.post('/api/shares', authenticateToken, (req, res) => {
-    try {
-      const { type, resourceId, name } = req.body as { type: string; resourceId: string; name: string };
-      if (!type || !resourceId) return res.status(400).json({ error: 'Missing fields' });
-      // Reuse existing share for same resourceId if it exists
-      const existing = db.prepare('SELECT id FROM shares WHERE resourceId = ?').get(resourceId) as { id: string } | undefined;
-      if (existing) return res.json({ id: existing.id });
-      const id = crypto.randomUUID();
-      db.prepare('INSERT INTO shares (id, type, resourceId, name, createdAt) VALUES (?, ?, ?, ?, ?)').run(id, type, resourceId, name || '', Date.now());
-      res.json({ id });
-    } catch {
-      res.status(500).json({ error: 'Server error' });
-    }
-  });
-
-  // Authenticated: delete a share
-  app.delete('/api/shares/:id', authenticateToken, (req, res) => {
-    try {
-      db.prepare('DELETE FROM shares WHERE id = ?').run(req.params.id);
-      res.json({ success: true });
-    } catch {
-      res.status(500).json({ error: 'Server error' });
-    }
-  });
+  // Share links (info, create, list, expiry, stop): server/shareRoutes.ts.
 
   // Checklists API removed — feature moved to /api/tasks (collaborative Tasks page).
   // The `checklists` table is retained as a data backup (see migration 11); do not drop it.

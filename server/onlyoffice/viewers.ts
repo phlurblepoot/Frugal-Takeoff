@@ -9,15 +9,17 @@
 //   * Share links: GET /api/share/:shareId/viewer — the embedded viewer for a
 //     shared file ONLYOFFICE can read (PDFs included), anonymous and view
 //     only, which also works on phones. Anything else keeps the page's own
-//     preview.
+//     preview. The Document Server fetches the file through the share link
+//     itself, so an expired or stopped link cuts the viewer off too.
 import crypto from 'crypto';
 import express from 'express';
 import type Database from 'better-sqlite3';
 import { getMeta } from '../files';
+import { SHARE_PROBLEM_TEXT, activeShare, shareProblemStatus, sharedFileIds } from '../shares';
 import { officeFormatOf, type OfficeFormat } from '../../src/utils/officeFormats';
 import { readOnlyofficeConfig, type OnlyofficeConfig } from './config';
 import type { LinkTokens } from './tokens';
-import { MAIL_ATTACHMENT_LINK_TTL_SECONDS, fileLink, mailAttachmentSubject } from './links';
+import { MAIL_ATTACHMENT_LINK_TTL_SECONDS, mailAttachmentSubject, shareFileLink } from './links';
 import { buildEditorConfig } from './editorConfig';
 
 export interface ViewerOpening {
@@ -81,35 +83,38 @@ export function createAttachmentViewer(env: NodeJS.ProcessEnv, tokens: LinkToken
 export interface ShareViewerDeps {
   env: NodeJS.ProcessEnv;
   db: Database.Database;
-  tokens: LinkTokens;
-}
-
-/** The shared file behind a single-file share, if there is one. */
-function sharedFile(db: Database.Database, shareId: string) {
-  const share = db.prepare('SELECT type, name, resourceId FROM shares WHERE id = ?').get(shareId) as
-    { type: string; name: string; resourceId: string } | undefined;
-  if (!share || share.type === 'pages') return null;
-  const meta = getMeta(db, share.resourceId);
-  return meta ? { share, meta } : null;
 }
 
 export function registerShareViewerRoute(app: express.Express, deps: ShareViewerDeps): void {
-  // Public, like the share link itself: the embedded viewer, view only.
-  app.get('/api/share/:shareId/viewer', (req, res) => {
-    const found = sharedFile(deps.db, req.params.shareId);
+  // Public, like the share link itself: the embedded viewer, view only. A
+  // several-files link has one per file (/viewer/:index). An expired or
+  // stopped link opens nothing (Phase 7).
+  app.get(['/api/share/:shareId/viewer', '/api/share/:shareId/viewer/:index'], (req, res) => {
+    const active = activeShare(deps.db, req.params.shareId);
+    if (!('share' in active)) {
+      return res.status(shareProblemStatus(active.problem)).json({ error: SHARE_PROBLEM_TEXT[active.problem], code: active.problem });
+    }
+    const share = active.share;
+    const ids = sharedFileIds(share);
+    const many = share.type === 'files';
+    const index = req.params.index === undefined ? undefined : Number(req.params.index);
+    const fileId = many ? (index !== undefined ? ids[index] : undefined) : index === undefined ? ids[0] : undefined;
+    const meta = fileId ? getMeta(deps.db, fileId) : null;
+    const found = meta ? { share, meta } : null;
     if (!found) return res.status(404).json({ error: 'Share not found' });
     const format = officeFormatOf(found.meta);
     if (!format) return res.status(404).json({ error: "This file isn't shown in the document viewer.", code: 'unsupported' });
     const { config: cfg } = readOnlyofficeConfig(deps.env);
     if (!cfg) return res.status(503).json({ error: "The document viewer isn't set up.", code: 'not-configured' });
-    const name = found.share.name || found.meta.name || 'Document';
+    const name = (many ? found.meta.name : found.share.name || found.meta.name) || 'Document';
     res.set('Cache-Control', 'no-store');
     res.json(viewerConfig(cfg, {
       name, format,
       // Its own key: the editor's would join a live editing session, showing
       // someone's unsaved edits to anyone with the link.
       docKey: viewerKey('share', found.meta.id, found.meta.sha256),
-      fileUrl: fileLink(cfg, deps.tokens, found.meta.id),
+      // Through the share link itself, so stopping it stops this too.
+      fileUrl: shareFileLink(cfg, share.id, many ? index : undefined),
       device: req.query.device === 'phone' ? 'phone' : 'desktop',
       theme: req.query.theme === 'dark' ? 'dark' : 'light',
       user: { id: `guest-${crypto.createHash('sha256').update(req.params.shareId).digest('hex').slice(0, 12)}`, name: 'Guest' },

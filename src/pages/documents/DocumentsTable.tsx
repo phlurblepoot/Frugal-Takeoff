@@ -15,9 +15,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { History } from 'lucide-react';
-import { DocumentRow, createShare, fetchFileBlob, formatBytes, getSettings } from '../../utils/store';
+import { DocumentRow, fetchFileBlob, formatBytes } from '../../utils/store';
 import { useToast } from '../../components/Toast';
-import { useShareLink } from '../../components/ShareLinkModal';
+import { useShare } from '../../components/ShareLinkModal';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { FileViewerDots } from '../../components/FileViewerDots';
 import { Skeleton, StatusPill, Table, TBody, TD, TH, THead, TR } from '../../components/ui';
@@ -68,7 +68,7 @@ export const DocumentsTable: React.FC<{
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
-  const shareLink = useShareLink();
+  const share = useShare();
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<RowContextMenuState | null>(null);
   // Viewer state lives here rather than in DocumentsPage: the row click, the
@@ -121,19 +121,11 @@ export const DocumentsTable: React.FC<{
     onDeleteRows([row]);
   };
 
-  // Public share link for a takeoff print/export — the share type stays
-  // 'printout' and the resourceId stays the FILE id, exactly as the retired
-  // Proposal tab created them, so old links and new ones resolve through the
-  // same GET /api/share/:shareId (which looks the resourceId up as a file id).
-  const handleShare = async (row: DocumentRow) => {
-    const name = row.name ?? 'Takeoff print';
-    try {
-      const [id, settings] = await Promise.all([createShare('printout', row.id, name), getSettings()]);
-      const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      shareLink(`${host}/share/${id}`, name);
-    } catch {
-      toast('Failed to create share link', { type: 'error' });
-    }
+  // Share any document (ONLYOFFICE Phase 7): the share window lists the
+  // links already working for it and makes new ones with an expiry.
+  const handleShare = (row: DocumentRow) => {
+    const name = row.name ?? 'Document';
+    share({ title: `Share ${name}`, target: { type: 'file', resourceId: row.id }, name });
   };
 
   const handleHistory = (row: DocumentRow) => {
@@ -389,6 +381,7 @@ export const DocumentsTable: React.FC<{
           onOpenInEditor={handleOpen}
           onDownload={handleDownload}
           onArchive={(row, archived) => onArchiveRows([row], archived)}
+          onShare={handleShare}
         />
       )}
 

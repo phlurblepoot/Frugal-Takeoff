@@ -11,7 +11,7 @@ import {
   Archive, ArchiveRestore, Download, ExternalLink, Link as LinkIcon, Tag, Trash2,
 } from 'lucide-react';
 import { DocumentRow } from '../../utils/store';
-import { CustomDocType, isDeletableGeneratedKind, retypeOptions } from './docTypes';
+import { CustomDocType, retypeOptions } from './docTypes';
 import { selectionPolicy } from './documentsPolicy';
 import { clampToViewport } from './previewPosition';
 
@@ -43,11 +43,6 @@ export const RowContextMenu: React.FC<{
   const archivableRow = archivable.length > 0;
   const deletableRow = deletable.length > 0;
   const directUpload = retypeable.length > 0;
-  // Public share links exist for takeoff prints/exports only — they're the one
-  // generated document a customer or GC is handed directly, and the old
-  // Proposal tab's per-printout Share button was the way to do it before this
-  // page replaced that list.
-  const shareable = isDeletableGeneratedKind(row.kind);
 
   // Clamp to the viewport once the menu's real size is known — re-measured
   // whenever the nested change-type list opens/closes since that changes the
@@ -146,11 +141,11 @@ export const RowContextMenu: React.FC<{
           )}
         </div>
       )}
-      {shareable && (
-        <button role="menuitem" className={itemCls} onClick={() => { onClose(); onShare(row); }}>
-          <LinkIcon size={14} /> Share link
-        </button>
-      )}
+      {/* Any document can be shared (ONLYOFFICE Phase 7); the server refuses
+          what this person can't see. */}
+      <button role="menuitem" className={itemCls} onClick={() => { onClose(); onShare(row); }}>
+        <LinkIcon size={14} /> Share…
+      </button>
       {deletableRow && (
         <button
           role="menuitem"

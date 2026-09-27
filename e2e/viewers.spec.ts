@@ -55,6 +55,6 @@ test('a shared PDF keeps its own preview while the viewer is not set up', async 
 
   await page.goto(`/share/${share.id}`);
   await expect(page.locator('object[type="application/pdf"]')).toHaveCount(1);
-  await expect(page.getByRole('link', { name: 'Download' })).toHaveAttribute('href', `/api/share/${share.id}`);
+  await expect(page.getByRole('link', { name: 'Download' })).toHaveAttribute('href', `/api/share/${share.id}?download=1`);
   await expect(page.getByTestId('share-viewer')).toHaveCount(0);
 });

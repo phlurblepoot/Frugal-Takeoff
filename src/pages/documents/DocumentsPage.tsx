@@ -17,6 +17,7 @@ import { useToast } from '../../components/Toast';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { DocumentsBulkBar } from './DocumentsBulkBar';
+import { useShare } from '../../components/ShareLinkModal';
 import { DocumentsFilterBar } from './DocumentsFilterBar';
 import { downloadBlob, DocumentsTable } from './DocumentsTable';
 import { MultiSelectOption } from './MultiSelectDropdown';
@@ -221,6 +222,26 @@ export const DocumentsPage: React.FC = () => {
   const clearSelection = () => setSelected(new Set());
   const selectedRows = rows.filter(r => selected.has(r.id));
 
+  // One public link to the ticked documents (ONLYOFFICE Phase 7). Named for
+  // their project when they share one, so the page says whose they are.
+  const share = useShare();
+  const shareRows = (targets: DocumentRow[]) => {
+    if (targets.length === 1) {
+      const name = targets[0].name ?? 'Document';
+      share({ title: `Share ${name}`, target: { type: 'file', resourceId: targets[0].id }, name });
+      return;
+    }
+    const projects = new Set(targets.map(r => r.projectName ?? ''));
+    const [project] = [...projects];
+    const name = projects.size === 1 && project ? `${project}: ${targets.length} documents` : `${targets.length} documents`;
+    share({
+      title: `Share ${targets.length} documents`,
+      target: { type: 'files', fileIds: targets.map(r => r.id) },
+      name,
+      fileNames: targets.map(r => r.name ?? 'Document'),
+    });
+  };
+
   // ── Mutations (shared by bulk bar + per-row actions) ─────────────────────────
   const archiveRows = async (targets: DocumentRow[], nextArchived: boolean) => {
     if (targets.length === 0) return;
@@ -381,6 +402,7 @@ export const DocumentsPage: React.FC = () => {
         onArchive={archiveRows}
         onChangeKind={changeKindBulk}
         onDelete={deleteRows}
+        onShare={shareRows}
       />
 
       {loading ? (

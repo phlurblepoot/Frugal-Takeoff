@@ -15,6 +15,8 @@ import { runMigrations } from '../migrations';
 import { migrations } from '../migrationList';
 import { putBuffer } from '../files';
 import { registerOnlyofficeRoutes } from './routes';
+import { registerShareRoutes } from '../shareRoutes';
+import { revokeShare } from '../shares';
 import { createOnlyofficeServices } from './services';
 import { createAttachmentViewer } from './viewers';
 import { mailAttachmentSubject } from './links';
@@ -75,6 +77,7 @@ describe('share links: the embedded viewer', () => {
       requireAdmin: (_req, res) => { res.status(403).end(); },
       fetch: (async () => new Response('nf', { status: 404 })) as typeof fetch,
     });
+    registerShareRoutes(a, { db, dataDir: dir, env, authenticateToken: (_req, res) => { res.status(401).end(); } });
     return a;
   };
 
@@ -106,12 +109,20 @@ describe('share links: the embedded viewer', () => {
     expect(r.body.config.document.key).not.toBe(documentKeyFor(getMeta(db, 'pdf1')!));
   });
 
-  it("lets ONLYOFFICE download exactly the shared file", async () => {
+  it("lets ONLYOFFICE download exactly the shared file, through the share link itself", async () => {
     const a = mkApp();
     const r = await request(a).get('/api/share/s-pdf/viewer');
+    expect(r.body.config.document.url).toBe('http://app:3000/api/share/s-pdf');
     const file = await request(a).get(appPath(r.body.config.document.url));
     expect(file.status).toBe(200);
     expect(file.body.toString()).toBe('%PDF-1.7 bid set');
+  });
+
+  it('a viewer already opened loses the file once sharing stops (Phase 7)', async () => {
+    const a = mkApp();
+    const r = await request(a).get('/api/share/s-pdf/viewer');
+    revokeShare(db, 's-pdf');
+    expect((await request(a).get(appPath(r.body.config.document.url))).status).toBe(410);
   });
 
   it('leaves images, page sets and unknown shares to the page, and says when ONLYOFFICE is not set up', async () => {

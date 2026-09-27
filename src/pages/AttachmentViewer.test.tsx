@@ -90,9 +90,9 @@ describe('ShareView with the viewer', () => {
     h.openShareViewer.mockResolvedValue(opening('embedded'));
     at('/share/s1', <ShareView />, '/share/:shareId');
     await waitFor(() => expect(constructed).toHaveLength(1));
-    expect(h.openShareViewer).toHaveBeenCalledWith('s1', expect.objectContaining({ device: 'desktop' }));
+    expect(h.openShareViewer).toHaveBeenCalledWith('s1', expect.objectContaining({ device: 'desktop' }), undefined);
     expect(constructed[0].config.type).toBe('embedded');
-    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute('href', '/api/share/s1');
+    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute('href', '/api/share/s1?download=1');
     expect(document.querySelector('object')).toBeNull();
   });
 
@@ -104,7 +104,7 @@ describe('ShareView with the viewer', () => {
   });
 
   it('keeps the preview for files the viewer is not for', async () => {
-    h.getShareInfo.mockResolvedValue({ type: 'image', name: 'Photo', viewer: false });
+    h.getShareInfo.mockResolvedValue({ type: 'page', name: 'Photo', mime: 'image/png', viewer: false });
     at('/share/s2', <ShareView />, '/share/:shareId');
     expect(await screen.findByRole('img', { name: 'Photo' })).toHaveAttribute('src', '/api/share/s2');
     expect(h.openShareViewer).not.toHaveBeenCalled();
