@@ -1041,8 +1041,9 @@ container next to the app, and build the extras agreed below on top of it.
     viewer already handed out, says "turned off", and drops it from the list;
     one document lasts 30 days and is never reused; a non-admin can't share an
     invoice but can share documents; 45 days refused.
-  - full unit suite 3423/3423 before the two review fixes (share tests 21/21
-    after them); full e2e suite on the final code: running, results to follow
+  - on the final code: lint clean; full unit suite 3427/3427; full e2e suite
+    122 passed, 1 skipped (a conditional spec), 0 failed. (The run before
+    caught the bell race fixed under Phase 5.)
 - [ ] **(Nathan)** Manual check on the test container:
   - Documents: right-click any document, **Share…**. Pick 7 days, **Create
     link**, copy it, and open it on a phone signed out. Then **Stop sharing**
