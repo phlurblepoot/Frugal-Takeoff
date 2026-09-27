@@ -1060,7 +1060,8 @@ container next to the app, and build the extras agreed below on top of it.
 
 ## Phase 8 — Finish and merge
 
-- [ ] `npm run lint`, `npm test` and `npm run test:e2e` all passing.
+- [x] `npm run lint`, `npm test` and `npm run test:e2e` all passing
+  (`febdd36`).
   - The first full e2e run on the Phase 8 code (`ba90541`) failed one test,
     `e2e/mail-phase2.spec.ts` "convert-from-thread": the RFI editor opened
     and closed a moment later. Cause: `PageTransition` mounted every newly
@@ -1074,7 +1075,8 @@ container next to the app, and build the extras agreed below on top of it.
     test fix `testing` lacked), verified on `testing` (unit 3203/3203, e2e
     101 passed, 1 skipped), then merged into `onlyoffice` (`409f1d6`).
     `DocumentEditor`'s guard stays, its comment updated.
-  - On the merged code: lint clean; unit 3428/3428; full e2e running, results to follow
+  - On the merged code (`febdd36`): lint clean; unit 3428/3428; full e2e
+    122 passed, 1 skipped (a conditional spec), 0 failed.
 - [ ] **(Nathan)** Full walkthrough on the test container:
   - edit PDF, xlsx and docx
   - two people editing at once
