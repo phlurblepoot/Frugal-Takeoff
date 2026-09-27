@@ -46,9 +46,20 @@ export const NotificationsProvider: React.FC<{ children: React.ReactNode }> = ({
   const navigate = useNavigate();
   const location = useLocation();
 
-  const refresh = useCallback(() => {
+  // A load that set out before a live event may answer without it, and
+  // answers can arrive out of order: only the newest load counts, and one
+  // overtaken by an event loads again rather than undo it.
+  const lastLoad = useRef(0);
+  const eventsSeen = useRef(0);
+  const refresh = useCallback(function load() {
+    const thisLoad = ++lastLoad.current;
+    const eventsBefore = eventsSeen.current;
     getNotifications()
-      .then(r => { setItems(r.items); setUnread(r.unread); setLoaded(true); })
+      .then(r => {
+        if (thisLoad !== lastLoad.current) return;
+        if (eventsSeen.current !== eventsBefore) { load(); return; }
+        setItems(r.items); setUnread(r.unread); setLoaded(true);
+      })
       .catch(() => { /* the bell just stays as it was */ });
   }, []);
 
@@ -56,6 +67,7 @@ export const NotificationsProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!socket) { setItems([]); setUnread(0); setLoaded(false); return; }
     refresh();
     const onEvent = (ev: NotificationEvent) => {
+      eventsSeen.current += 1;
       if (ev.kind === 'new') {
         if (itemsRef.current.some(n => n.id === ev.notification.id)) return;
         setItems(prev => (prev.some(n => n.id === ev.notification.id) ? prev : [ev.notification, ...prev]));

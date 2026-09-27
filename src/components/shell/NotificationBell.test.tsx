@@ -59,6 +59,35 @@ beforeEach(() => {
 });
 
 describe('NotificationBell', () => {
+  it('keeps a live one that lands while the list is still loading (seen in e2e)', async () => {
+    // The list asked for before the task existed answers after its live event.
+    let answer!: (r: unknown) => void;
+    h.getNotifications
+      .mockReturnValueOnce(new Promise(r => { answer = r; }))
+      .mockResolvedValue({ items: [note('t1')], unread: 1 });
+    mount();
+    act(() => h.socket!.emit('notification', { kind: 'new', notification: note('t1') }));
+    expect(await screen.findByTestId('notification-badge')).toHaveTextContent('1');
+    await act(async () => { answer({ items: [], unread: 0 }); });
+    await waitFor(() => expect(h.getNotifications).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByTestId('notification-bell'));
+    expect(await screen.findByTestId('notification-item')).toHaveTextContent('Title t1');
+    expect(screen.getByTestId('notification-badge')).toHaveTextContent('1');
+  });
+
+  it('uses only the newest of two loads, whichever answers last', async () => {
+    let first!: (r: unknown) => void;
+    h.getNotifications
+      .mockReturnValueOnce(new Promise(r => { first = r; }))
+      .mockResolvedValueOnce({ items: [note('new')], unread: 1 });
+    mount();
+    act(() => h.socket!.emit('connect'));
+    expect(await screen.findByTestId('notification-badge')).toHaveTextContent('1');
+    await act(async () => { first({ items: [], unread: 0 }); });
+    fireEvent.click(screen.getByTestId('notification-bell'));
+    expect(screen.getByTestId('notification-item')).toHaveTextContent('Title new');
+  });
+
   it('shows the unread count from the server, and the list with the unread marked', async () => {
     h.getNotifications.mockResolvedValue({ items: [note('a'), note('b', { readAt: 1 })], unread: 12 });
     mount();

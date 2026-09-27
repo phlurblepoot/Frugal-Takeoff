@@ -739,6 +739,11 @@ container next to the app, and build the extras agreed below on top of it.
     under it on the thin rail. Badge shows up to "9+"; the panel has "Mark all
     read" and an explanation when empty. On phones the menu button shows a
     red dot while anything is unread, and the panel spans the screen.
+  - Fixed 2026-09-27 (found by the Phase 7 e2e run): a list load that set
+    out before a live notification could answer after it and wipe it out
+    (badge back to 0, "Nothing yet") until the next reload. Only the newest
+    load counts now, and one overtaken by a live event loads again.
+    `NotificationBell` +2 (both fail without the fix).
 - [x] **@mentions** in document comments:
   - `onRequestUsers` (`c: "mention"`) returns the app's users
   - ONLYOFFICE keys mentions by email and users have none, so use a stable
