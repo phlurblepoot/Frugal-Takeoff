@@ -1,8 +1,9 @@
 # ONLYOFFICE Document Editing — Progress Checklist
 
 **Branch:** `onlyoffice` (cut from `testing` at `09fe9a1`). All work for this
-project is committed and pushed to `onlyoffice`. It merges into `testing` once,
-when everything below is done and tested (see Phase 8).
+project was committed and pushed to `onlyoffice`. **Done: merged into `testing`
+on 2026-09-27** (a fast-forward to `fad80a8`) after Nathan's full walkthrough,
+released as 4.0.0.
 
 **Goal:** replace the in-app PDF editor (`src/pages/PdfEditor.tsx`) and
 spreadsheet editor (`src/pages/SpreadsheetEditor.tsx` + the Fortune Sheet
@@ -1130,8 +1131,15 @@ container next to the app, and build the extras agreed below on top of it.
     signatures move to My signatures, phone notifications per device, old
     share links); and going back (the old image runs on the new database but
     reopens stopped or expired share links; or restore the backup).
-- [ ] Merge `onlyoffice` into `testing`. Remove the ONLYOFFICE note from
-  `CLAUDE.md`.
+- [x] Merge `onlyoffice` into `testing`. Remove the ONLYOFFICE note from
+  `CLAUDE.md`. (Nathan, 2026-09-27: "go ahead and merge")
+  - Fast-forward: `testing` now at `fad80a8`, then this commit, which removes
+    the `CLAUDE.md` section and drops `onlyoffice` from the branches
+    `.github/workflows/docker.yml` builds (the `:onlyoffice` image no longer
+    updates).
+  - **(Nathan)** Switch the test container back to the `:testing` image.
+  - Nathan asked for a pull request from `testing` to `main` next (the
+    production rollout, `docs/onlyoffice-setup.md` §7, follows it).
   - `testing` has nothing `onlyoffice` lacks (checked 2026-09-27, and again
     after merging the transition fix in), so this is a fast-forward. Also drop `onlyoffice` from the branches in
     `.github/workflows/docker.yml`, and switch the test container back to
