@@ -12,12 +12,19 @@
 // arrival convention used by RFI/Issue/Task/mail flows) could momentarily
 // coexist with a still-live previous page — two independently-interactive
 // instances of "the same" element (e.g. two open dialogs, two thread rows)
-// at once. "wait" makes that structurally impossible: the old child fully
-// unmounts before the new one mounts, so only one page instance can ever
-// exist. Confirmed via a live DOM probe during the mail→RFI conversion flow
+// at once. Confirmed via a live DOM probe during the mail→RFI conversion flow
 // (two concurrent, independently-animating dialog nodes under popLayout).
+//
+// "wait" alone isn't enough, though: AnimatePresence keeps rendering the
+// outgoing wrapper while it fades, and the <Outlet> inside it renders the
+// route that matches NOW — the page being entered. That page then mounted
+// twice: first in the fading wrapper, where it read and stripped its
+// one-shot ?open= and opened the record, then again in its own wrapper,
+// which found nothing to open (seen as the mail → "Create RFI" editor
+// closing a moment after it appeared). So the outgoing wrapper renders
+// nothing, and every page mounts once, in its own wrapper.
 import React from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import { useLocation } from 'react-router-dom';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -43,8 +50,12 @@ export const PageTransition: React.FC<{ children: React.ReactNode }> = ({ childr
         transition={{ type: 'spring', stiffness: 380, damping: 30, mass: 0.7 }}
         style={{ minHeight: '100%' }}
       >
-        {children}
+        <WhilePresent>{children}</WhilePresent>
       </motion.div>
     </AnimatePresence>
   );
 };
+
+/** The page, only while its wrapper is the current one (see above). */
+const WhilePresent: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+  (useIsPresent() ? <>{children}</> : null);
