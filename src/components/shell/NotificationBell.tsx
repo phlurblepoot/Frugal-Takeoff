@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
-import { AtSign, Bell, CheckCheck, FileQuestionMark, ListTodo, MailCheck, MessageSquareReply } from 'lucide-react';
+import { AtSign, Bell, CheckCheck, FileQuestionMark, ListTodo, MailCheck, MessageSquareReply, Smartphone } from 'lucide-react';
 import { useNotifications } from '../../context/NotificationsContext';
 import { useTheme } from '../../context/ThemeContext';
 import { timeAgo } from '../../utils/time';
@@ -132,6 +132,14 @@ export const NotificationBell: React.FC<{ expanded: boolean }> = ({ expanded }) 
                     })}
                   </ul>
                 )}
+                <button
+                  type="button"
+                  data-testid="notification-phone-settings"
+                  onClick={() => { setOpen(false); navigate('/settings?tab=preferences#phone-notifications'); }}
+                  className="flex items-center gap-1.5 border-t border-edge px-4 py-2 text-left text-xs text-ink-soft hover:bg-hover hover:text-ink transition-colors"
+                >
+                  <Smartphone size={13} /> Get these on your phone…
+                </button>
               </motion.div>
             </>
           )}

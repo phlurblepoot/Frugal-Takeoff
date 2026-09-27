@@ -2489,3 +2489,44 @@ export const sendMentionNotifications = async (
   await handleResponse(res);
   return res.json();
 };
+
+// ── Phone push notifications (ONLYOFFICE Phase 5, added 2026-09-27) ─────────
+
+export interface PushDevice { id: string; device: string | null; createdAt: number; lastUsedAt: number | null }
+
+export const getPushConfig = async (): Promise<{ publicKey: string }> => {
+  const res = await fetchWithRetry('/api/push/config', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return res.json();
+};
+export const getPushDevices = async (): Promise<PushDevice[]> => {
+  const res = await fetchWithRetry('/api/push/devices', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return (await res.json()).devices;
+};
+/** Turns push on for this device: the browser's subscription, as toJSON() gives it. */
+export const savePushSubscription = async (subscription: unknown): Promise<PushDevice> => {
+  const res = await fetchWithRetry('/api/push/subscribe', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ subscription }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "Couldn't turn on notifications for this device");
+  }
+  return (await res.json()).device;
+};
+export const removePushSubscription = async (endpoint: string): Promise<void> => {
+  const res = await fetchWithRetry('/api/push/unsubscribe', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ endpoint }),
+  });
+  await handleResponse(res);
+};
+export const removePushDevice = async (id: string): Promise<void> => {
+  const res = await fetchWithRetry(`/api/push/devices/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+};
+export const sendTestPush = async (): Promise<{ sent: number; removed: number; failed: number }> => {
+  const res = await fetchWithRetry('/api/push/test', { method: 'POST', headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return res.json();
+};

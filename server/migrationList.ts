@@ -1773,4 +1773,29 @@ export const migrations: Migration[] = [
       if (!rfiCols.includes('sentByUserId')) db.exec(`ALTER TABLE rfis ADD COLUMN sentByUserId TEXT;`);
     },
   },
+  {
+    version: 40,
+    name: 'push-subscriptions',
+    // ADDITIVE (ONLYOFFICE Phase 5 — phone push, added 2026-09-27): one row per
+    // device a person turned push notifications on for. endpoint is the
+    // browser's push-service address (unique: the same browser signing in as
+    // someone else moves it to them); p256dh/auth are the browser's keys that
+    // encrypt each message. Rows go when the push service says the
+    // subscription is gone, or when the person turns it off.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          id         TEXT PRIMARY KEY,
+          userId     TEXT NOT NULL,
+          endpoint   TEXT NOT NULL UNIQUE,
+          p256dh     TEXT NOT NULL,
+          auth       TEXT NOT NULL,
+          device     TEXT,
+          createdAt  INTEGER NOT NULL,
+          lastUsedAt INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions (userId);
+      `);
+    },
+  },
 ];

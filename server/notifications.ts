@@ -59,6 +59,10 @@ export class Notifier {
   /** Late binding: the socket server is set up after some of its users. */
   setPush(push: NotificationPush): void { this.push = push; }
 
+  private readonly listeners: ((n: Notification) => void)[] = [];
+  /** Also called with every new notification (phone push, server/push.ts). */
+  onNew(listener: (n: Notification) => void): void { this.listeners.push(listener); }
+
   /** Records and pushes one notification. Null when there's nobody to tell
    *  (no such user, or they caused it themselves) or it couldn't be stored.
    *  Never throws: whatever triggered it has already happened. */
@@ -87,6 +91,9 @@ export class Notifier {
     };
     this.db.prepare(`INSERT INTO notifications (id, userId, type, title, body, link, actorUserId, createdAt, readAt)
                      VALUES (@id, @userId, @type, @title, @body, @link, @actorUserId, @createdAt, NULL)`).run(n);
+    for (const listener of this.listeners) {
+      try { listener(n); } catch (e) { console.warn('[notifications] listener failed:', e instanceof Error ? e.message : e); }
+    }
     try { this.push(userId, { kind: 'new', notification: n }); } catch (e) {
       console.warn('[notifications] push failed:', e instanceof Error ? e.message : e);
     }
@@ -102,6 +109,10 @@ export class Notifier {
       if (n) out.push(n);
     }
     return out;
+  }
+
+  unreadCount(userId: string): number {
+    return (this.db.prepare('SELECT COUNT(*) c FROM notifications WHERE userId = ? AND readAt IS NULL').get(String(userId)) as { c: number }).c;
   }
 
   list(userId: string, limit = NOTIFICATION_LIST_LIMIT): { items: Notification[]; unread: number } {

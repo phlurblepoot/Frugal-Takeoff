@@ -37,8 +37,8 @@ const note = (id: string, over: Partial<AppNotification> = {}): AppNotification 
   actorUserId: 'u1', createdAt: Date.now() - 60_000, readAt: null, ...over,
 });
 
-const mount = () => render(
-  <MemoryRouter initialEntries={['/dashboard']}>
+const mount = (url = '/dashboard') => render(
+  <MemoryRouter initialEntries={[url]}>
     <NotificationsProvider>
       <Routes>
         <Route path="*" element={<><NotificationBell expanded /><RouteProbe /></>} />
@@ -129,5 +129,44 @@ describe('NotificationBell', () => {
 
   it('keeps the badge small', () => {
     expect([badgeText(1), badgeText(9), badgeText(10)]).toEqual(['1', '9', '9+']);
+  });
+
+  describe('phone push taps (public/sw.js)', () => {
+    let sw: EventTarget;
+    beforeEach(() => {
+      sw = new EventTarget();
+      Object.defineProperty(window.navigator, 'serviceWorker', { configurable: true, value: sw });
+    });
+
+    it('with the app open: goes to the link and marks it read', async () => {
+      h.getNotifications.mockResolvedValue({ items: [note('a')], unread: 1 });
+      mount();
+      await screen.findByTestId('notification-badge');
+      act(() => { sw.dispatchEvent(Object.assign(new Event('message'), { data: { type: 'open-notification', link: '/tasks?open=a', id: 'a' } })); });
+      expect(screen.getByTestId('route')).toHaveTextContent('/tasks?open=a');
+      expect(h.markNotificationRead).toHaveBeenCalledWith('a');
+      expect(screen.queryByTestId('notification-badge')).toBeNull();
+    });
+
+    it('opened fresh from one: marks it read and tidies the address', async () => {
+      h.getNotifications.mockResolvedValue({ items: [], unread: 1 });
+      mount('/tasks?open=t1&fromNotification=b');
+      await waitFor(() => expect(h.markNotificationRead).toHaveBeenCalledWith('b'));
+      expect(screen.getByTestId('route')).toHaveTextContent(/^\/tasks\?open=t1$/);
+    });
+
+    it('keeps the number on the app icon in step', async () => {
+      const setAppBadge = vi.fn(async () => {});
+      const clearAppBadge = vi.fn(async () => {});
+      Object.assign(window.navigator, { setAppBadge, clearAppBadge });
+      h.getNotifications.mockResolvedValue({ items: [note('a'), note('b')], unread: 2 });
+      mount();
+      await waitFor(() => expect(setAppBadge).toHaveBeenLastCalledWith(2));
+      fireEvent.click(screen.getByTestId('notification-bell'));
+      fireEvent.click(screen.getByTestId('notification-mark-all'));
+      await waitFor(() => expect(clearAppBadge).toHaveBeenCalled());
+      delete (window.navigator as any).setAppBadge;
+      delete (window.navigator as any).clearAppBadge;
+    });
   });
 });

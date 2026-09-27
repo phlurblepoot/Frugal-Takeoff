@@ -41,7 +41,7 @@ container next to the app, and build the extras agreed below on top of it.
 | Who can edit | Everyone, like today. Admin-only document kinds stay hidden from non-admins as now. |
 | Files from your computer | "Open from computer" **uploads into a project** (pick project and document type), then opens. |
 | Names shown in the editor | **Usernames** (no full-name field). |
-| Notifications | New **notification bell in the sidebar, next to the user list** (`SidebarPresence`). Types: **@mentions**, **replies to my comments**, **tasks assigned to me**, **RFIs** (see next row). Bell only, no email. |
+| Notifications | New **notification bell in the sidebar, next to the user list** (`SidebarPresence`). Types: **@mentions**, **replies to my comments**, **tasks assigned to me**, **RFIs** (see next row). Bell only, no email. **Update 2026-09-27: also phone push notifications**, turned on per device (Nathan). |
 | RFI notifications | **Both**: add an internal **"Assigned to"** on RFIs (notified when assigned and when the GC answers), and record **who sent** the RFI (also notified when the GC answers). |
 | Signatures | **Both** ONLYOFFICE's own signature feature and **profile signatures**. Users upload **several** signatures, **name each** one and pick a **default**. White background is removed on upload. |
 | Company stamps | Admin-uploaded stamps (APPROVED, REVIEWED, company seal…) **shared by everyone**. |
@@ -803,13 +803,66 @@ container next to the app, and build the extras agreed below on top of it.
     `e2e/document-library.spec.ts` because the e2e store is kept between runs
     and those Phase 3 tests counted what an earlier run had added. They now
     clear templates, stamps and signatures first, and pass twice in a row.
-- [ ] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  (Nathan, 2026-09-27: "all the notification tests worked")
   - in a Word, an Excel and a PowerPoint file, add a comment and type "+" or
     "@": the list shows teammates (not yourself); pick one and post
   - the person mentioned gets the bell (live if they're signed in), and
     clicking it opens the file at that comment
   - assign someone a task and an RFI; they get the bell and it opens the item
   - on a phone: the dot on the menu button, the bell in the drawer
+- [x] **Phone push notifications** (Nathan asked 2026-09-27; added to this
+  phase): everything the bell shows also pops up on the devices a person
+  turned it on for, even with the app closed.
+  - Standard Web Push, no outside accounts: `web-push` builds each message
+    (encrypted with the device's keys, signed with this server's VAPID key
+    pair, made once and kept in settings under the private `push.` prefix).
+    `server/push.ts` posts it with a 10 s limit, only ever to Google's,
+    Apple's, Mozilla's or Microsoft's push services (an allowlist: the address
+    comes from the browser). A device the service no longer knows (404/410)
+    is dropped. Contact for the push services: `PUSH_CONTACT`, else
+    `APP_PUBLIC_URL`.
+  - Migration 40 `push_subscriptions` (one row per device; the same browser
+    signing in as someone else moves to them). Routes in
+    `server/pushRoutes.ts`: config, devices, subscribe, unsubscribe, remove a
+    device, send a test. Deleting a user removes theirs.
+  - `notifier.onNew` pushes every new notification with the unread count, so
+    nobody is pushed about their own act either.
+  - The app is installable (needed for iPhone): `/manifest.webmanifest`
+    (named from Settings), icons in `public/icons` (made by
+    `scripts/app-icons.mjs`: a floor plan under a dimension line, white on
+    blue; also the browser tab icon now), and `public/sw.js`, which only shows
+    pushes and opens their links (no caching, so releases are never stale).
+    A tap brings an open app forward and goes to the link; otherwise it opens
+    the app there (`?fromNotification=`). Either way that notification is
+    marked read. The installed app's icon shows the unread count where the
+    phone supports it.
+  - **Settings → User Preferences → Phone notifications**
+    (`src/pages/settings/PhoneNotifications.tsx`): turn on/off for this
+    device, send a test, and the list of devices (switch off a lost one).
+    An iPhone Safari tab shows the Home Screen steps instead. The bell's
+    panel links there ("Get these on your phone…"). Setup notes:
+    `docs/onlyoffice-setup.md` §9.
+  - Tests: `server/push.test.ts` (11: key pair kept, push-service allowlist,
+    the message decrypted with the device's keys and the VAPID claims
+    checked, per-user sending, 410 forgets / 5xx counts as failed / network
+    errors never throw, device moves and removal, clipping, routes, manifest,
+    the bell pushing with the unread count); client: `push` (9: iPhone needs
+    the Home Screen, blocked/off/on, subscribe with the server key, start over
+    on a key change, off), `serviceWorker` (4: runs `public/sw.js`: shows the
+    push, badge, tap with the app open or closed, no outside links),
+    `PhoneNotifications` (6), `NotificationBell` +3 (tap handling, badge);
+    e2e `e2e/push-notifications.spec.ts` (3): manifest, icons and sw.js
+    served; the real service worker registers in Chromium; turning on
+    registers the device with the server (only the browser's call to Google
+    stood in for) and turning off removes it; the bell links to the section.
+- [ ] **(Nathan)** Phone notifications on real phones (with the Phase 6 check):
+  - Android: Settings → User Preferences → Phone notifications → Turn on for
+    this device → Send a test; then have someone assign you a task with the
+    app closed, and tap the notification
+  - iPhone: in Safari, Share → Add to Home Screen, open from the icon, sign
+    in, turn it on, Send a test; the same assignment test; the number on the
+    app icon
 
 ## Phase 6 — Viewers: mail attachments and share links
 

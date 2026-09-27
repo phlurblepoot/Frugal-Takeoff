@@ -21,6 +21,8 @@ import { getAiRunner } from './server/ai';
 import { NOTIFICATION_EVENT, registerRealtime, userRoom } from './server/realtime/registerRealtime';
 import { Notifier } from './server/notifications';
 import { registerNotificationRoutes } from './server/notificationRoutes';
+import { PushService } from './server/push';
+import { registerPushRoutes } from './server/pushRoutes';
 import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
 import { loadMailCrypto } from './server/mail/crypto';
@@ -186,6 +188,11 @@ async function startServer() {
   const notifier = new Notifier(db, (userId, ev) => { io.to(userRoom(userId)).emit(NOTIFICATION_EVENT, ev); });
   setTimeout(() => notifier.prune(), 5 * 60_000).unref();
   setInterval(() => notifier.prune(), 24 * 3600_000).unref();
+  // …and to the phones (and computers) they turned push notifications on for.
+  const push = new PushService({ db, contact: process.env.PUSH_CONTACT || process.env.APP_PUBLIC_URL || null });
+  notifier.onNew(n => {
+    void push.send(n.userId, { id: n.id, title: n.title, body: n.body, link: n.link, unread: notifier.unreadCount(n.userId) });
+  });
 
   // Clean shutdown: a container stop (SIGTERM) or Ctrl-C (SIGINT) stops the
   // mail sync workers before exiting. Guarded against double-registration
@@ -255,6 +262,7 @@ async function startServer() {
     notifier,
   });
   registerNotificationRoutes(app, { authenticateToken, notifier });
+  registerPushRoutes(app, { db, authenticateToken, push });
 
   // The Playwright e2e harness logs in many times per run (per-worker session +
   // a few explicit logins per spec), which would trip a 10/min cap. Detect the
@@ -399,6 +407,7 @@ async function startServer() {
       db.prepare('DELETE FROM user_preferences WHERE userId = ?').run(req.params.id);
       removeUserSignatures(db, DATA_DIR, req.params.id);
       notifier.removeUser(req.params.id);
+      push.removeUser(req.params.id);
       db.prepare('UPDATE rfis SET assigneeUserId = NULL WHERE assigneeUserId = ?').run(req.params.id);
       broadcastChange({ type: 'user', id: req.params.id, action: 'deleted', ...requestMeta(req as any) });
       res.json({ success: true });
@@ -478,7 +487,8 @@ async function startServer() {
   // nextInvoiceNumber) — internal bookkeeping, not a user setting. Withholding
   // it from GET keeps it out of the client's settings object, so the Settings
   // page can never round-trip a stale copy back and roll the counter backwards.
-  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.', 'invoiceNumber', 'backup.'];
+  // push.: the VAPID key pair phone notifications are signed with (server/push.ts).
+  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.', 'invoiceNumber', 'backup.', 'push.'];
   const isPrivateSettingKey = (key: string) => SETTINGS_PRIVATE_PREFIXES.some(p => key.startsWith(p));
   app.get("/api/settings", (req, res) => {
     try {

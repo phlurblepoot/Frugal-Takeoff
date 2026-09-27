@@ -10,6 +10,7 @@ import { BackupTab } from './settings/BackupTab';
 import { DocumentEditorTab } from './settings/DocumentEditorTab';
 import { DocumentTemplatesTab } from './settings/DocumentTemplatesTab';
 import { MySignatures } from './settings/MySignatures';
+import { PhoneNotifications } from './settings/PhoneNotifications';
 import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
@@ -1051,6 +1052,9 @@ const PreferencesTab: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Phone notifications (ONLYOFFICE Phase 5) */}
+      <PhoneNotifications />
 
       {/* My signatures (ONLYOFFICE Phase 3) */}
       <MySignatures />

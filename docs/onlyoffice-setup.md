@@ -233,7 +233,32 @@ The version is pinned on purpose. To upgrade:
 
 The pinned version in `docker-compose.yml` should move with it.
 
-## 9. What is stored where
+## 9. Phone notifications
+
+The notification bell can also pop up on phones (and computers) while the app
+is closed. There is nothing to set up on the server: it makes its own key
+pair the first time someone turns notifications on, and needs only to reach
+Google's, Apple's and Mozilla's push services over the internet (normal
+outbound access). Optionally set `PUSH_CONTACT` (see `.env.example`); it
+defaults to `APP_PUBLIC_URL`.
+
+Each person turns it on per device in **Settings → User Preferences → Phone
+notifications** (the bell's panel links there too):
+- **Android** (Chrome, Edge, Samsung Internet, Firefox): open the app in the
+  browser and tap **Turn on for this device**. Adding it to the Home Screen
+  (browser menu → *Add to Home screen* / *Install app*) is optional.
+- **iPhone and iPad** (iOS 16.4 or newer): Apple only allows it for the app on
+  the Home Screen. In Safari tap **Share → Add to Home Screen**, open the app
+  from the new icon, sign in, then turn it on in Settings. The section shows
+  these steps when opened in a Safari tab.
+- **Computers** (Chrome, Edge, Firefox, Safari): the same button, if wanted.
+
+**Send a test** in the same place checks the whole path. Each device is listed
+there and can be switched off, including a lost one. The keys live in the app's
+database (so a restored backup keeps working); a device the push service
+forgets is dropped automatically.
+
+## 10. What is stored where
 
 - **Documents and versions:** in the app's data folder, covered by the app's
   backups as always.

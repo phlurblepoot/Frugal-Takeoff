@@ -6,8 +6,15 @@
 // again on every reconnect, so nothing missed while offline stays missed. New
 // ones and "read" changes arrive on the socket's `notification` event, which
 // also keeps the user's other tabs and devices in step.
+//
+// Phone push (public/sw.js): tapping a notification with the app already open
+// brings it here to follow the link; opening the app fresh carries
+// ?fromNotification=<id>. Either way that one is marked read. The unread count
+// also goes on the installed app's icon.
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useCollaboration } from './CollaborationContext';
+import { setAppBadge } from '../utils/push';
 import {
   getNotifications, markAllNotificationsRead, markNotificationRead,
   type AppNotification, type NotificationEvent,
@@ -36,6 +43,8 @@ export const NotificationsProvider: React.FC<{ children: React.ReactNode }> = ({
   // stay pure: React may run them twice).
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const refresh = useCallback(() => {
     getNotifications()
@@ -81,6 +90,39 @@ export const NotificationsProvider: React.FC<{ children: React.ReactNode }> = ({
     markNotificationRead(id).catch(refresh);
   }, [refresh]);
 
+  // A tapped phone notification, by id: marked read even if it isn't in the
+  // list loaded here (yet).
+  const markReadById = useCallback((id: string) => {
+    if (itemsRef.current.some(n => n.id === id && !n.readAt)) { markRead(id); return; }
+    markNotificationRead(id).then(refresh, () => {});
+  }, [markRead, refresh]);
+
+  // Tapped with the app already open (public/sw.js posts it here).
+  useEffect(() => {
+    const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+    if (!sw || !socket) return;
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data as { type?: string; link?: unknown; id?: unknown } | null;
+      if (data?.type !== 'open-notification') return;
+      if (typeof data.id === 'string') markReadById(data.id);
+      if (typeof data.link === 'string' && data.link.startsWith('/')) navigate(data.link);
+    };
+    sw.addEventListener('message', onMessage);
+    return () => sw.removeEventListener('message', onMessage);
+  }, [socket, navigate, markReadById]);
+
+  // Tapped with the app closed: it opened on the link with ?fromNotification=.
+  const fromNotification = new URLSearchParams(location.search).get('fromNotification');
+  useEffect(() => {
+    if (!fromNotification || !socket) return;
+    markReadById(fromNotification);
+    const params = new URLSearchParams(location.search);
+    params.delete('fromNotification');
+    const search = params.toString();
+    navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromNotification, socket]);
+
   const markAllRead = useCallback(() => {
     const now = Date.now();
     setItems(prev => prev.map(n => (n.readAt ? n : { ...n, readAt: now })));
@@ -88,9 +130,15 @@ export const NotificationsProvider: React.FC<{ children: React.ReactNode }> = ({
     markAllNotificationsRead().catch(refresh);
   }, [refresh]);
 
+  const shownUnread = Math.max(unread, countUnread(items));
+  useEffect(() => {
+    if (loaded) setAppBadge(shownUnread);
+    else if (!socket) setAppBadge(0);
+  }, [shownUnread, loaded, socket]);
+
   const value = useMemo(
-    () => ({ items, unread: Math.max(unread, countUnread(items)), loaded, markRead, markAllRead, refresh }),
-    [items, unread, loaded, markRead, markAllRead, refresh],
+    () => ({ items, unread: shownUnread, loaded, markRead, markAllRead, refresh }),
+    [items, shownUnread, loaded, markRead, markAllRead, refresh],
   );
   return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;
 };
