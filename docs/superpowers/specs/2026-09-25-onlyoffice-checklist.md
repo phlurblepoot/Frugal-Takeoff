@@ -1077,7 +1077,8 @@ container next to the app, and build the extras agreed below on top of it.
     `DocumentEditor`'s guard stays, its comment updated.
   - On the merged code (`febdd36`): lint clean; unit 3428/3428; full e2e
     122 passed, 1 skipped (a conditional spec), 0 failed.
-- [ ] **(Nathan)** Full walkthrough on the test container:
+- [x] **(Nathan)** Full walkthrough on the test container (Nathan,
+  2026-09-27: "tested it all, everything works"):
   - edit PDF, xlsx and docx
   - two people editing at once
   - phone view
