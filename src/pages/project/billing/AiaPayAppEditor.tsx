@@ -2,8 +2,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AiaPayAppDetail, AiaPayAppLine, AiaG703Row, AiaG702,
-  getPayApp, savePayAppLines, setPayApp, lineTypeOf,
+  getPayApp, getProject, savePayAppLines, sendPayApp, setPayApp, lineTypeOf,
 } from '../../../utils/store';
+import { itemSendPayload } from '../../../utils/itemSend';
+import { useGeneratedDocument } from '../../../hooks/useGeneratedDocument';
+import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
+import { PayAppPdfControls } from './PayAppPdfControls';
 import { buildAiaXlsxBlob } from './aiaExcel';
 import { resolveAiaExportEnv } from './aiaExportShared';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
@@ -55,6 +59,24 @@ export const AiaPayAppEditor: React.FC<{
 
   const [data, setData] = useState<{ app: AiaPayAppDetail; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 } | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Emailing the pay app (ONLYOFFICE Phase 4): the same billing recipients as
+  // an invoice, and its PDF ("Make PDF") pre-attached when it is current.
+  const projectId = data?.app.projectId;
+  const emailDefaults = useItemEmailDefaults('invoice', projectId);
+  const [projectName, setProjectName] = useState('');
+  useEffect(() => {
+    if (!projectId) return;
+    let live = true;
+    getProject(projectId).then(p => { if (live) setProjectName(p?.name ?? ''); }).catch(() => {});
+    return () => { live = false; };
+  }, [projectId]);
+  // Make PDF may regenerate the workbook itself; the document bar doesn't hear
+  // about a change this tab made, so it is remounted to re-read its status.
+  const [barKey, setBarKey] = useState(0);
+  const pdfDoc = useGeneratedDocument({
+    sourceType: 'payapp', sourceId: payAppId, kind: 'payapp-pdf', updatedAt: data?.app.updatedAt, enabled: !!data,
+  });
 
   // Editable per-line inputs, seeded once per load (re-seeded on reload).
   const [edits, setEdits] = useState<Record<string, EditLine>>({});
@@ -280,6 +302,7 @@ export const AiaPayAppEditor: React.FC<{
         {data && (
           <div className="mr-auto">
             <DocumentActionsBar
+              key={barKey}
               source={{ sourceType: 'payapp', sourceId: data.app.id }}
               kind="payapp-export"
               format="xlsx"
@@ -290,8 +313,37 @@ export const AiaPayAppEditor: React.FC<{
               save={saveForDocument}
               updatedAt={data.app.updatedAt}
               size="sm"
+              send={{
+                blockedReason: emailDefaults.sendBlockedReason,
+                composer: {
+                  title: 'Send pay application',
+                  defaultTo: emailDefaults.defaultTo || undefined,
+                  defaultCc: emailDefaults.defaultCc || undefined,
+                  defaultBcc: emailDefaults.defaultBcc || undefined,
+                  defaultSubject: `Application for Payment #${data.app.number}${projectName ? ` — ${projectName}` : ''}`,
+                  defaultBody: `Hello,\n\nPlease find attached Application for Payment #${data.app.number}${projectName ? ` for ${projectName}` : ''}.\n\nThank you.`,
+                  // Its PDF rides along when it matches the pay app; an older
+                  // one would disagree with the workbook.
+                  extraAttachments: pdfDoc.file && pdfDoc.upToDate
+                    ? [{ fileId: pdfDoc.file.id, name: pdfDoc.file.name ?? `Pay App #${data.app.number}.pdf`, size: pdfDoc.file.size }]
+                    : undefined,
+                },
+                sendFn: (fileId, req) => sendPayApp(data.app.id, { ...itemSendPayload(req), fileId }),
+              }}
             />
           </div>
+        )}
+        {data && (
+          <PayAppPdfControls
+            payAppId={data.app.id}
+            projectId={data.app.projectId}
+            pdf={pdfDoc}
+            dirty={dirty}
+            save={saveForDocument}
+            buildWorkbook={buildPayAppXlsx}
+            workbookName={`Pay App #${data.app.number} — G702.xlsx`}
+            onWorkbookChanged={() => setBarKey(k => k + 1)}
+          />
         )}
         <Button variant="secondary" onClick={onClose}>Close</Button>
         {!isFinalized && (

@@ -3,7 +3,7 @@ export interface LocationInfo {
   projectId?: string;
   section?: string;      // "billing" | "issues" | "takeoff" | ... (last route segment under /project/:id)
   pageId?: string;       // canvas page UUID when on /project/:id/page/:pageId
-  fileId?: string;       // spreadsheet file id when on /tools/sheets?fileId=...
+  fileId?: string;       // file open in the document editor (/tools/edit?fileId=...)
   label?: string;        // human-readable page label (old "pageName"), client-supplied
 }
 

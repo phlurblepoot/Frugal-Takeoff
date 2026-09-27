@@ -289,7 +289,6 @@ describe('ProposalEditor smoke', () => {
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => expect(within(dialog).getByTestId('recipient-pill')).toHaveTextContent('client@example.com'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
-    fireEvent.click(await screen.findByTestId('proposal-version-new'));
 
     await waitFor(() => expect(sendProposal).toHaveBeenCalled());
     expect(buildProposalPdf).toHaveBeenCalledTimes(1);
@@ -406,12 +405,10 @@ describe('ProposalEditor smoke', () => {
       await waitFor(() => expect(screen.getByTestId('proposal-status')).toHaveTextContent('PDF out of date'));
       fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
 
-      // A document already exists, so the rebuild asks before replacing it.
-      fireEvent.click(await screen.findByTestId('proposal-version-new'));
-
+      // A document already exists: the rebuild becomes its next version.
       await waitFor(() => expect(sendProposal).toHaveBeenCalled());
       expect(buildProposalPdf).toHaveBeenCalledTimes(1);
-      expect(persistGeneratedDocument.mock.calls[0][1]).toMatchObject({ mode: 'version' });
+      expect(persistGeneratedDocument.mock.calls[0][1]).not.toHaveProperty('mode');
       expect(setProposalFile).toHaveBeenCalledWith('p1', 'f-generated');
       expect(buildProposalPdf.mock.invocationCallOrder[0])
         .toBeLessThan(sendProposal.mock.invocationCallOrder[0]);
@@ -441,7 +438,6 @@ describe('ProposalEditor smoke', () => {
     try {
       const dialog = await openComposer();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
-      fireEvent.click(await screen.findByTestId('proposal-version-new'));
 
       expect(await screen.findByText('Failed to generate the PDF — nothing sent')).toBeInTheDocument();
       expect(sendProposal).not.toHaveBeenCalled();

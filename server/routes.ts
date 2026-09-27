@@ -6,7 +6,7 @@ import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
   listProjectSummaries, patchProject, ValidationError, ConflictError, NotFoundError,
 } from './projectStore';
-import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions } from './files';
+import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile, isDirectUploadKind } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
 import { logActivity, listActivity } from './activity';
 import {
@@ -64,10 +64,13 @@ import {
   customerSummaries, customerOverview,
 } from './customerStore';
 import { dashboardAttention, dashboardMoney, projectHappenings } from './dashboardStore';
-import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource } from './documents';
+import { listDocuments, listedDocumentIds, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource, NON_ADMIN_EXCLUDED_KINDS } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
-import type { SheetSessionStore } from './realtime/sheetSessions';
 import { registerProposalRoutes } from './proposalRoutes';
+import { registerDocumentLibraryRoutes } from './documentLibraryRoutes';
+import { LIBRARY_KINDS, SIGNATURE_KIND, mayReadLibraryFile } from './documentLibrary';
+import type { OnlyofficeServices } from './onlyoffice/services';
+import type { Notifier } from './notifications';
 import { getProposal } from './proposalStore';
 import { send as mailSend, MailSendError, type SendRequest as MailSendRequest, type SendResult } from './mail/sendService';
 import { AuthExpiredError } from './mail/providers/types';
@@ -85,13 +88,10 @@ export interface RouteDeps {
   // headers). Returns the decoded user or null.
   verifyToken: (token: string) => unknown | null;
   broadcastChange: BroadcastChange;
-  // I6: optional so existing tests that construct RouteDeps by hand (no
-  // sheet-collab wiring) keep working untouched. When present, a version-
-  // replace or a file delete invalidates that fileId's persisted collab
-  // session (see the call sites below) — without it, a replaced file's next
-  // sheet-join would hydrate the OLD working copy over the new bytes, or a
-  // deleted file's dirty row would error-loop the flush engine forever.
-  sheetStore?: SheetSessionStore;
+  /** ONLYOFFICE conversion and thumbnails (server/onlyoffice/services.ts). */
+  onlyoffice?: Pick<OnlyofficeServices, 'conversions' | 'thumbnails'>;
+  /** The notification bell: tasks and RFIs assigned to someone tell them. */
+  notifier?: Notifier;
 }
 
 export function registerDataRoutes(app: express.Express, deps: RouteDeps): void {
@@ -740,6 +740,21 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     return res.status(500).json({ error: 'RFI operation failed' });
   };
   const rfiNo = (n: number) => `RFI-${String(n).padStart(3, '0')}`;
+  const actor = (req: express.Request) => {
+    const u = (req as any).user as { id?: unknown; username?: unknown } | undefined;
+    return { id: u?.id != null ? String(u.id) : null, name: typeof u?.username === 'string' && u.username ? u.username : 'Someone' };
+  };
+  // Assigned to someone else, or reassigned: they hear about it in the bell.
+  const notifyRfiAssigned = (req: express.Request, rfi: { id: string; projectId: string; number: number; title: string; assigneeUserId?: string | null }) => {
+    if (!rfi.assigneeUserId) return;
+    const by = actor(req);
+    deps.notifier?.notify({
+      userId: rfi.assigneeUserId, type: 'rfi-assigned', actorUserId: by.id,
+      title: `${by.name} assigned you ${rfiNo(rfi.number)}`,
+      body: rfi.title,
+      link: `/project/${encodeURIComponent(rfi.projectId)}/rfis?open=${encodeURIComponent(rfi.id)}`,
+    });
+  };
 
   app.get('/api/projects/:id/rfis', authenticateToken, (req, res) => {
     try { res.json(listRfis(db, req.params.id)); } catch (e) { rfiErr(e, res); }
@@ -750,6 +765,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'rfi_created', message: `RFI ${rfiNo(r.number)} opened: ${req.body?.title ?? ''}` });
       const row = getRfi(db, r.id);
       deps.broadcastChange({ type: 'rfi', id: r.id, projectId: req.params.id, version: row?.version, action: 'created', ...requestMeta(req) });
+      if (row) notifyRfiAssigned(req, row);
       res.json(r);
     } catch (e) { rfiErr(e, res); }
   });
@@ -758,12 +774,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.put('/api/rfis/:id', authenticateToken, (req, res) => {
     try {
+      const assignedBefore = (getRfi(db, req.params.id)?.assigneeUserId ?? null) as string | null;
       const result = saveRfi(db, req.params.id, req.body);
       const row = getRfi(db, req.params.id);
       if (row) deps.broadcastChange({
         type: 'rfi', id: req.params.id, projectId: row.projectId,
         version: row.version, action: 'updated', ...requestMeta(req),
       });
+      if (row && row.assigneeUserId !== assignedBefore) notifyRfiAssigned(req, row);
       res.json({ success: true, ...result });
     } catch (e) { rfiErr(e, res); }
   });
@@ -1052,11 +1070,26 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       }));
     } catch (e) { taskErr(e, res); }
   });
+  // Assigned to someone else, or reassigned: they hear about it in the bell.
+  // Assigning yourself tells nobody.
+  const notifyTaskAssigned = (req: express.Request, task: { id: string; title: string; assigneeUserId?: string | null }) => {
+    if (!task.assigneeUserId) return;
+    const u = (req as any).user as { id?: unknown; username?: unknown } | undefined;
+    const by = typeof u?.username === 'string' && u.username ? u.username : 'Someone';
+    deps.notifier?.notify({
+      userId: task.assigneeUserId, type: 'task-assigned', actorUserId: u?.id != null ? String(u.id) : null,
+      title: `${by} assigned you a task`,
+      body: task.title,
+      link: `/tasks?open=${encodeURIComponent(task.id)}`,
+    });
+  };
   app.post('/api/tasks', authenticateToken, (req, res) => {
     try {
       const r = createTask(db, { ...req.body, createdBy: (req as any).user?.id ?? null });
       const projectId = typeof req.body?.projectId === 'string' && req.body.projectId ? req.body.projectId : undefined;
       deps.broadcastChange({ type: 'task', id: r.id, projectId, action: 'created', ...requestMeta(req) });
+      const created = getTask(db, r.id);
+      if (created) notifyTaskAssigned(req, created);
       res.json(r);
     } catch (e) { taskErr(e, res); }
   });
@@ -1065,9 +1098,11 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.put('/api/tasks/:id', authenticateToken, (req, res) => {
     try {
+      const assignedBefore = (getTask(db, req.params.id)?.assigneeUserId ?? null) as string | null;
       const r = saveTask(db, req.params.id, req.body);
       const row = getTask(db, req.params.id);
       deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row?.projectId ?? undefined, version: r.version, action: 'updated', ...requestMeta(req) });
+      if (row && row.assigneeUserId !== assignedBefore) notifyTaskAssigned(req, row);
       res.json({ success: true, ...r });
     } catch (e) { taskErr(e, res); }
   });
@@ -1123,11 +1158,31 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const meta = getMeta(db, req.params.id);
       const st = statFile(dataDir, req.params.id);
-      if (!meta || !st) return res.status(404).send('Image not found');
+      // No login here (plain <img> tags), so a signature, which only its owner
+      // may read, is never served this way (ONLYOFFICE Phase 3).
+      if (!meta || !st || meta.kind === SIGNATURE_KIND) return res.status(404).send('Image not found');
       res.set('Content-Type', meta.mime);
       res.set('Content-Length', String(st.size));
       res.set('Cache-Control', 'public, max-age=31536000');
       fsSync.createReadStream(pathFor(dataDir, req.params.id)).pipe(res);
+    } catch (e) {
+      res.status(500).send('Failed to fetch image');
+    }
+  });
+
+  // A photo shrunk for tiles and lists: tens of KB instead of the several-MB
+  // original (server/onlyoffice/thumbnails.ts). No login, like /raw, and never
+  // a signature. Anything it can't shrink (not a photo, a format the server
+  // can't read) sends the browser to the original instead.
+  app.get('/api/images/:id/thumb', async (req, res) => {
+    try {
+      const meta = getMeta(db, req.params.id);
+      if (!meta || meta.kind === SIGNATURE_KIND) return res.status(404).send('Image not found');
+      const thumb = await deps.onlyoffice?.thumbnails.photo(meta.id) ?? null;
+      if (!thumb) return res.redirect(302, `/api/images/${encodeURIComponent(meta.id)}/raw`);
+      res.set('Content-Type', 'image/webp');
+      res.set('Cache-Control', 'public, max-age=31536000');
+      res.sendFile(thumb);
     } catch (e) {
       res.status(500).send('Failed to fetch image');
     }
@@ -1160,7 +1215,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     '/api/files/:id',
     express.raw({ limit: '100mb', type: () => true }),
     authenticateToken,
-    (req, res) => {
+    async (req, res) => {
       try {
         const body = req.body as Buffer;
         if (!Buffer.isBuffer(body) || body.length === 0) {
@@ -1184,17 +1239,22 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           customerId: str(q.customerId),
           sourceType: str(q.sourceType),
           sourceId: str(q.sourceId),
-          mode: str(q.mode) === 'overwrite' ? 'overwrite' : undefined,
+          createdBy: (req as any).user?.id,
         });
+        // An old or unusual format someone uploads (.doc, .xls, Pages…) is
+        // converted to .docx/.xlsx/.pptx, the upload kept as version 1
+        // (ONLYOFFICE Phase 4). Only people's own uploads: generated
+        // documents are already in the formats the app writes.
+        const conversion = !result.versioned && isDirectUploadKind(result.kind) && deps.onlyoffice
+          ? await deps.onlyoffice.conversions.convertUpload(result.id, (req as any).user?.id ?? null)
+          : null;
+        deps.onlyoffice?.thumbnails.enqueue(result.id);
+        const stored = conversion?.status === 'converted' ? getMeta(db, result.id) ?? result : result;
         deps.broadcastChange({
-          type: 'file', id: result.id, projectId: result.projectId ?? undefined,
+          type: 'file', id: result.id, projectId: stored.projectId ?? undefined,
           action: result.versioned ? 'updated' : 'created', ...requestMeta(req),
         });
-        // A regenerate (versioned or overwritten in place) replaces the bytes
-        // an open spreadsheet-editor session might still be flushing dirty
-        // edits onto — same reasoning as the delete-route clearSession below.
-        if (result.versioned) deps.sheetStore?.clearSession(result.id);
-        res.json({ success: true, fileId: result.id, versioned: result.versioned });
+        res.json({ success: true, fileId: result.id, versioned: result.versioned, ...(conversion ? { conversion } : {}) });
       } catch (e) {
         console.error('Error saving file:', e);
         res.status(500).json({ error: 'Failed to save file' });
@@ -1209,11 +1269,13 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const header = req.headers['authorization'];
       const bearer = header && header.split(' ')[1];
       const token = bearer || String(req.query.token || '');
-      if (!token || !verifyToken(token)) return res.status(401).json({ error: 'Authentication required' });
+      const viewer = token ? verifyToken(token) : null;
+      if (!viewer) return res.status(401).json({ error: 'Authentication required' });
 
       const meta = getMeta(db, req.params.id);
       const st = statFile(dataDir, req.params.id);
-      if (!meta || !st) return res.status(404).json({ error: 'File not found' });
+      // A signature is its owner's alone (ONLYOFFICE Phase 3).
+      if (!meta || !st || !mayReadLibraryFile(meta, viewer as { id?: unknown })) return res.status(404).json({ error: 'File not found' });
 
       const filePath = pathFor(dataDir, req.params.id);
       res.set('Accept-Ranges', 'bytes');
@@ -1259,12 +1321,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         if (!target) return res.status(404).json({ error: 'File not found' });
         if (target.parentFileId) return res.status(400).json({ error: 'Cannot version a historical file row' });
         const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
-        const result = saveNewVersion(db, dataDir, req.params.id, body, mime);
-        // I6: this route replaces the LIVE bytes out from under any sheet
-        // session the flush engine doesn't know about — clear it so the next
-        // sheet-join re-imports the new bytes instead of hydrating the stale
-        // working copy over them.
-        deps.sheetStore?.clearSession(req.params.id);
+        const result = saveNewVersion(db, dataDir, req.params.id, body, mime, (req as any).user?.id);
         deps.broadcastChange({ type: 'file', id: req.params.id, projectId: target.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
         res.json({ success: true, ...result });
       } catch (e) {
@@ -1281,6 +1338,34 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json(versions);
     } catch (e) {
       res.status(500).json({ error: 'Failed to list file versions' });
+    }
+  });
+
+  // Deletes one older version (ONLYOFFICE decision 2026-09-25: regenerating
+  // always versions, and unwanted versions are removed one by one). Admins,
+  // or whoever made that version; versions from before authors were recorded
+  // are admin-only. The live version can't be deleted here.
+  app.delete('/api/files/:id/versions/:versionId', authenticateToken, (req: any, res) => {
+    try {
+      const live = getMeta(db, req.params.id);
+      const version = getMeta(db, req.params.versionId);
+      if (!live || live.parentFileId || !version || version.parentFileId !== live.id) {
+        return res.status(404).json({ error: 'Version not found' });
+      }
+      const isAdmin = req.user?.role === 'admin';
+      if (!isAdmin && (NON_ADMIN_EXCLUDED_KINDS as readonly string[]).includes(live.kind)) {
+        return res.status(404).json({ error: 'Version not found' });
+      }
+      const isAuthor = version.createdBy != null && String(version.createdBy) === String(req.user?.id);
+      if (!isAdmin && !isAuthor) {
+        return res.status(403).json({ error: 'Only an admin or the person who made this version can delete it.' });
+      }
+      removeFile(db, dataDir, version.id);
+      deps.broadcastChange({ type: 'file', id: live.id, projectId: live.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) {
+      console.error('Error deleting file version:', e);
+      res.status(500).json({ error: 'Failed to delete the version' });
     }
   });
 
@@ -1387,10 +1472,6 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const before = getMeta(db, req.params.id);
       const result = deleteDocument(db, dataDir, req.params.id, isAdmin);
       if (result.ok === false) return res.status(result.status).json({ error: result.error });
-      // I6: a deleted file's dirty sheet-session row would otherwise
-      // error-loop the flush engine every 15s forever (durable across
-      // restarts) trying to patch bytes that no longer exist.
-      deps.sheetStore?.clearSession(req.params.id);
       if (before) deps.broadcastChange({ type: 'file', id: req.params.id, projectId: before.projectId ?? undefined, action: 'deleted', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) {
@@ -1402,9 +1483,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   // ── Storage admin ─────────────────────────────────────────────────────────
 
   // Conservative reference walk: serialize every project aggregate plus every
-  // remaining JSON blob (checklists, notes) and shares, collect every
-  // string and every /api/images|files/<id> URL. A file is an orphan only if
-  // its id appears nowhere.
+  // remaining JSON blob (checklists, notes, settings…) and shares, collect
+  // every string and every /api/images|files/<id> URL, plus the file-id
+  // columns. A file is an orphan only if its id appears nowhere and it isn't
+  // a document anyone can see. Deleting is permanent: when in doubt, keep.
   const collectReferencedFileIds = (): Set<string> => {
     const referenced = new Set<string>();
     const urlRe = /\/api\/(?:images|files)\/([^/"'?\s]+)/g;
@@ -1423,12 +1505,18 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (typeof v === 'object') { for (const k in v) walk(v[k]); return; }
     };
     for (const p of listProjects(db)) walk(p);
-    for (const table of ['checklists', 'notes']) {
-      let rows: { data: string }[] = [];
-      try { rows = db.prepare(`SELECT data FROM ${table}`).all() as { data: string }[]; } catch { continue; }
+    // Settings hold the AIA template's id (aiaTemplateFileId); customers,
+    // takeoff templates and per-user preferences keep JSON that may name files.
+    const JSON_COLUMNS: [table: string, column: string][] = [
+      ['checklists', 'data'], ['notes', 'data'], ['settings', 'value'], ['templates', 'data'],
+      ['customers', 'attrs'], ['customers', 'emails'], ['user_preferences', 'value'],
+    ];
+    for (const [table, column] of JSON_COLUMNS) {
+      let rows: { v: string | null }[] = [];
+      try { rows = db.prepare(`SELECT ${column} AS v FROM ${table}`).all() as { v: string | null }[]; } catch { continue; }
       for (const r of rows) {
-        if (!r.data) continue;
-        try { walk(JSON.parse(r.data)); } catch { addString(r.data); }
+        if (!r.v) continue;
+        try { walk(JSON.parse(r.v)); } catch { addString(r.v); }
       }
     }
     // shares reference files directly (single-file shares) or via JSON page lists
@@ -1437,21 +1525,42 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       addString(r.resourceId);
       try { walk(JSON.parse(r.resourceId)); } catch { /* plain id */ }
     }
-    // Photo join tables hold their file ids in a column, not in any JSON the
-    // walk above reaches. Project-attributed rows are covered by the clause
-    // below, but task photos are deliberately project-less (a task outlives the
-    // project it merely refers to), so without this pass they read as orphans.
-    for (const table of ['issue_photos', 'punch_photos', 'task_photos', 'change_order_photos', 'rfi_photos', 'daily_report_photos']) {
+    // Photo and attachment join tables, and records with a file of their own,
+    // hold file ids in a column, not in any JSON the walk above reaches.
+    // Project-attributed rows are covered by the clause below, but task photos
+    // are deliberately project-less (a task outlives the project it merely
+    // refers to), and an attachment can be a company or customer document.
+    const FILE_ID_COLUMNS: [table: string, column: string][] = [
+      ['issue_photos', 'fileId'], ['punch_photos', 'fileId'], ['task_photos', 'fileId'],
+      ['change_order_photos', 'fileId'], ['rfi_photos', 'fileId'], ['daily_report_photos', 'fileId'],
+      ['invoice_photos', 'fileId'], ['invoice_attachments', 'fileId'],
+      ['proposal_photos', 'fileId'], ['proposal_attachments', 'fileId'],
+      ['proposals', 'fileId'], ['proposals', 'signedFileId'], ['rfis', 'responseFileId'],
+    ];
+    for (const [table, column] of FILE_ID_COLUMNS) {
       let rows: { fileId: string | null }[] = [];
-      try { rows = db.prepare(`SELECT fileId FROM ${table}`).all() as { fileId: string | null }[]; } catch { continue; }
+      try { rows = db.prepare(`SELECT ${column} AS fileId FROM ${table}`).all() as { fileId: string | null }[]; } catch { continue; }
       for (const r of rows) if (r.fileId) referenced.add(r.fileId);
     }
-    // Files attributed to a live project are referenced by definition (e.g.
-    // standalone Documents uploads whose id never appears in project JSON).
-    const projectFileRows = db.prepare(
-      'SELECT id FROM files WHERE projectId IS NOT NULL AND projectId IN (SELECT id FROM projects)'
-    ).all() as { id: string }[];
-    for (const r of projectFileRows) referenced.add(r.id);
+    // Files attributed to a live project or customer are referenced by
+    // definition (e.g. standalone Documents uploads whose id never appears in
+    // project JSON).
+    const ownedFileRows = db.prepare(`
+      SELECT id FROM files
+      WHERE (projectId IS NOT NULL AND projectId IN (SELECT id FROM projects))
+         OR (customerId IS NOT NULL AND customerId IN (SELECT id FROM customers))
+    `).all() as { id: string }[];
+    for (const r of ownedFileRows) referenced.add(r.id);
+    // Anything the Documents page lists is someone's document: a company
+    // document, a loose upload. They delete it there if they don't want it.
+    for (const id of listedDocumentIds(db)) referenced.add(id);
+    // The document library (templates, company stamps, signatures) belongs to
+    // no project and nothing links to it by id, yet it is anything but
+    // orphaned.
+    const libraryRows = db.prepare(
+      `SELECT id FROM files WHERE kind IN (${LIBRARY_KINDS.map(() => '?').join(',')})`
+    ).all(...LIBRARY_KINDS) as { id: string }[];
+    for (const r of libraryRows) referenced.add(r.id);
     return referenced;
   };
 
@@ -1581,83 +1690,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
-  // ── Public share file serving (metadata share routes stay in server.ts) ──
-
-  const sendFileById = (res: express.Response, id: string, cacheSeconds: number) => {
-    const meta = getMeta(db, id);
-    const st = statFile(dataDir, id);
-    if (!meta || !st) return res.status(404).send('File not found');
-    res.set('Content-Type', meta.mime);
-    res.set('Content-Length', String(st.size));
-    res.set('Cache-Control', `public, max-age=${cacheSeconds}`);
-    fsSync.createReadStream(pathFor(dataDir, id)).pipe(res);
-  };
-
-  app.get('/api/share/:shareId/image/:index', (req, res) => {
-    try {
-      const share = db.prepare('SELECT type, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; resourceId: string } | undefined;
-      if (!share || share.type !== 'pages') return res.status(404).send('Share not found');
-      const pages = JSON.parse(share.resourceId) as { imageId: string }[];
-      const idx = parseInt(req.params.index, 10);
-      if (isNaN(idx) || idx < 0 || idx >= pages.length) return res.status(404).send('Page not found');
-      sendFileById(res, pages[idx].imageId, 3600);
-    } catch {
-      res.status(500).send('Server error');
-    }
-  });
-
-  app.get('/api/share/:shareId', (req, res) => {
-    try {
-      const share = db.prepare('SELECT resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { resourceId: string } | undefined;
-      if (!share) return res.status(404).send('Share not found');
-      sendFileById(res, share.resourceId, 3600);
-    } catch {
-      res.status(500).send('Server error');
-    }
-  });
-
-  // ── Editor drafts (per user, per file) ────────────────────────────────────
-
-  const DRAFT_KINDS = ['pdf', 'sheet'];
-  const MAX_DRAFT_BYTES = 20 * 1024 * 1024; // generous cap for big workbooks
-
-  app.get('/api/drafts/:fileId', authenticateToken, (req, res) => {
-    try {
-      const row = db.prepare('SELECT kind, data, updatedAt FROM drafts WHERE userId = ? AND fileId = ?')
-        .get((req as any).user.id, req.params.fileId);
-      if (!row) return res.status(404).json({ error: 'No draft' });
-      res.json(row);
-    } catch (e) {
-      res.status(500).json({ error: 'Failed to fetch draft' });
-    }
-  });
-
-  app.put('/api/drafts/:fileId', authenticateToken, (req, res) => {
-    try {
-      const { kind, data } = req.body ?? {};
-      if (!DRAFT_KINDS.includes(kind)) return res.status(400).json({ error: 'kind must be pdf or sheet' });
-      if (typeof data !== 'string' || !data) return res.status(400).json({ error: 'data must be a non-empty string' });
-      if (Buffer.byteLength(data, 'utf8') > MAX_DRAFT_BYTES) {
-        return res.status(413).json({ error: 'Draft too large' });
-      }
-      db.prepare('INSERT OR REPLACE INTO drafts (userId, fileId, kind, data, updatedAt) VALUES (?, ?, ?, ?, ?)')
-        .run((req as any).user.id, req.params.fileId, kind, data, Date.now());
-      res.json({ success: true });
-    } catch (e) {
-      console.error('Error saving draft:', e);
-      res.status(500).json({ error: 'Failed to save draft' });
-    }
-  });
-
-  app.delete('/api/drafts/:fileId', authenticateToken, (req, res) => {
-    try {
-      db.prepare('DELETE FROM drafts WHERE userId = ? AND fileId = ?')
-        .run((req as any).user.id, req.params.fileId);
-      res.json({ success: true });
-    } catch (e) {
-      res.status(500).json({ error: 'Failed to delete draft' });
-    }
-  });
+  // Public share links: server/shareRoutes.ts.
 
   // ── Customers ────────────────────────────────────────────────────────────────
 
@@ -1743,6 +1776,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
 
   registerProposalRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
+  registerDocumentLibraryRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
 }
 
 // ── Item send routes ─────────────────────────────────────────────────────────
@@ -1992,6 +2026,23 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       primaryName: sanitizedJobName ? `DailyReport-${sanitizedJobName}-${report.reportDate}.pdf` : `DailyReport-${report.reportDate}.pdf`,
       defaultSubject: `Daily Report — ${report.reportDate}${report.jobName ? ` — ${report.jobName}` : ''}`,
       defaultBody: 'Please find the attached daily report.',
+    });
+    if (!r) return;
+    res.json({ success: true, ...r });
+  }));
+
+  // Send a pay application (admin only; ONLYOFFICE Phase 4). The primary
+  // attachment is the G702/G703 workbook; its PDF ("Make PDF") rides along as
+  // an extra attachment when the sender keeps it.
+  app.post('/api/aia/pay-apps/:id/send', authenticateToken, requireAdmin, sendRoute('pay application', async (req, res) => {
+    const payApp = getPayApp(db, req.params.id);
+    if (!payApp) { res.status(404).json({ error: 'Pay application not found' }); return; }
+    const project = loadProject(db, payApp.projectId);
+    const r = await sendItem(req, res, {
+      itemType: 'payApp', itemId: payApp.id,
+      primaryName: getMeta(db, (req.body as SendBody).fileId)?.name ?? `Pay App #${payApp.number}.xlsx`,
+      defaultSubject: `Application for Payment #${payApp.number} — ${project?.name ?? 'Project'}`,
+      defaultBody: 'Please find the attached application for payment.',
     });
     if (!r) return;
     res.json({ success: true, ...r });

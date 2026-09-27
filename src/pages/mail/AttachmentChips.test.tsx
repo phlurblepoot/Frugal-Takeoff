@@ -55,6 +55,25 @@ describe('AttachmentChips', () => {
     open.mockRestore();
   });
 
+  it('opens Word, Excel and PowerPoint files in the document viewer in a new tab, old formats too', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(
+      <AttachmentChips
+        messageId="m 1"
+        attachments={[
+          att({ attId: 'a5', name: 'Scope.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+          // Mail clients often send old formats as a generic type: the name decides.
+          att({ attId: 'a6', name: 'Budget.xls', mime: 'application/octet-stream' }),
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Scope\.docx/ }));
+    expect(open).toHaveBeenLastCalledWith('/tools/view?message=m%201&att=a5&name=Scope.docx', '_blank', 'noopener');
+    fireEvent.click(screen.getByRole('button', { name: /Budget\.xls/ }));
+    expect(open).toHaveBeenLastCalledWith('/tools/view?message=m%201&att=a6&name=Budget.xls', '_blank', 'noopener');
+    open.mockRestore();
+  });
+
   it('downloads anything else through a download link', () => {
     render(<AttachmentChips messageId="m1" attachments={[att({ attId: 'a4', name: 'plans.dwg', mime: 'application/acad', size: 1048576 })]} onSave={vi.fn()} />);
     const link = screen.getByRole('link', { name: /plans\.dwg/ }) as HTMLAnchorElement;

@@ -16,6 +16,7 @@ import type { Envelope } from './providers/types';
 import { upsertFolders, upsertEnvelopes, clearInboundHooks } from './sync/engine';
 import { MailScheduler } from './sync/scheduler';
 import { installInboundHooks, resetInboundHooks, rfiPendingReplyHook } from './inboundHooks';
+import { Notifier } from '../notifications';
 
 let db: Database.Database; let ctx: MailContext; let acct: accounts.MailAccountRow;
 let provider: FakeMailProvider; let events: any[]; let dir: string;
@@ -255,5 +256,47 @@ describe('rfi pending-reply inbound hook', () => {
   it('never throws out of the synchronous hook call', () => {
     const broken = { ...ctx, db: { prepare: () => { throw new Error('db gone'); } } } as unknown as MailContext;
     expect(() => rfiPendingReplyHook(broken, { threadKey: THREAD, messageId: 'x', account: acct })).not.toThrow();
+  });
+});
+
+describe('rfi answered notification (the bell, ONLYOFFICE Phase 5)', () => {
+  let notifier: Notifier;
+  beforeEach(() => {
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u2','maria','x','user'), ('u3','joe','x','user')`).run();
+    notifier = new Notifier(db);
+    ctx.notifier = notifier;
+  });
+  const sentRfi = (assignee: string | null, sender: string) => {
+    const { id } = createRfi(db, 'p1', { title: 'Corridor height?', assigneeUserId: assignee });
+    markRfiSent(db, id, sender);
+    createLink(db, { threadKey: THREAD, itemType: 'rfi', itemId: id, linkedByUserId: 'u1' });
+    return id;
+  };
+
+  it('tells the assignee and the sender once when the GC replies', async () => {
+    const rfiId = sentRfi('u2', 'u3');
+    deliver(env('m1'));
+    await vi.waitFor(() => expect(notifier.list('u2').items).toHaveLength(1));
+    for (const u of ['u2', 'u3']) {
+      expect(notifier.list(u).items).toEqual([expect.objectContaining({
+        type: 'rfi-answered', title: 'Reply received on RFI-001',
+        body: 'Mike replied to "Corridor height?". Review it to record the answer.',
+        link: `/project/p1/rfis?open=${rfiId}`,
+      })]);
+    }
+    // The same message again (a retried hook) tells nobody twice.
+    const messageId = (db.prepare(`SELECT id FROM mail_messages WHERE providerMessageId = 'm1'`).get() as any).id;
+    rfiPendingReplyHook(ctx, { threadKey: THREAD, messageId, account: acct });
+    await settle();
+    expect(notifier.list('u2').items).toHaveLength(1);
+    expect(notifier.list('u1').items).toEqual([]);
+  });
+
+  it('tells one person once when they both sent it and own it', async () => {
+    sentRfi('u2', 'u2');
+    deliver(env('m1'));
+    await vi.waitFor(() => expect(notifier.list('u2').items).toHaveLength(1));
+    await settle();
+    expect(notifier.list('u2').items).toHaveLength(1);
   });
 });

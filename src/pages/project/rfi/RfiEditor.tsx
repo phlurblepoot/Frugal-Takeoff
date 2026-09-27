@@ -1,9 +1,9 @@
 // src/pages/project/rfi/RfiEditor.tsx
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, acceptRfiPendingReply, sendRfi, getSettings, fetchFileBlob } from '../../../utils/store';
+import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, acceptRfiPendingReply, sendRfi, getSettings, fetchFileBlob, getAssignableUsers, type AssignableUser } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
-import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
+import { Button, Field, Input, Modal, Select, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
@@ -37,6 +37,13 @@ export const RfiEditor: React.FC<{
   const [attention, setAttention] = useState(rfi.attention ?? '');
   const [responseNeededBy, setResponseNeededBy] = useState(rfi.responseNeededBy ?? '');
   const [responseDraft, setResponseDraft] = useState(rfi.responseText ?? '');
+  // Internal only (never on the RFI document): who on the team owns it. They
+  // hear about it in the bell, and again when the GC answers.
+  const [assigneeUserId, setAssigneeUserId] = useState<string | null>(rfi.assigneeUserId ?? null);
+  const [users, setUsers] = useState<AssignableUser[]>([]);
+  useEffect(() => {
+    getAssignableUsers().then(setUsers).catch(() => setUsers([]));
+  }, []);
   const [saving, setSaving] = useState(false);
   // Set when the draft below came from the emailed reply: the same Save then
   // routes to the accept endpoint, so accepting the reply and editing its text
@@ -83,6 +90,7 @@ export const RfiEditor: React.FC<{
     drawingRef !== (rfi.drawingRef ?? '') ||
     attention !== (rfi.attention ?? '') ||
     (responseNeededBy || '') !== (rfi.responseNeededBy ?? '') ||
+    assigneeUserId !== (rfi.assigneeUserId ?? null) ||
     responseDirty;
 
   const dirty = isDirty();
@@ -212,6 +220,7 @@ export const RfiEditor: React.FC<{
         ...rfi,
         ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
         title: title.trim(), question: question || null, specRef: specRef || null, drawingRef: drawingRef || null, attention: attention || null, responseNeededBy: responseNeededBy || null,
+        assigneeUserId,
       });
       // Save also persists a typed-but-unsaved response, so switching status,
       // uploading a photo, etc. right after Save never loses the draft.
@@ -329,6 +338,14 @@ export const RfiEditor: React.FC<{
         <Field label="Response needed by" htmlFor="rfi-due"><Input id="rfi-due" type="date" value={responseNeededBy} onChange={e => setResponseNeededBy(e.target.value)} /></Field>
         <Field label="Spec reference" htmlFor="rfi-spec"><Input id="rfi-spec" value={specRef} onChange={e => setSpecRef(e.target.value)} placeholder="e.g. 09 24 00" /></Field>
         <Field label="Drawing reference" htmlFor="rfi-dwg"><Input id="rfi-dwg" value={drawingRef} onChange={e => setDrawingRef(e.target.value)} placeholder="e.g. A-501" /></Field>
+        <Field label="Assigned to" htmlFor="rfi-assignee" hint="Internal, not on the RFI. Notified when assigned and when the GC answers.">
+          <Select id="rfi-assignee" value={assigneeUserId ?? ''} onChange={e => setAssigneeUserId(e.target.value || null)}>
+            <option value="">Unassigned</option>
+            {/* Keep a since-deleted or unlisted assignee selectable rather than silently clearing it. */}
+            {assigneeUserId && !users.some(u => u.id === assigneeUserId) && <option value={assigneeUserId}>Former user</option>}
+            {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+          </Select>
+        </Field>
       </div>
       {/* Adding a photo bumps the RFI's version, which re-keys this editor —
           hence the same save-first gate the response attachment uses. */}

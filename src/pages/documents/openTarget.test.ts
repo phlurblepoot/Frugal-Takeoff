@@ -5,6 +5,8 @@ import { kindFromMime, openTargetFor } from './openTarget';
 describe('kindFromMime', () => {
   it('classifies uploads', () => {
     expect(kindFromMime('application/pdf')).toBe('document');
+    expect(kindFromMime('application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBe('document');
+    expect(kindFromMime('application/vnd.openxmlformats-officedocument.presentationml.presentation')).toBe('document');
     expect(kindFromMime('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe('spreadsheet');
     expect(kindFromMime('application/vnd.ms-excel')).toBe('spreadsheet');
     expect(kindFromMime('image/png')).toBe('photo');
@@ -13,10 +15,11 @@ describe('kindFromMime', () => {
 });
 
 describe('openTargetFor', () => {
-  it('routes pdfs and sheets to their editors, images to raw view', () => {
-    expect(openTargetFor({ mime: 'application/pdf', id: 'a' })).toEqual({ type: 'pdf', url: '/tools/pdf?fileId=a' });
-    expect(openTargetFor({ mime: 'application/vnd.ms-excel', id: 'b' })).toEqual({ type: 'sheet', url: '/tools/sheets?fileId=b' });
-    expect(openTargetFor({ mime: 'image/jpeg', id: 'c' })).toEqual({ type: 'image', url: '/api/images/c/raw' });
-    expect(openTargetFor({ mime: 'application/zip', id: 'd' })).toEqual({ type: 'download', url: null });
+  it('opens every office format in the document editor, images raw, anything else as a download', () => {
+    expect(openTargetFor({ mime: 'application/pdf', id: 'a' })).toEqual({ type: 'edit', url: '/tools/edit?fileId=a' });
+    expect(openTargetFor({ mime: 'application/vnd.ms-excel', id: 'b' })).toEqual({ type: 'edit', url: '/tools/edit?fileId=b' });
+    expect(openTargetFor({ mime: 'application/octet-stream', name: 'Scope.docx', id: 'c d' })).toEqual({ type: 'edit', url: '/tools/edit?fileId=c%20d' });
+    expect(openTargetFor({ mime: 'image/jpeg', id: 'e' })).toEqual({ type: 'image', url: '/api/images/e/raw' });
+    expect(openTargetFor({ mime: 'application/zip', id: 'f' })).toEqual({ type: 'download', url: null });
   });
 });

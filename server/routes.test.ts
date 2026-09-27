@@ -11,8 +11,8 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { createProject, loadProject } from './projectStore';
 import { markRfiSent, setPendingReply, type RfiPendingReply } from './rfiStore';
+import { createPayApp } from './aiaStore';
 import { registerDataRoutes, registerEmailRoutes } from './routes';
-import { SheetSessionStore } from './realtime/sheetSessions';
 import { MailCrypto } from './mail/crypto';
 import * as accounts from './mail/accountStore';
 import type { FakeMailProvider } from './mail/providers/fake';
@@ -200,6 +200,61 @@ describe('storage + search + orphans', () => {
     expect((await request(app).get('/api/storage/orphans')).body.count).toBe(0);
     await request(app).post('/api/storage/orphans/cleanup');
     expect((await request(app).get('/api/files/tphoto1/meta')).status).toBe(200);
+  });
+
+  // What survives a cleanup, checked the way the button does it: count, clean
+  // up, then look for each file.
+  const survivors = async (ids: string[]) => {
+    await request(app).post('/api/storage/orphans/cleanup');
+    const alive: string[] = [];
+    for (const id of ids) if ((await request(app).get(`/api/files/${id}/meta`)).status === 200) alive.push(id);
+    return alive;
+  };
+  const PNG = 'data:image/png;base64,' + Buffer.from('x').toString('base64');
+
+  it('orphan cleanup spares company, customer and loose documents the Documents page lists', async () => {
+    // None has a project or anything pointing at it: each is still someone's
+    // document, which they can see (and delete) on the Documents page.
+    const cust = await request(app).post('/api/customers').send({ name: 'Acme GC' });
+    const upload = (id: string, q: string) => request(app).post(`/api/files/${id}?${q}`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from(id));
+    await upload('company1', 'kind=company-document&name=Insurance.pdf');
+    await upload('cust1', `kind=document&customerId=${cust.body.id}&name=W9.pdf`);
+    await upload('loose1', 'kind=document&name=Notes.pdf');
+    await upload('archived1', 'kind=other&name=Old.pdf');
+    await request(app).patch('/api/files/archived1').send({ archived: true });
+
+    expect((await request(app).get('/api/storage/orphans')).body.count).toBe(0);
+    expect(await survivors(['company1', 'cust1', 'loose1', 'archived1'])).toEqual(['company1', 'cust1', 'loose1', 'archived1']);
+  });
+
+  it('orphan cleanup spares the AIA template, but not one it replaced', async () => {
+    const upload = (id: string) => request(app).post(`/api/files/${id}?kind=settings-asset&name=AIA.xlsx`)
+      .set('Content-Type', 'application/octet-stream').send(Buffer.from(id));
+    await upload('aia-old');
+    await upload('aia-new');
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('aiaTemplateFileId', 'aia-new')").run();
+
+    expect((await request(app).get('/api/storage/orphans')).body.count).toBe(1);
+    expect(await survivors(['aia-old', 'aia-new'])).toEqual(['aia-new']);
+  });
+
+  it('orphan cleanup spares files only an attachment or photo table names', async () => {
+    // Unnamed and project-less, so hidden from Documents: only the join rows
+    // vouch for them.
+    for (const id of ['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'loose-img']) {
+      await request(app).post('/api/images').send({ id, data: PNG });
+    }
+    const link = (table: string, owner: string, fileId: string) =>
+      db.prepare(`INSERT INTO ${table} (id, ${owner}, fileId, sortOrder, createdAt) VALUES (?, 'x1', ?, 0, 1)`).run(`${table}-${fileId}`, fileId);
+    link('invoice_attachments', 'invoiceId', 'inv-att');
+    link('invoice_photos', 'invoiceId', 'inv-photo');
+    link('proposal_attachments', 'proposalId', 'prop-att');
+    link('proposal_photos', 'proposalId', 'prop-photo');
+
+    expect((await request(app).get('/api/storage/orphans')).body.count).toBe(1);
+    expect(await survivors(['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'loose-img']))
+      .toEqual(['inv-att', 'inv-photo', 'prop-att', 'prop-photo']);
   });
 
   it('search finds projects, pages, and takeoffs from normalized tables', async () => {
@@ -483,97 +538,16 @@ describe('file versions over HTTP', () => {
   });
 });
 
-// I6: version-replace and delete must invalidate any persisted sheet-collab
-// session for that fileId, or (a) the next sheet-join would hydrate the OLD
-// working copy over the replaced bytes and revert them on the next flush, or
-// (b) a deleted file's dirty row would error-loop the flush engine forever.
-describe('sheet-session invalidation on version-replace / delete (I6)', () => {
-  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-  let sheetStore: SheetSessionStore;
-  let sheetApp: express.Express;
-
-  beforeEach(() => {
-    sheetStore = new SheetSessionStore(db);
-    sheetApp = express();
-    sheetApp.use(express.json({ limit: '50mb' }));
-    registerDataRoutes(sheetApp, {
-      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
-      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
-      requireAdmin: (_req: any, _res: any, next: any) => next(),
-      verifyToken: (token: string) => (token === 'good-token' ? { id: 'u1', role: 'admin' } : null),
-      broadcastChange: () => {},
-      sheetStore,
-    });
-  });
-
-  it('POST /versions clears a pending sheet session for the replaced fileId', async () => {
-    await request(sheetApp).post('/api/files/sheet1?kind=spreadsheet&name=Book.xlsx')
-      .set('Content-Type', XLSX_MIME).send(Buffer.from('v1'));
-
-    sheetStore.join('sheet1', 's1');
-    sheetStore.setState('sheet1', '{"sheets":["stale"]}');
-    expect(sheetStore.getState('sheet1')).not.toBeNull();
-    expect(sheetStore.dirtyFiles()).toContain('sheet1');
-
-    const res = await request(sheetApp).post('/api/files/sheet1/versions')
-      .set('Content-Type', XLSX_MIME).send(Buffer.from('v2'));
-    expect(res.status).toBe(200);
-
-    expect(sheetStore.getState('sheet1')).toBeNull();
-    expect(sheetStore.dirtyFiles()).not.toContain('sheet1');
-  });
-
-  it('DELETE clears a pending sheet session for the deleted fileId', async () => {
-    await request(sheetApp).post('/api/files/sheet2?kind=spreadsheet&name=Book2.xlsx')
-      .set('Content-Type', XLSX_MIME).send(Buffer.from('v1'));
-
-    sheetStore.join('sheet2', 's1');
-    sheetStore.setState('sheet2', '{"sheets":["stale"]}');
-
-    const res = await request(sheetApp).delete('/api/files/sheet2');
-    expect(res.status).toBe(200);
-
-    expect(sheetStore.getState('sheet2')).toBeNull();
-    expect(sheetStore.dirtyFiles()).not.toContain('sheet2');
-  });
-
-  it('a route registered with no sheetStore (existing test convention) is unaffected', async () => {
-    // `app` (module-level, from the outer beforeEach) never passes sheetStore
-    // — the routes must no-op cleanly rather than throw.
-    await request(app).post('/api/files/plainf1?kind=document&name=Doc.pdf')
-      .set('Content-Type', 'application/pdf').send(Buffer.from('v1'));
-    const res = await request(app).post('/api/files/plainf1/versions')
-      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
-    expect(res.status).toBe(200);
-  });
-});
-
-describe('drafts', () => {
-  it('PUT/GET/DELETE round-trip scoped to the user', async () => {
-    const put = await request(app).put('/api/drafts/f1')
-      .send({ kind: 'pdf', data: JSON.stringify({ annotations: [] }) });
-    expect(put.status).toBe(200);
-    const get = await request(app).get('/api/drafts/f1');
-    expect(get.status).toBe(200);
-    expect(get.body.kind).toBe('pdf');
-    expect(JSON.parse(get.body.data)).toEqual({ annotations: [] });
-    expect(typeof get.body.updatedAt).toBe('number');
-    await request(app).delete('/api/drafts/f1').expect(200);
-    expect((await request(app).get('/api/drafts/f1')).status).toBe(404);
-  });
-
-  it('rejects invalid payloads', async () => {
-    expect((await request(app).put('/api/drafts/f1').send({ kind: 'pdf' })).status).toBe(400);
-    expect((await request(app).put('/api/drafts/f1').send({ kind: 'nope', data: '{}' })).status).toBe(400);
-  });
-
-  it('deleteProject removes drafts for its files', async () => {
+// The drafts API went with the old PDF editor (ONLYOFFICE Phase 1), but rows
+// it left behind still belong to their project's files.
+describe('deleteProject drafts cascade', () => {
+  it('removes leftover editor drafts for its files', async () => {
     await request(app).post('/api/projects').send(PROJECT);
     await request(app).post('/api/files/df1?projectId=p1&kind=document&name=D.pdf')
       .set('Content-Type', 'application/pdf').send(Buffer.from('x'));
-    await request(app).put('/api/drafts/df1').send({ kind: 'pdf', data: '{}' });
+    db.prepare(`INSERT INTO drafts (userId, fileId, kind, data, updatedAt) VALUES ('u1', 'df1', 'pdf', '{}', 1)`).run();
     await request(app).delete('/api/projects/p1');
-    expect((await request(app).get('/api/drafts/df1')).status).toBe(404);
+    expect(db.prepare('SELECT COUNT(*) c FROM drafts WHERE fileId = ?').get('df1')).toEqual({ c: 0 });
   });
 });
 
@@ -1545,6 +1519,23 @@ describe('email send routes', () => {
     // and the thread is linked back to the invoice
     expect(db.prepare('SELECT itemType, itemId FROM mail_thread_links WHERE threadKey = ?').all(res.body.threadKey))
       .toEqual([{ itemType: 'invoice', itemId: id }]);
+  });
+
+  it('pay app send (ONLYOFFICE Phase 4): the workbook first, its PDF along, the thread linked to the pay app', async () => {
+    const { id, number } = createPayApp(db, 'p1', {});
+    await request(app).post(`/api/files/wb?projectId=p1&kind=payapp-export&sourceType=payapp&sourceId=${id}&name=${encodeURIComponent(`Pay App #${number} — G702.xlsx`)}`)
+      .set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(Buffer.from('XLSXBYTES'));
+    await request(app).post(`/api/files/pdf?projectId=p1&kind=payapp-pdf&sourceType=payapp&sourceId=${id}&name=${encodeURIComponent(`Pay App #${number} — G702.pdf`)}`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('PDFBYTES'));
+    const res = await request(emailApp).post(`/api/aia/pay-apps/${id}/send`).send({ to: 'gc@example.com', fileId: 'wb', attachmentFileIds: ['pdf'] });
+    expect(res.status).toBe(200);
+    const m = provider.sent[0];
+    expect(names(m.attachments)).toEqual([`Pay App #${number} — G702.xlsx`, `Pay App #${number} — G702.pdf`]);
+    expect(m.subject).toBe(`Application for Payment #${number} — Test Project`);
+    expect(db.prepare('SELECT itemType, itemId FROM mail_thread_links WHERE threadKey = ?').all(res.body.threadKey))
+      .toEqual([{ itemType: 'payApp', itemId: id }]);
+    expect((await request(buildEmailApp('member')).post(`/api/aia/pay-apps/${id}/send`).send({ to: 'x@y.z', fileId: 'wb' })).status).toBe(403);
+    expect((await request(emailApp).post('/api/aia/pay-apps/nope/send').send({ to: 'x@y.z', fileId: 'wb' })).status).toBe(404);
   });
 
   it('invoice send: blank cc/bcc parse to empty lists; falls back to default subject/body; single attachment', async () => {

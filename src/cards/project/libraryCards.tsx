@@ -27,7 +27,7 @@ import {
   ProposalSummary, ProposalStatus, DocumentRow, TimeEntryLite, CustomerOverview,
   getBillingSummary, getPayApps, getProjectSummary, getChangeOrders, getDailyReports,
   getDailyReport, getProposals, getDocuments, getMyTimeEntries, getCustomerOverview,
-  getImageUrl, clockIn,
+  getImageUrl, getImageThumbUrl, clockIn,
 } from '../../utils/store';
 import type { CustomerRoleEmails } from '../../types';
 import type { ProjectThreadRow } from '../../pages/mail/types';
@@ -246,7 +246,7 @@ const PhotoStripCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx 
         {photos.map((p, i) => (
           <img
             key={p.id}
-            src={getImageUrl(p.id)}
+            src={getImageThumbUrl(p.id)}
             alt=""
             onClick={() => setLightboxIndex(i)}
             className="aspect-square w-full cursor-pointer rounded-lg border border-edge object-cover"

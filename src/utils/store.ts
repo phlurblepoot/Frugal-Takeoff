@@ -19,6 +19,12 @@ export const getImageUrl = (id: string) => {
   return `/api/images/${id}/raw`;
 };
 
+/** A photo shrunk for tiles and lists (a few tens of KB); the server sends
+ *  anything it can't shrink as the original. `version` busts the browser's
+ *  cache when a file gets new content under the same id. */
+export const getImageThumbUrl = (id: string, version?: string | number) =>
+  `/api/images/${id}/thumb${version !== undefined ? `?v=${encodeURIComponent(String(version))}` : ''}`;
+
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 // HTTP statuses that indicate the server is willing to retry the same request.
@@ -256,15 +262,19 @@ export interface FileUploadOpts {
   customerId?: string;
   sourceType?: string;
   sourceId?: string;
-  // Only meaningful on an upsert-by-source hit — see server/files.ts's
-  // `store`. 'version' (default) keeps prior versions as history; 'overwrite'
-  // replaces the current version in place (regenerate-in-place flows).
-  mode?: 'version' | 'overwrite';
 }
+
+/** What happened to an old-format upload (.doc, .xls, Pages…; ONLYOFFICE
+ *  Phase 4): converted to the modern format with the upload kept as version
+ *  1, or kept as it came, with the reason. */
+export type UploadConversion =
+  | { status: 'converted'; from: string; to: string; name: string }
+  | { status: 'failed'; from: string; to: string; message: string };
 
 export interface UploadResult {
   fileId: string;
   versioned: boolean;
+  conversion?: UploadConversion;
 }
 
 const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
@@ -275,7 +285,6 @@ const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
   if (opts?.customerId) q.set('customerId', opts.customerId);
   if (opts?.sourceType) q.set('sourceType', opts.sourceType);
   if (opts?.sourceId) q.set('sourceId', opts.sourceId);
-  if (opts?.mode) q.set('mode', opts.mode);
   return q;
 };
 
@@ -283,8 +292,8 @@ const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
 // back to the posted id so a stale deployment keeps working.
 const readUploadResult = async (res: Response, postedId: string): Promise<UploadResult> => {
   try {
-    const body = await res.json() as { fileId?: string; versioned?: boolean };
-    return { fileId: body?.fileId || postedId, versioned: !!body?.versioned };
+    const body = await res.json() as { fileId?: string; versioned?: boolean; conversion?: UploadConversion };
+    return { fileId: body?.fileId || postedId, versioned: !!body?.versioned, ...(body?.conversion ? { conversion: body.conversion } : {}) };
   } catch {
     return { fileId: postedId, versioned: false };
   }
@@ -411,20 +420,94 @@ export const saveProjectNotes = async (projectId: string, note: ProjectNote): Pr
   await handleResponse(res);
 };
 
-export const createShare = async (type: string, resourceId: string, name: string): Promise<string> => {
-  const res = await fetch('/api/shares', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ type, resourceId, name }),
-  });
-  await handleResponse(res);
-  const { id } = await res.json();
-  return id;
+// ── Share links (ONLYOFFICE Phase 7: expiry, stopping, several files) ──────
+
+/** How long a new link lasts: 7, 30 (the default) or 90 days, or never. */
+export type ShareExpiry = 7 | 30 | 90 | null;
+export const SHARE_EXPIRY_CHOICES: { days: ShareExpiry; label: string }[] = [
+  { days: 7, label: '7 days' }, { days: 30, label: '30 days' }, { days: 90, label: '90 days' }, { days: null, label: 'Never' },
+];
+
+/** What a new link opens (see server/shares.ts). */
+export type ShareTarget =
+  | { type: 'file'; resourceId: string }
+  | { type: 'page'; resourceId: string }
+  | { type: 'pages'; resourceId: string }
+  | { type: 'files'; fileIds: string[] };
+
+export interface ShareLink {
+  id: string;
+  type: string;
+  name: string | null;
+  createdAt: number;
+  expiresAt: number | null;
+  createdBy: string | null;
+  createdByName: string | null;
+  /** For a several-files link: how many files it opens. */
+  fileCount: number;
+}
+
+async function shareJson<T>(res: Response, fallback: string): Promise<T> {
+  if (res.status === 401) await handleResponse(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || fallback);
+  }
+  return res.json();
+}
+
+/** A new link; never reuses an old one. */
+export const createShareLink = async (
+  target: ShareTarget, name: string, expiresInDays: ShareExpiry = 30,
+): Promise<{ id: string; expiresAt: number | null }> => shareJson(await fetch('/api/shares', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+  body: JSON.stringify({ ...target, name, expiresInDays }),
+}), "Couldn't create the link");
+
+/** A file's working links (its own, and several-files links it is in). */
+export const listShareLinks = async (fileId: string): Promise<ShareLink[]> =>
+  (await shareJson<{ shares: ShareLink[] }>(await fetch(`/api/shares?fileId=${encodeURIComponent(fileId)}`, { headers: { ...getAuthHeaders() } }), "Couldn't load the links")).shares;
+
+export const setShareLinkExpiry = async (id: string, expiresInDays: ShareExpiry): Promise<{ expiresAt: number | null }> => shareJson(await fetch(`/api/shares/${encodeURIComponent(id)}`, {
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+  body: JSON.stringify({ expiresInDays }),
+}), "Couldn't change the expiry");
+
+/** "Stop sharing": the link then says it was turned off. */
+export const stopShareLink = async (id: string): Promise<void> => {
+  await shareJson(await fetch(`/api/shares/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { ...getAuthHeaders() } }), "Couldn't stop sharing");
 };
 
-export const getShareInfo = async (shareId: string): Promise<{ type: string; name: string; count?: number }> => {
+/** The public address of a link: the Public Host URL from Settings, else this site. */
+export const shareUrlFor = (id: string, publicHost?: string | null): string =>
+  `${(publicHost || window.location.origin).replace(/\/$/, '')}/share/${id}`;
+
+export interface SharedFileInfo { name: string; mime: string; size: number; viewer: boolean; missing?: boolean }
+export interface ShareInfo {
+  type: string;
+  name: string;
+  count?: number;
+  viewer?: boolean;
+  mime?: string | null;
+  expiresAt?: number | null;
+  /** A several-files link's documents, in order. */
+  files?: SharedFileInfo[];
+}
+
+/** Why a link doesn't open: expired, turned off, or never existed. */
+export class ShareLinkError extends Error {
+  constructor(message: string, public code: 'expired' | 'revoked' | 'missing' | 'error') { super(message); }
+}
+
+export const getShareInfo = async (shareId: string): Promise<ShareInfo> => {
   const res = await fetch(`/api/share/${shareId}/info`);
-  await handleResponse(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const code = body.code === 'expired' || body.code === 'revoked' || body.code === 'missing' ? body.code : 'error';
+    throw new ShareLinkError(body.error || 'This share link is invalid or has expired.', code);
+  }
   return res.json();
 };
 
@@ -635,6 +718,275 @@ export const disconnectBackupDrive = async (): Promise<void> => {
 
 export const backupDriveStartUrl = (): string => `/api/backup/drive/start?${tokenParam()}`;
 
+// ── ONLYOFFICE document editor (docs/superpowers/specs/2026-09-25-onlyoffice-checklist.md) ──
+
+export type OnlyofficeCheckStatus = 'ok' | 'failed' | 'skipped';
+export interface OnlyofficeCheck { status: OnlyofficeCheckStatus; message: string }
+export interface OnlyofficeStatus {
+  configured: boolean;
+  problems: { variable: string; problem: string }[];
+  publicUrl: string | null;
+  internalUrl: string | null;
+  appInternalUrl: string | null;
+  version: string | null;
+  checks: { appToOnlyoffice: OnlyofficeCheck; onlyofficeToApp: OnlyofficeCheck };
+}
+
+/** Admin connection check. Slow by nature (it runs a conversion round trip),
+ *  so it is not retried: a retry would only repeat the same wait. */
+export const getOnlyofficeStatus = async (): Promise<OnlyofficeStatus> => {
+  const res = await fetchWithRetry('/api/onlyoffice/status', { headers: getAuthHeaders() }, { retries: 0 });
+  await handleResponse(res);
+  return res.json();
+};
+
+/** What POST /api/onlyoffice/config/:fileId answers: the signed config for
+ *  `new DocsAPI.DocEditor(...)`, where to load api.js from, and the file. */
+export interface EditorOpening {
+  publicUrl: string;
+  config: Record<string, unknown>;
+  file: { id: string; name: string | null; projectId: string | null; kind: string; ext: string; mode: 'edit' | 'view'; editable: boolean };
+}
+
+/** Why the editor couldn't open a file, with the server's reason code
+ *  ('not-configured' | 'unsupported' | 'onlyoffice-unreachable' | …). */
+export class EditorOpenError extends Error {
+  constructor(message: string, public status: number, public code?: string) {
+    super(message);
+    this.name = 'EditorOpenError';
+  }
+}
+
+/** ONLYOFFICE as a read-only viewer (Phase 6): a mail attachment or a shared file. */
+export interface ViewerOpening {
+  publicUrl: string;
+  config: Record<string, unknown>;
+  file: { name: string; ext: string };
+}
+
+async function viewerOpening(res: Response, fallback: string): Promise<ViewerOpening> {
+  if (res.status === 401) await handleResponse(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new EditorOpenError(body.error || fallback, res.status, body.code);
+  }
+  return res.json();
+}
+
+/** The viewer for a Word, Excel or PowerPoint mail attachment. */
+export const openAttachmentViewer = async (
+  messageId: string, attId: string, opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark' },
+): Promise<ViewerOpening> => viewerOpening(
+  await fetchWithRetry(`/api/mail/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attId)}/viewer`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify(opts),
+  }),
+  "Couldn't open the attachment",
+);
+
+/** The embedded viewer for a share link (public: no sign-in); `index` picks
+ *  one file of a several-files link. */
+export const openShareViewer = async (
+  shareId: string, opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark' }, index?: number,
+): Promise<ViewerOpening> => {
+  const which = index === undefined ? '' : `/${index}`;
+  const res = await fetch(`/api/share/${encodeURIComponent(shareId)}/viewer${which}?device=${opts.device}&theme=${opts.theme}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new EditorOpenError(body.error || "Couldn't open the viewer", res.status, body.code);
+  }
+  return res.json();
+};
+
+export const openInEditor = async (
+  fileId: string,
+  // actionLink: open at a comment (from a notification or a comment's link).
+  opts: { device: 'desktop' | 'phone'; theme: 'light' | 'dark'; actionLink?: Record<string, unknown> | null },
+): Promise<EditorOpening> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/config/${encodeURIComponent(fileId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(opts),
+  });
+  if (res.status === 401) await handleResponse(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new EditorOpenError(body.error || "Couldn't open the file", res.status, body.code);
+  }
+  return res.json();
+};
+
+// ── Version history (ONLYOFFICE Phase 2) ──────────────────────────────────
+
+/** Deletes one older version. Admins, or whoever made that version. */
+export const deleteFileVersion = async (fileId: string, versionId: string): Promise<void> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeaders() },
+  });
+  await handleResponse(res);
+};
+
+/** Why a restore didn't happen, with the server's reason code
+ *  ('open-in-editor' | 'save-timeout' | 'current' | …) and, when the file is
+ *  open, who has it open. */
+export class RestoreError extends Error {
+  constructor(message: string, public status: number, public code?: string, public users: string[] = []) {
+    super(message);
+    this.name = 'RestoreError';
+  }
+}
+
+/** Restores an older version as a NEW version on top; nothing is lost. `from`
+ *  says where the person is: only someone inside the open editor may restore a
+ *  file that is open there. */
+export const restoreFileVersion = async (
+  fileId: string,
+  target: { versionId: string } | { version: number },
+  from: 'documents' | 'editor',
+): Promise<{ versionNumber: number; restoredFrom: number }> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(fileId)}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ ...target, from }),
+  }, { timeoutMs: 60_000 });
+  if (res.status === 401) await handleResponse(res);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new RestoreError(body.error || "Couldn't restore that version", res.status, body.code, body.users ?? []);
+  return body;
+};
+
+/** One entry of the editor's version list (GET /api/onlyoffice/history/:id). */
+export interface EditorHistoryVersion {
+  version: number;
+  key: string;
+  createdAt: number;
+  user: { id: string; name: string } | null;
+  origin: string | null;
+  changes?: unknown;
+  serverVersion?: unknown;
+}
+
+export const getEditorHistory = async (fileId: string): Promise<{ currentVersion: number; versions: EditorHistoryVersion[] }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/history/${encodeURIComponent(fileId)}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return res.json();
+};
+
+/** The signed object for the editor's setHistoryData. The change-log link in
+ *  it is fetched by the browser, so the server builds it on this page's
+ *  address. */
+export const getEditorHistoryData = async (fileId: string, version: number): Promise<Record<string, unknown>> => {
+  const q = new URLSearchParams({ origin: window.location.origin });
+  const res = await fetchWithRetry(`/api/onlyoffice/history/${encodeURIComponent(fileId)}/${version}?${q.toString()}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  await handleResponse(res);
+  return res.json();
+};
+
+// ── Document library (ONLYOFFICE Phase 3) ─────────────────────────────────
+
+export interface LibraryItem {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  createdAt: number;
+  createdBy: string | null;
+}
+export interface DocumentTemplate extends LibraryItem { ext: 'docx' | 'xlsx' | 'pdf' }
+export interface Signature extends LibraryItem { isDefault: boolean }
+
+const jsonRequest = async <T>(url: string, init: RequestInit = {}): Promise<T> => {
+  const res = await fetchWithRetry(url, {
+    ...init,
+    headers: { ...(init.body && !(init.body instanceof Blob) ? { 'Content-Type': 'application/json' } : {}), ...getAuthHeaders(), ...(init.headers || {}) },
+  });
+  await handleResponse(res);
+  return res.json();
+};
+const uploadTo = <T>(url: string, blob: Blob, name: string): Promise<T> =>
+  jsonRequest<T>(`${url}?name=${encodeURIComponent(name)}`, {
+    method: 'POST', body: blob, headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+  });
+
+/** A new document from a blank file or a template; returns the stored file. */
+export const createNewDocument = (input: {
+  type: 'docx' | 'xlsx' | 'pdf'; templateId?: string; name: string; projectId?: string; kind: string;
+}): Promise<{ fileId: string; name: string }> =>
+  jsonRequest('/api/documents/new', { method: 'POST', body: JSON.stringify(input) });
+
+export const listDocumentTemplates = (): Promise<DocumentTemplate[]> => jsonRequest('/api/document-templates');
+export const uploadDocumentTemplate = (file: File): Promise<DocumentTemplate> => uploadTo('/api/document-templates', file, file.name);
+export const addLetterheadTemplate = (): Promise<DocumentTemplate> => jsonRequest('/api/document-templates/letterhead', { method: 'POST' });
+export const renameDocumentTemplate = (id: string, name: string): Promise<DocumentTemplate> =>
+  jsonRequest(`/api/document-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+export const deleteDocumentTemplate = (id: string): Promise<void> =>
+  jsonRequest(`/api/document-templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+export const listCompanyStamps = (): Promise<LibraryItem[]> => jsonRequest('/api/company-stamps');
+export const uploadCompanyStamp = (png: Blob, name: string): Promise<LibraryItem> => uploadTo('/api/company-stamps', png, name);
+export const renameCompanyStamp = (id: string, name: string): Promise<LibraryItem> =>
+  jsonRequest(`/api/company-stamps/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+export const deleteCompanyStamp = (id: string): Promise<void> =>
+  jsonRequest(`/api/company-stamps/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+/** Your own signatures, oldest first, the default flagged. */
+export const listSignatures = (): Promise<Signature[]> => jsonRequest('/api/signatures');
+export const addSignature = (png: Blob, name: string): Promise<Signature> => uploadTo('/api/signatures', png, name);
+export const updateSignature = (id: string, patch: { name?: string; isDefault?: true }): Promise<Signature> =>
+  jsonRequest(`/api/signatures/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+export const deleteSignature = (id: string): Promise<void> =>
+  jsonRequest(`/api/signatures/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+/** Signed data for the editor's insertImage (Insert → Image → From storage).
+ *  `skipped` names picked images the editor can't insert (e.g. WebP). */
+export const getInsertImageData = async (
+  fileId: string, c: string, fileIds: string[],
+): Promise<{ c: string; images: { fileType: string; url: string }[]; token: string; skipped: string[] }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/insert-image/${encodeURIComponent(fileId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ c, fileIds }),
+  });
+  await handleResponse(res);
+  return res.json();
+};
+
+/** Files a copy ONLYOFFICE made (File → Save Copy as) in the document's project. */
+export const saveEditorCopy = async (
+  fileId: string, copy: { url: string; title: string; fileType: string },
+): Promise<{ fileId: string; name: string; projectId: string | null }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/save-copy/${encodeURIComponent(fileId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(copy),
+  }, { timeoutMs: 120_000 });
+  await handleResponse(res);
+  return res.json();
+};
+
+// Recently opened documents (client-only, newest first) — the editor's
+// landing list. Same shape and idiom as recent projects above.
+export interface RecentDocument { id: string; name: string; mime: string; at: number }
+const RECENT_DOCS_KEY = 'recentDocuments';
+
+export const getRecentDocuments = (): RecentDocument[] => {
+  try { return JSON.parse(localStorage.getItem(RECENT_DOCS_KEY) || '[]'); } catch { return []; }
+};
+
+export const recordRecentDocument = (doc: { id: string; name: string; mime: string }): void => {
+  try {
+    const list = getRecentDocuments().filter(r => r.id !== doc.id);
+    list.unshift({ ...doc, at: Date.now() });
+    localStorage.setItem(RECENT_DOCS_KEY, JSON.stringify(list.slice(0, 8)));
+  } catch { /* ignore */ }
+};
+
+export const forgetRecentDocument = (id: string): void => {
+  try { localStorage.setItem(RECENT_DOCS_KEY, JSON.stringify(getRecentDocuments().filter(r => r.id !== id))); } catch { /* ignore */ }
+};
+
 // ── Fresh-install restore (the /restore screen, Task 11) ────────────────────
 
 export const getRestoreSources = async (): Promise<{
@@ -826,12 +1178,10 @@ export interface ProjectFile {
   parentFileId: string | null;
   versionNumber: number;
   createdAt: number;
-}
-
-export interface EditorDraft {
-  kind: 'pdf' | 'sheet';
-  data: string;
-  updatedAt: number;
+  /** User id of whoever made this version (null for older history). */
+  createdBy?: string | null;
+  /** 'editor' | 'restore' | null — see GeneratedDoc.versionOrigin. */
+  versionOrigin?: string | null;
 }
 
 export const getProjectSummary = async (id: string): Promise<ProjectSummary | null> => {
@@ -888,17 +1238,6 @@ export const persistGeneratedDocument = async (
   opts: FileUploadOpts & { kind: string; name: string },
 ): Promise<UploadResult> => saveBinaryFile(uuidv4(), blob, opts);
 
-// Save-as-version: live content keeps its id; old bytes become history.
-export const saveFileVersion = async (id: string, blob: Blob): Promise<{ versionNumber: number }> => {
-  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/versions`, {
-    method: 'POST',
-    headers: { 'Content-Type': blob.type || 'application/octet-stream', ...getAuthHeaders() },
-    body: blob,
-  }, { timeoutMs: 300_000 });
-  await handleResponse(res);
-  return await res.json();
-};
-
 // Authenticated binary fetch of a file's live content.
 export const fetchFileBlob = async (id: string): Promise<Blob> => {
   const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/content`, {
@@ -906,32 +1245,6 @@ export const fetchFileBlob = async (id: string): Promise<Blob> => {
   }, { timeoutMs: 300_000 });
   await handleResponse(res);
   return await res.blob();
-};
-
-export const getDraft = async (fileId: string): Promise<EditorDraft | null> => {
-  const res = await fetchWithRetry(`/api/drafts/${encodeURIComponent(fileId)}`, {
-    headers: { ...getAuthHeaders() },
-  });
-  if (res.status === 404) return null;
-  await handleResponse(res);
-  return await res.json();
-};
-
-export const putDraft = async (fileId: string, kind: 'pdf' | 'sheet', data: string): Promise<void> => {
-  const res = await fetchWithRetry(`/api/drafts/${encodeURIComponent(fileId)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ kind, data }),
-  });
-  await handleResponse(res);
-};
-
-export const deleteDraft = async (fileId: string): Promise<void> => {
-  const res = await fetchWithRetry(`/api/drafts/${encodeURIComponent(fileId)}`, {
-    method: 'DELETE',
-    headers: { ...getAuthHeaders() },
-  });
-  await handleResponse(res);
 };
 
 // ── Global Documents page (spec docs/superpowers/specs/2026-08-17-unified-documents-design.md) ──
@@ -1001,6 +1314,10 @@ export interface GeneratedDoc {
   size: number;
   createdAt: number;
   versionNumber: number;
+  /** 'editor' once edited in the Document Editor since it was generated,
+   *  'restore' when an older version was restored; null straight after a
+   *  generate (and from servers before ONLYOFFICE Phase 2). */
+  versionOrigin?: string | null;
 }
 
 export const getDocumentBySource = async (
@@ -1304,6 +1621,22 @@ export const getBillingSummary = async (projectId: string): Promise<BillingSumma
     const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
     await handleResponse(res); return res.json();
   });
+/** Emails a pay application (its workbook first; ONLYOFFICE Phase 4). */
+export const sendPayApp = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await billingJson('POST', `/api/aia/pay-apps/${id}/send`, payload);
+  await handleResponse(res);
+  return res.json();
+};
+
+/** Makes the pay app's workbook into its PDF (ONLYOFFICE converts it). */
+export const makePayAppPdf = async (payAppId: string): Promise<{ fileId: string; name: string; versionNumber: number; changed: boolean }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/pay-app-pdf/${encodeURIComponent(payAppId)}`, {
+    method: 'POST', headers: { ...getAuthHeaders() },
+  }, { timeoutMs: 150_000 });
+  await handleResponse(res);
+  return res.json();
+};
+
 export const sendInvoice = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await billingJson('POST', `/api/invoices/${id}/send`, payload);
   await handleResponse(res);
@@ -1419,6 +1752,8 @@ export interface Rfi {
   pendingReply?: RfiPendingReply | null;
   responseSource?: string | null;            // 'email' once an emailed reply was accepted
   responseMessageIdHeader?: string | null;
+  assigneeUserId?: string | null;            // internal "Assigned to" (ONLYOFFICE Phase 5)
+  sentByUserId?: string | null;              // who last emailed it out
 }
 export interface RfiListItem {
   id: string; projectId: string; number: number; title: string | null;
@@ -2213,4 +2548,99 @@ export const getCustomerThreads = async (customerId: string): Promise<ProjectThr
   const res = await fetchWithRetry(`/api/mail/project-threads?customerId=${encodeURIComponent(customerId)}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res);
   return await res.json();
+};
+
+// ── Notifications (ONLYOFFICE Phase 5: the bell) ───────────────────────────
+
+export type NotificationType = 'mention' | 'comment-reply' | 'task-assigned' | 'rfi-assigned' | 'rfi-answered';
+export interface AppNotification {
+  id: string;
+  userId: string;
+  type: NotificationType;
+  title: string;
+  body: string | null;
+  /** An in-app path to open, e.g. "/tasks?open=…". */
+  link: string | null;
+  actorUserId: string | null;
+  createdAt: number;
+  readAt: number | null;
+}
+/** Pushed on the socket's `notification` event. */
+export type NotificationEvent =
+  | { kind: 'new'; notification: AppNotification }
+  | { kind: 'read'; ids: string[] | 'all' };
+
+export const getNotifications = async (): Promise<{ items: AppNotification[]; unread: number }> => {
+  const res = await fetchWithRetry('/api/notifications', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return res.json();
+};
+export const markNotificationRead = async (id: string): Promise<void> => {
+  const res = await fetchWithRetry(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'POST', headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+};
+export const markAllNotificationsRead = async (): Promise<void> => {
+  const res = await fetchWithRetry('/api/notifications/read-all', { method: 'POST', headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+};
+
+/** People who can be @mentioned in a document's comments, each under the
+ *  address ONLYOFFICE keys them by. */
+export const getMentionUsers = async (fileId: string): Promise<{ id: string; name: string; email: string }[]> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/mention-users/${encodeURIComponent(fileId)}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return (await res.json()).users;
+};
+/** Someone was @mentioned in a comment (ONLYOFFICE's onRequestSendNotify). */
+export const sendMentionNotifications = async (
+  fileId: string, data: { emails: string[]; message?: string; actionLink?: unknown },
+): Promise<{ notified: number }> => {
+  const res = await fetchWithRetry(`/api/onlyoffice/mention/${encodeURIComponent(fileId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(data),
+  });
+  await handleResponse(res);
+  return res.json();
+};
+
+// ── Phone push notifications (ONLYOFFICE Phase 5, added 2026-09-27) ─────────
+
+export interface PushDevice { id: string; device: string | null; createdAt: number; lastUsedAt: number | null }
+
+export const getPushConfig = async (): Promise<{ publicKey: string }> => {
+  const res = await fetchWithRetry('/api/push/config', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return res.json();
+};
+export const getPushDevices = async (): Promise<PushDevice[]> => {
+  const res = await fetchWithRetry('/api/push/devices', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return (await res.json()).devices;
+};
+/** Turns push on for this device: the browser's subscription, as toJSON() gives it. */
+export const savePushSubscription = async (subscription: unknown): Promise<PushDevice> => {
+  const res = await fetchWithRetry('/api/push/subscribe', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ subscription }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "Couldn't turn on notifications for this device");
+  }
+  return (await res.json()).device;
+};
+export const removePushSubscription = async (endpoint: string): Promise<void> => {
+  const res = await fetchWithRetry('/api/push/unsubscribe', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ endpoint }),
+  });
+  await handleResponse(res);
+};
+export const removePushDevice = async (id: string): Promise<void> => {
+  const res = await fetchWithRetry(`/api/push/devices/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+};
+export const sendTestPush = async (): Promise<{ sent: number; removed: number; failed: number }> => {
+  const res = await fetchWithRetry('/api/push/test', { method: 'POST', headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return res.json();
 };

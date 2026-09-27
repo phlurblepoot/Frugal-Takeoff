@@ -140,9 +140,8 @@ test('RFI Email: prefilled composer, send stamps Sent + links a thread, second s
   await expect(replyInThread).toBeChecked();
   await authedPage.getByTestId('mail-composer-send').click();
 
-  // The stored PDF is out of date, so the bar asks before replacing it.
-  await expect(authedPage.getByTestId('doc-version-overwrite')).toBeVisible({ timeout: 20_000 });
-  await authedPage.getByTestId('doc-version-overwrite').click();
+  // The stored PDF is out of date, so the bar rebuilds it as a new version
+  // (no prompt) and sends that.
   await expect(authedPage.getByTestId('mail-composer')).toHaveCount(0, { timeout: 60_000 });
 
   const threadRes = await request.get(

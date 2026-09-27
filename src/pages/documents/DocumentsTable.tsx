@@ -15,18 +15,19 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { History } from 'lucide-react';
-import { DocumentRow, ProjectFile, createShare, fetchFileBlob, formatBytes, getSettings, listFileVersions } from '../../utils/store';
+import { DocumentRow, fetchFileBlob, formatBytes } from '../../utils/store';
 import { useToast } from '../../components/Toast';
-import { useShareLink } from '../../components/ShareLinkModal';
+import { useShare } from '../../components/ShareLinkModal';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { FileViewerDots } from '../../components/FileViewerDots';
 import { Skeleton, StatusPill, Table, TBody, TD, TH, THead, TR } from '../../components/ui';
 import { CustomDocType, kindLabel, kindTone } from './docTypes';
 import { DocumentHoverPreview } from './DocumentHoverPreview';
 import { DocumentViewerModal } from './DocumentViewerModal';
-import { MimeIcon } from './MimeIcon';
+import { FileThumb } from './FileThumb';
 import { openTargetFor } from './openTarget';
 import { RowContextMenu, RowContextMenuState } from './RowContextMenu';
+import { VersionHistory } from './VersionHistory';
 import { downloadBlob } from '../../utils/download';
 
 // Moved to src/utils/download.ts (shared with DocumentActionsBar); re-exported
@@ -39,33 +40,6 @@ const iconBtnCls = 'flex min-h-9 min-w-9 items-center justify-center rounded-md 
 // scroll/drag instead — mirrors the timer-ref idiom in PdfCanvas.tsx.
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_TOLERANCE = 10;
-
-const VersionHistory: React.FC<{ fileName: string | null; versions: ProjectFile[] | null }> = ({
-  fileName, versions,
-}) => {
-  const { toast } = useToast();
-  if (versions === null) return <Skeleton className="h-6 w-48" />;
-  if (versions.length <= 1) return <span className="text-xs text-ink-faint">No earlier versions.</span>;
-  return (
-    <ul className="space-y-1">
-      {versions.slice(1).map(v => (
-        <li key={v.id} className="flex items-center gap-3 text-xs text-ink-soft">
-          <span>v{v.versionNumber}</span>
-          <span>{new Date(v.createdAt).toLocaleString()}</span>
-          <button
-            onClick={async () => {
-              try { downloadBlob(await fetchFileBlob(v.id), `${fileName ?? v.id} (v${v.versionNumber})`); }
-              catch { toast('Download failed', { type: 'error' }); }
-            }}
-            className="text-accent-600 hover:underline dark:text-accent-400"
-          >
-            download
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
-};
 
 // Row actions column: the version-history toggle is the only affordance left
 // here (spec: "ONLY the version-history toggle remains, rendered ONLY when
@@ -94,9 +68,8 @@ export const DocumentsTable: React.FC<{
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
-  const shareLink = useShareLink();
+  const share = useShare();
   const [historyFor, setHistoryFor] = useState<string | null>(null);
-  const [versions, setVersions] = useState<ProjectFile[] | null>(null);
   const [contextMenu, setContextMenu] = useState<RowContextMenuState | null>(null);
   // Viewer state lives here rather than in DocumentsPage: the row click, the
   // openTargetFor navigation and the archive callback the modal needs are all
@@ -114,7 +87,7 @@ export const DocumentsTable: React.FC<{
 
   const handleOpen = async (row: DocumentRow) => {
     const target = openTargetFor(row);
-    if (target.type === 'pdf' || target.type === 'sheet') navigate(target.url!);
+    if (target.type === 'edit') navigate(target.url!);
     else if (target.type === 'image') window.open(target.url!, '_blank');
     else {
       try { downloadBlob(await fetchFileBlob(row.id), row.name ?? row.id); }
@@ -148,27 +121,15 @@ export const DocumentsTable: React.FC<{
     onDeleteRows([row]);
   };
 
-  // Public share link for a takeoff print/export — the share type stays
-  // 'printout' and the resourceId stays the FILE id, exactly as the retired
-  // Proposal tab created them, so old links and new ones resolve through the
-  // same GET /api/share/:shareId (which looks the resourceId up as a file id).
-  const handleShare = async (row: DocumentRow) => {
-    const name = row.name ?? 'Takeoff print';
-    try {
-      const [id, settings] = await Promise.all([createShare('printout', row.id, name), getSettings()]);
-      const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      shareLink(`${host}/share/${id}`, name);
-    } catch {
-      toast('Failed to create share link', { type: 'error' });
-    }
+  // Share any document (ONLYOFFICE Phase 7): the share window lists the
+  // links already working for it and makes new ones with an expiry.
+  const handleShare = (row: DocumentRow) => {
+    const name = row.name ?? 'Document';
+    share({ title: `Share ${name}`, target: { type: 'file', resourceId: row.id }, name });
   };
 
-  const handleHistory = async (row: DocumentRow) => {
-    if (historyFor === row.id) { setHistoryFor(null); setVersions(null); return; }
-    setHistoryFor(row.id);
-    setVersions(null);
-    try { setVersions(await listFileVersions(row.id)); }
-    catch { setVersions([]); }
+  const handleHistory = (row: DocumentRow) => {
+    setHistoryFor(historyFor === row.id ? null : row.id);
   };
 
   // ── Long-press → context menu (touch/mobile cards). A timer armed on
@@ -303,14 +264,19 @@ export const DocumentsTable: React.FC<{
                     />
                   </TD>
                   <TD className="font-medium text-ink">
+                    {/* Page one (ONLYOFFICE Phase 4) or the type icon, beside both lines. */}
                     <div className="flex min-w-0 items-center gap-2">
-                      <MimeIcon mime={row.mime} />
-                      <span className="truncate" title={row.name ?? row.id}>{row.name ?? row.id}</span>
-                      <FileViewerDots fileId={row.id} />
-                    </div>
-                    <div className="ml-[23px] truncate text-xs font-normal text-ink-faint">
-                      {formatBytes(row.size)}{row.versionNumber > 1 ? ` · v${row.versionNumber}` : ''}
-                      <span className="xl:hidden"> · {new Date(row.createdAt).toLocaleDateString()}</span>
+                      <span className="flex w-6 shrink-0 justify-center"><FileThumb row={row} box="h-8 w-6" /></span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate" title={row.name ?? row.id}>{row.name ?? row.id}</span>
+                          <FileViewerDots fileId={row.id} />
+                        </div>
+                        <div className="truncate text-xs font-normal text-ink-faint">
+                          {formatBytes(row.size)}{row.versionNumber > 1 ? ` · v${row.versionNumber}` : ''}
+                          <span className="xl:hidden"> · {new Date(row.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      </div>
                     </div>
                   </TD>
                   <TD className="overflow-hidden"><StatusPill tone={kindTone(row.kind)}>{kindLabel(row.kind, customTypes)}</StatusPill></TD>
@@ -326,7 +292,7 @@ export const DocumentsTable: React.FC<{
                 {historyFor === row.id && (
                   <TR>
                     <TD colSpan={7} className="bg-sunken/50">
-                      <VersionHistory fileName={row.name} versions={versions} />
+                      <VersionHistory fileId={row.id} fileName={row.name} />
                     </TD>
                   </TR>
                 )}
@@ -360,7 +326,7 @@ export const DocumentsTable: React.FC<{
               <button type="button" onClick={() => handleRowClick(row)} className="block min-w-0 flex-1 text-left">
                 <div className="flex items-start justify-between gap-2">
                   <span className="flex min-w-0 items-center gap-2 font-medium text-ink">
-                    <MimeIcon mime={row.mime} />
+                    <FileThumb row={row} box="h-10 w-8" />
                     <span className="truncate break-words">{row.name ?? row.id}</span>
                     <FileViewerDots fileId={row.id} />
                   </span>
@@ -386,7 +352,7 @@ export const DocumentsTable: React.FC<{
             )}
             {historyFor === row.id && (
               <div className="mt-2 rounded-lg bg-sunken/50 p-2">
-                <VersionHistory fileName={row.name} versions={versions} />
+                <VersionHistory fileId={row.id} fileName={row.name} />
               </div>
             )}
           </li>
@@ -415,6 +381,7 @@ export const DocumentsTable: React.FC<{
           onOpenInEditor={handleOpen}
           onDownload={handleDownload}
           onArchive={(row, archived) => onArchiveRows([row], archived)}
+          onShare={handleShare}
         />
       )}
 

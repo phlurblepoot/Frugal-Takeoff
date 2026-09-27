@@ -186,3 +186,38 @@ describe('buildAiaWorkbookFromTemplate', () => {
     await expect(buildAiaWorkbookFromTemplate(buf, badMapping, ctx)).resolves.toBeDefined();
   });
 });
+
+// exceljs keeps manual page breaks on the sheet but leaves them out of its types.
+const rowBreakIds = (ws: object) => ((ws as { rowBreaks?: { id: number }[] }).rowBreaks ?? []).map(b => b.id);
+
+describe('buildAiaWorkbookFromTemplate — print layout', () => {
+  const withCo: AiaExportCtx = {
+    ...ctx,
+    g703: [...g703, { sovLineId: 'sov3', itemNo: 'CO-1', description: 'Extra door', isChangeOrder: 1, scheduledValueCents: 50000, previousCents: 0, thisPeriodCents: 0, storedCents: 0, totalToDateCents: 0, percentComplete: 0, balanceToFinishCents: 50000, retainageCents: 0 }],
+  };
+
+  it('puts the G702 on one landscape page and fits the G703 to the width, keeping the template paper and margins', async () => {
+    const tpl = new ExcelJS.Workbook();
+    const a = tpl.addWorksheet('G702');
+    a.pageSetup = { ...a.pageSetup, paperSize: 5 as unknown as ExcelJS.PaperSize, margins: { left: 1, right: 1, top: 1, bottom: 1, header: 0.5, footer: 0.5 } };
+    tpl.addWorksheet('G703');
+    const wb = await buildAiaWorkbookFromTemplate(await tpl.xlsx.writeBuffer() as ArrayBuffer, mapping, withCo);
+    expect(wb.getWorksheet('G702')!.pageSetup).toMatchObject({ orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1, paperSize: 5, margins: { left: 1 } });
+    expect(wb.getWorksheet('G703')!.pageSetup).toMatchObject({ orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 });
+  });
+
+  it('starts the change orders on a new page (rows from the mapped start row)', async () => {
+    const wb = await buildAiaWorkbookFromTemplate(await makeTemplateBuffer(), mapping, withCo);
+    // Start row 5: two contract lines on 5-6, the first change order on 7.
+    expect(rowBreakIds(wb.getWorksheet('G703')!)).toEqual([6]);
+    const none = await buildAiaWorkbookFromTemplate(await makeTemplateBuffer(), mapping, ctx);
+    expect(rowBreakIds(none.getWorksheet('G703')!)).toEqual([]);
+  });
+
+  it('a one-sheet template gets the G703 rules', async () => {
+    const tpl = new ExcelJS.Workbook();
+    tpl.addWorksheet('AIA');
+    const wb = await buildAiaWorkbookFromTemplate(await tpl.xlsx.writeBuffer() as ArrayBuffer, { ...mapping, g702Sheet: 'AIA', g703Sheet: 'AIA' }, withCo);
+    expect(wb.getWorksheet('AIA')!.pageSetup).toMatchObject({ fitToWidth: 1, fitToHeight: 0 });
+  });
+});

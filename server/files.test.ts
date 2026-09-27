@@ -12,6 +12,7 @@ import { registerDataRoutes } from './routes';
 import {
   putDataUrl, putBuffer, getMeta, getDataUrlString, removeFile, saveNewVersion, listVersions,
   setFileFlags, isDirectUploadKind, DIRECT_UPLOAD_KINDS, SYSTEM_KINDS, MULTI_INSTANCE_KINDS,
+  replaceLiveContent,
 } from './files';
 import { readFileContent } from './fileStore';
 
@@ -173,6 +174,140 @@ describe('file versioning', () => {
     const nums = listVersions(db, 'f1').map(v => v.versionNumber).sort((a, b) => a - b);
     expect(nums).toEqual([1, 2, 3]);
     expect(new Set(nums).size).toBe(nums.length);
+  });
+});
+
+describe('version authors (createdBy)', () => {
+  it('records the uploader, and each version keeps its own author', async () => {
+    app = buildApp('admin', 'alice');
+    const id = await upload('doc-a', { projectId: 'p1', kind: 'document', name: 'Scope.docx' }, 'v1');
+    expect(getMeta(db, id)!.createdBy).toBe('alice');
+
+    app = buildApp('user', 'bob');
+    const r = await request(app).post(`/api/files/${id}/versions`).set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    expect(r.status).toBe(200);
+    const [live, v1] = listVersions(db, id);
+    expect(live.createdBy).toBe('bob');
+    expect(v1.createdBy).toBe('alice');
+  });
+
+  it('a regenerate (upsert-by-source) stamps the regenerating user on the new version', async () => {
+    app = buildApp('admin', 'alice');
+    const id = await upload('inv-1', { projectId: 'p1', kind: 'invoice', sourceType: 'invoice', sourceId: 'i1' }, 'first');
+    app = buildApp('admin', 'carol');
+    expect(await upload('inv-2', { projectId: 'p1', kind: 'invoice', sourceType: 'invoice', sourceId: 'i1' }, 'second')).toBe(id);
+    const [live, v1] = listVersions(db, id);
+    expect(live.createdBy).toBe('carol');
+    expect(v1.createdBy).toBe('alice');
+  });
+
+  it('a version saved with no known author is not credited to the previous one', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('v1'), 'application/pdf', { createdBy: 'alice' });
+    saveNewVersion(db, dir, 'f1', Buffer.from('v2'), 'application/pdf');
+    expect(getMeta(db, 'f1')!.createdBy).toBeNull();
+  });
+});
+
+describe('version origin', () => {
+  it('stamps editor saves and restores, resets on a plain upload, and archived versions keep theirs', async () => {
+    putBuffer(db, dir, 'f1', Buffer.from('generated'), 'application/pdf', { createdBy: 'alice' });
+    expect(getMeta(db, 'f1')!.versionOrigin).toBeNull();
+    saveNewVersion(db, dir, 'f1', Buffer.from('edited'), 'application/pdf', 'bob', 'editor');
+    expect(getMeta(db, 'f1')!.versionOrigin).toBe('editor');
+    replaceLiveContent(db, dir, 'f1', Buffer.from('edited more'), 'application/pdf', 'bob', 'editor');
+    saveNewVersion(db, dir, 'f1', Buffer.from('regenerated'), 'application/pdf', 'alice');
+    const [live, v2, v1] = listVersions(db, 'f1');
+    expect(live.versionOrigin).toBeNull();
+    expect(v2).toMatchObject({ versionNumber: 2, versionOrigin: 'editor', createdBy: 'bob' });
+    expect(v1).toMatchObject({ versionNumber: 1, versionOrigin: null, createdBy: 'alice' });
+  });
+});
+
+describe('removeFile and the editor change log', () => {
+  const addChanges = (fileId: string, versionNumber: number) =>
+    db.prepare(`INSERT INTO editor_changes (fileId, versionNumber, changesJson, createdAt) VALUES (?, ?, '[]', 1)`).run(fileId, versionNumber);
+  const changeVersions = (fileId: string) =>
+    (db.prepare('SELECT versionNumber FROM editor_changes WHERE fileId = ? ORDER BY versionNumber').all(fileId) as { versionNumber: number }[]).map(r => r.versionNumber);
+
+  it('deleting an archived version drops only its log; deleting the live row drops them all', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('v1'), 'application/pdf');
+    saveNewVersion(db, dir, 'f1', Buffer.from('v2'), 'application/pdf');
+    saveNewVersion(db, dir, 'f1', Buffer.from('v3'), 'application/pdf');
+    addChanges('f1', 2); addChanges('f1', 3);
+    const v2 = listVersions(db, 'f1').find(v => v.versionNumber === 2)!;
+    removeFile(db, dir, v2.id);
+    expect(changeVersions('f1')).toEqual([3]);
+    removeFile(db, dir, 'f1');
+    expect(changeVersions('f1')).toEqual([]);
+  });
+});
+
+describe('DELETE /api/files/:id/versions/:versionId', () => {
+  const setup = async () => {
+    app = buildApp('admin', 'alice');
+    const id = await upload('doc-a', { projectId: 'p1', kind: 'document', name: 'Scope.docx' }, 'v1'); // by alice
+    app = buildApp('user', 'bob');
+    await request(app).post(`/api/files/${id}/versions`).set('Content-Type', 'application/pdf').send(Buffer.from('v2')); // by bob
+    await request(app).post(`/api/files/${id}/versions`).set('Content-Type', 'application/pdf').send(Buffer.from('v3')); // by bob
+    const [, v2, v1] = listVersions(db, id);
+    return { id, v1, v2 };
+  };
+  const del = (id: string, versionId: string) => request(app).delete(`/api/files/${id}/versions/${versionId}`);
+
+  it('lets the version\'s author delete it, bytes and all', async () => {
+    const { id, v2 } = await setup();
+    app = buildApp('user', 'bob');
+    expect((await del(id, v2.id)).status).toBe(200);
+    expect(listVersions(db, id).map(v => v.versionNumber)).toEqual([3, 1]);
+    expect(readFileContent(dir, v2.id)).toBeNull();
+  });
+
+  it('refuses anyone else who is not an admin', async () => {
+    const { id, v1 } = await setup();
+    app = buildApp('user', 'bob');
+    expect((await del(id, v1.id)).status).toBe(403);
+    expect(listVersions(db, id)).toHaveLength(3);
+  });
+
+  it('lets an admin delete any version, including ones with no recorded author', async () => {
+    const { id, v1, v2 } = await setup();
+    db.prepare('UPDATE files SET createdBy = NULL WHERE id = ?').run(v1.id);
+    app = buildApp('user', 'bob');
+    expect((await del(id, v1.id)).status).toBe(403);
+    app = buildApp('admin', 'carol');
+    expect((await del(id, v1.id)).status).toBe(200);
+    expect((await del(id, v2.id)).status).toBe(200);
+    expect(listVersions(db, id).map(v => v.versionNumber)).toEqual([3]);
+  });
+
+  it('never deletes the live version, or a version of another file', async () => {
+    const { id, v1 } = await setup();
+    const other = await upload('doc-b', { projectId: 'p1', kind: 'document', name: 'Other.docx' }, 'b');
+    app = buildApp('admin', 'carol');
+    expect((await del(id, id)).status).toBe(404);
+    expect((await del(other, v1.id)).status).toBe(404);
+    expect(getMeta(db, id)).not.toBeNull();
+    expect(getMeta(db, v1.id)).not.toBeNull();
+  });
+});
+
+describe('replaceLiveContent', () => {
+  it('swaps the live bytes in place: same version number, history kept, size and hash updated', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('v1'), 'application/pdf', { name: 'Bid.pdf', createdBy: 'alice' });
+    saveNewVersion(db, dir, 'f1', Buffer.from('v2'), 'application/pdf', 'bob');
+    const before = getMeta(db, 'f1')!;
+    const after = replaceLiveContent(db, dir, 'f1', Buffer.from('v2 with more edits'), 'application/pdf', 'carol');
+    expect(after.versionNumber).toBe(before.versionNumber);
+    expect(after.size).toBe('v2 with more edits'.length);
+    expect(after.sha256).not.toBe(before.sha256);
+    expect(after.createdBy).toBe('carol');
+    expect(after.name).toBe('Bid.pdf');
+    expect(readFileContent(dir, 'f1')!.toString()).toBe('v2 with more edits');
+    expect(listVersions(db, 'f1').map(v => v.versionNumber)).toEqual([2, 1]);
+  });
+
+  it('throws for unknown files', () => {
+    expect(() => replaceLiveContent(db, dir, 'nope', Buffer.from('x'), 'text/plain')).toThrow();
   });
 });
 
@@ -380,51 +515,29 @@ describe('upsert-by-source uploads', () => {
   });
 });
 
-describe('overwrite mode', () => {
-  it('replaces the live bytes in place: same id, no archived row, versionNumber 1, createdAt refreshed', async () => {
+describe('regenerating', () => {
+  it('always makes a new version, even when an old client still asks to overwrite', async () => {
     const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
-    const before = getMeta(db, id)!;
-    await new Promise(r => setTimeout(r, 2));
     const res = await request(app).post(`/api/files/zzz?projectId=p1&kind=invoice&name=a&sourceType=invoice&sourceId=inv-1&mode=overwrite`)
       .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
-    expect(res.body.fileId).toBe(id);
-    const after = getMeta(db, id)!;
-    expect(after.versionNumber).toBe(1);
-    expect(after.createdAt).toBeGreaterThan(before.createdAt);
+    expect(res.body).toMatchObject({ fileId: id, versioned: true });
+    expect(getMeta(db, id)!.versionNumber).toBe(2);
     expect(readFileContent(dir, id)!.toString()).toBe('v2');
-    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId = ?').get(id)).toEqual({ c: 0 });
-  });
-
-  it('overwrite discards every archived version and resets the live row to V1', async () => {
-    const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
-    await upload('f2', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v2'); // version → V2 + 1 archived row
-    await upload('f3', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v3'); // V3 + 2 archived rows
     const archived = db.prepare('SELECT id FROM files WHERE parentFileId = ?').all(id) as { id: string }[];
-    expect(archived).toHaveLength(2);
-    expect(getMeta(db, id)!.versionNumber).toBe(3);
-    const res = await request(app).post(`/api/files/zzz?projectId=p1&kind=invoice&name=a&sourceType=invoice&sourceId=inv-1&mode=overwrite`)
-      .set('Content-Type', 'application/pdf').send(Buffer.from('fresh'));
-    expect(res.body.fileId).toBe(id);
-    expect(getMeta(db, id)!.versionNumber).toBe(1);
-    expect(readFileContent(dir, id)!.toString()).toBe('fresh');
-    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId = ?').get(id)).toEqual({ c: 0 });
-    for (const a of archived) {
-      expect(getMeta(db, a.id)).toBeNull();
-      expect(readFileContent(dir, a.id)).toBeNull();
-    }
+    expect(archived).toHaveLength(1);
+    expect(readFileContent(dir, archived[0].id)!.toString()).toBe('v1');
   });
 
-  it('version mode (default) still archives', async () => {
+  it('an archived version keeps the date its bytes were made, not the date it was archived', async () => {
     const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
-    const res = await request(app).post(`/api/files/zzz?projectId=p1&kind=invoice&name=a&sourceType=invoice&sourceId=inv-1`)
-      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
-    expect(res.body.fileId).toBe(id);
-    const after = getMeta(db, id)!;
-    expect(after.versionNumber).toBe(2);
-    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId = ?').get(id)).toEqual({ c: 1 });
+    db.prepare('UPDATE files SET createdAt = 1000 WHERE id = ?').run(id);
+    await upload('f2', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v2');
+    const archived = db.prepare('SELECT createdAt FROM files WHERE parentFileId = ?').get(id) as { createdAt: number };
+    expect(archived.createdAt).toBe(1000);
+    expect(getMeta(db, id)!.createdAt).toBeGreaterThan(1000);
   });
 
-  it('both modes clear a pdf draft for the file', async () => {
+  it('clears a leftover old-editor draft for the file', async () => {
     const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
     db.prepare(`INSERT INTO drafts (userId, fileId, kind, data, updatedAt) VALUES ('u1', ?, 'pdf', '{}', 1)`).run(id);
     await upload('f2', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v2');

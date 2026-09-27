@@ -1,12 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers, DatabaseBackup } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers, DatabaseBackup, FileText, FilePlus2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
 import { UsersView } from './UsersView';
 import { MailAccountsTab } from './settings/MailAccountsTab';
 import { BackupTab } from './settings/BackupTab';
+import { DocumentEditorTab } from './settings/DocumentEditorTab';
+import { DocumentTemplatesTab } from './settings/DocumentTemplatesTab';
+import { MySignatures } from './settings/MySignatures';
+import { PhoneNotifications } from './settings/PhoneNotifications';
 import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
@@ -23,6 +27,24 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '4.0.0',
+    date: 'September 27, 2026',
+    changes: [
+      'Document editor: PDFs, Word files, spreadsheets and presentations now open in ONLYOFFICE Docs, which replaces the old PDF editor and spreadsheet editor. Several people can edit the same file at once, with comments, @mentions, track changes and PDF form filling. On phones, documents open to read. The sidebar\'s Document Editor lists recent files and opens one from Documents or from your computer (filed into a project first).',
+      'Version 4 runs ONLYOFFICE as a second container next to the app (docs/onlyoffice-setup.md). Settings → Document Editor (admins) checks the connection three ways and says what to fix. Without it, everything else works and documents can be previewed and downloaded, not edited.',
+      'Versions: each editing session saves one new version, and the file as it was before stays in its history. Editing a generated document (an invoice, pay app, proposal, RFI…) keeps the generated original as a version, and regenerating always makes a new version (no more "new version or replace?"). Admins, and whoever made a version, can delete older versions. Version history inside the editor shows what changed and restores any version as a new one.',
+      'New document: on the Documents page, a project\'s Documents tab and the command palette — a blank Word file, spreadsheet or fillable PDF form, or a template. Admins keep templates, and company stamps, in the new Settings → Document Templates tab.',
+      'Signatures and stamps: keep several named signatures with a default under Settings → User Preferences → My signatures (white backgrounds are removed; signatures saved in the old PDF editor move here). In the editor, Insert → Image → From storage adds a signature, a company stamp, a project photo or any other image in the app, and File → Save Copy as saves the copy (e.g. a PDF) into the same project.',
+      'Old formats: an uploaded .doc, .xls, .rtf, .odt, .ods, .ppt, Pages, Numbers or Keynote file is converted to .docx, .xlsx or .pptx, and the original is kept as the previous version.',
+      'AIA pay apps: Make PDF in the pay app editor, and pay apps can be emailed like invoices, with the PDF attached.',
+      'Documents show a thumbnail of each file\'s first page, and of photos.',
+      'Notification bell in the sidebar, next to who\'s online: @mentions in document comments, tasks and RFIs assigned to you, and a GC\'s answer to an RFI you sent or are assigned. RFIs have a new Assigned to. Clicking a notification opens what it\'s about.',
+      'Phone notifications: turn them on per device under Settings → User Preferences → Phone notifications (on iPhone, from the app added to the Home Screen). Each device can be tested and switched off there.',
+      'Viewer: Word, Excel and PowerPoint attachments in Mail open read-only in a new tab, and share links show documents in the same viewer, on phones too.',
+      'Sharing: any document can be shared (right-click → Share…), and several documents under one link from the selection bar. New links last 7, 30 (default) or 90 days, or never. A document\'s share window lists every link that opens it, where each can be copied, given a new expiry or stopped; a stopped or expired link says so. Links made before this version keep working with no expiry.',
+    ],
+  },
   {
     version: '3.3.0',
     date: 'September 25, 2026',
@@ -1049,6 +1071,12 @@ const PreferencesTab: React.FC = () => {
         </div>
       </div>
 
+      {/* Phone notifications (ONLYOFFICE Phase 5) */}
+      <PhoneNotifications />
+
+      {/* My signatures (ONLYOFFICE Phase 3) */}
+      <MySignatures />
+
       {/* Change Password */}
       <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
         <div className="p-6 border-b border-edge">
@@ -1750,13 +1778,13 @@ const DocumentTypesCard: React.FC = () => {
 // Kept as a value so a ?tab= param can be validated against it before it is
 // trusted to select a tab.
 const TAB_IDS = [
-  'preferences', 'takeoff-templates', 'general', 'mail', 'storage', 'backup', 'users', 'aia-template', 'changelog',
+  'preferences', 'takeoff-templates', 'general', 'mail', 'storage', 'backup', 'document-editor', 'document-templates', 'users', 'aia-template', 'changelog',
 ] as const;
 type TabId = (typeof TAB_IDS)[number];
 const isTabId = (v: string | null): v is TabId => !!v && (TAB_IDS as readonly string[]).includes(v);
 // Kept alongside TAB_IDS so the two-way ?tab= derivation below can validate
 // an admin-only tab without waiting on the tabs array built later in render.
-const ADMIN_ONLY_TAB_IDS = new Set<TabId>(['general', 'storage', 'backup', 'aia-template', 'users']);
+const ADMIN_ONLY_TAB_IDS = new Set<TabId>(['general', 'storage', 'backup', 'document-editor', 'document-templates', 'aia-template', 'users']);
 
 export const Settings: React.FC = () => {
   const { toast } = useToast();
@@ -1863,6 +1891,8 @@ export const Settings: React.FC = () => {
     { id: 'mail',        label: 'Mail',              icon: <Mail size={18} /> },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
     { id: 'backup',      label: 'Backup',            icon: <DatabaseBackup size={18} />, adminOnly: true },
+    { id: 'document-editor', label: 'Document Editor', icon: <FileText size={18} />, adminOnly: true },
+    { id: 'document-templates', label: 'Document Templates', icon: <FilePlus2 size={18} />, adminOnly: true },
     { id: 'aia-template', label: 'AIA Template',     icon: <FileSpreadsheet size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
     { id: 'changelog',   label: 'Changelog',         icon: <History size={18} /> },
@@ -2076,6 +2106,10 @@ export const Settings: React.FC = () => {
             {activeTab === 'storage' && isAdmin && <StorageTab />}
 
             {activeTab === 'backup' && isAdmin && <BackupTab />}
+
+            {activeTab === 'document-editor' && isAdmin && <DocumentEditorTab />}
+
+            {activeTab === 'document-templates' && isAdmin && <DocumentTemplatesTab />}
 
             {activeTab === 'aia-template' && isAdmin && <AiaTemplateTab />}
 

@@ -11,8 +11,13 @@ import { useLiveQuery } from './useLiveQuery';
 // null when there's no file yet (nothing to be "up to date"); true when
 // there's no updatedAt to compare against (nothing has changed since — the
 // file is trivially current).
+// A document edited in the Document Editor counts as current until the record
+// changes after the edit: the edit (a signature, a note) is deliberate, so Send
+// mails the edited copy. A restored older version never counts as current: its
+// bytes are older than the record, whatever the restore's own date says.
 export const isUpToDate = (file: GeneratedDoc | null, updatedAt: number | null | undefined): boolean | null => {
   if (!file) return null;
+  if (file.versionOrigin === 'restore') return false;
   if (updatedAt == null) return true;
   return file.createdAt >= updatedAt;
 };

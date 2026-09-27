@@ -1,0 +1,1168 @@
+# ONLYOFFICE Document Editing — Progress Checklist
+
+**Branch:** `onlyoffice` (cut from `testing` at `09fe9a1`). All work for this
+project was committed and pushed to `onlyoffice`. **Done: merged into `testing`
+on 2026-09-27** (a fast-forward to `fad80a8`) after Nathan's full walkthrough,
+released as 4.0.0.
+
+**Goal:** replace the in-app PDF editor (`src/pages/PdfEditor.tsx`) and
+spreadsheet editor (`src/pages/SpreadsheetEditor.tsx` + the Fortune Sheet
+live-sync stack) with ONLYOFFICE Docs Community Edition, running as a second
+container next to the app, and build the extras agreed below on top of it.
+
+## How to use this file (for AI agents)
+
+- This file is the **single source of truth** for progress on the ONLYOFFICE
+  project. Read it at the start of any session on the `onlyoffice` branch.
+- The **Decisions** section records what Nathan chose during planning. Don't
+  reopen a decision without asking him; if something turns out to be
+  impossible, stop and ask.
+- Work phase by phase, top to bottom. Items within a phase can be reordered.
+- Mark an item `[x]` **only with evidence** (tests passing; for UI, a Playwright
+  or manual check), and append the commit hash: `[x] … (`abc1234`)`.
+- Update this file **in the same commit** as the work it describes.
+- Statuses: `[ ]` not started · `[~]` in progress (note what remains) ·
+  `[x]` done with hash · `[-]` dropped (say why).
+- Items marked **(Nathan)** are things only Nathan can do (server, DNS,
+  testing). Don't mark them done yourself; ask him.
+
+---
+
+## Decisions (planning Q&A with Nathan, 2026-09-25)
+
+| Topic | Decision |
+|---|---|
+| Edition | ONLYOFFICE Docs **Community Edition** (free, AGPL v3). **Phones are view-only**, which is accepted. |
+| Hosting | Same Unraid server as the app, as another container. |
+| Public access | Cloudflare → Nginx Proxy Manager → containers. ONLYOFFICE gets **its own subdomain** (e.g. `docs.<domain>`). |
+| Old editors | **Replaced outright** on this branch. No fallback switch. |
+| Save → versions | **One version per editing session.** The first save in a session keeps the old copy as a version; later saves in that session overwrite in place. |
+| Generated documents (invoices, pay apps, proposals, RFIs, daily reports, change orders) | Editable. An edit becomes a **new version**, and the generated file stays in history. **Regenerating always makes a new version.** The "new version or replace?" prompt goes away. |
+| Deleting versions | New option to delete **older** versions. Allowed for **admins, plus whoever made that version**. |
+| Who can edit | Everyone, like today. Admin-only document kinds stay hidden from non-admins as now. |
+| Files from your computer | "Open from computer" **uploads into a project** (pick project and document type), then opens. |
+| Names shown in the editor | **Usernames** (no full-name field). |
+| Notifications | New **notification bell in the sidebar, next to the user list** (`SidebarPresence`). Types: **@mentions**, **replies to my comments**, **tasks assigned to me**, **RFIs** (see next row). Bell only, no email. **Update 2026-09-27: also phone push notifications**, turned on per device (Nathan). |
+| RFI notifications | **Both**: add an internal **"Assigned to"** on RFIs (notified when assigned and when the GC answers), and record **who sent** the RFI (also notified when the GC answers). |
+| Signatures | **Both** ONLYOFFICE's own signature feature and **profile signatures**. Users upload **several** signatures, **name each** one and pick a **default**. White background is removed on upload. |
+| Company stamps | Admin-uploaded stamps (APPROVED, REVIEWED, company seal…) **shared by everyone**. |
+| New blank files | **Word (.docx), Excel (.xlsx), PDF form.** No PowerPoint. |
+| "New document" button | **Project → Documents tab**, **main Documents page**, **command palette**. Not inside the editor. |
+| Templates | A **new admin-only "Document Templates" tab in Settings**. The **AIA Template tab stays where it is.** |
+| Old or unusual formats (.xls, .doc, .rtf, .odt, Pages, Numbers…) | **Convert on upload** to .docx/.xlsx, **keeping the original as the previous version**. |
+| AIA pay app PDF | A **"Make PDF" button** (not automatic). |
+| Editor add-ons | **Version history + restore**, **insert images/signatures/stamps from the app**, **save copy to project**. |
+| Extras | **Word/Excel mail attachments open in the viewer**, **thumbnails in Documents**, **share links open in the viewer**. |
+| Sharing | **Any document** can be shared. New links **expire (default 30 days**; choose 7/30/90/never). You can **see and turn off** a file's active links. **Existing links keep working with no expiry** and appear in that list. |
+| Testing | Nathan's **existing test container** moves to this branch. The ONLYOFFICE test subdomain is **`docs-test.<domain>`**. |
+| Merge | **One merge into `testing` when everything is done and tested.** |
+
+## Open questions (settle before the phase that needs them)
+
+- [x] **Existing share links** (Phase 7): **keep them working with no expiry.**
+  They show up in the new active-links list, where they can be turned off.
+  (Nathan, 2026-09-25)
+- [x] **Replies to my comments** (Phase 5): ONLYOFFICE tells the app about
+  @mentions (`onRequestSendNotify`) but has no event for replies. Plugin
+  comment events (`onAddComment` / `onChangeCommentData`) are documented only
+  for the Word editor, and only for comments added through the API. Do a short
+  test first. If replies can't be caught everywhere, fall back to: "Word files
+  only", or "replies that @mention you". Ask Nathan which.
+  - **Source check done (2026-09-26, sdkjs/web-apps/core tag v9.4.0.97):**
+    - A reply that @mentions someone already notifies them (it is a mention).
+    - A hidden plugin loaded from the app (`editorConfig.plugins.pluginsData`,
+      `"type": "system"`, works in Community Edition) gets
+      `onChangeCommentData` for every reply, live, but **only in Word and PDF**
+      (Excel and PowerPoint send no comment events to plugins). The data
+      names authors by display name only (usernames here, which are unique).
+    - Every saved file records who wrote each comment and reply (xlsx, pptx
+      and PDF by user id; docx by name), so the app can compare a save with
+      the version before it and find new replies **in all four formats**, but
+      only **when the file is saved** (about 10 s after everyone closes it, or
+      when someone clicks Save). Reply ids change on every save, so replies are
+      matched by parent comment, author, time and text.
+  - **Decision (Nathan, 2026-09-26): only replies that @mention someone.**
+    That is the mention notification (the link opens the thread), so nothing
+    more is built. Nathan also chose "everyone in the thread" for who hears
+    about a reply; that can't apply here, because ONLYOFFICE reports only who
+    is mentioned, never who else is in a thread. It would come back into play
+    only if reply detection is added later (at save, or the Word/PDF add-on).
+- [x] **Test subdomain name** for ONLYOFFICE on the test setup (Phase 0):
+  **`docs-test.<domain>`**. (Nathan, 2026-09-25)
+- [x] **ONLYOFFICE version to pin** (Phase 0): latest 9.4.x at the time. Never
+  `latest`. **`9.4.0.1`**, pinned in `docker-compose.yml` and the setup guide
+  since Phase 0; checked again on Docker Hub 2026-09-27: still the newest 9.4.x
+  tag (`9.4` and `9.4.0` are older builds), and what the test container ran
+  through every manual check.
+
+## Key technical facts (verified 2026-09-25)
+
+- **How it works:**
+  1. The app signs an editor config (JWT, shared secret).
+  2. The browser loads `<ONLYOFFICE>/web-apps/apps/api/documents/api.js` and
+     runs `new DocsAPI.DocEditor(el, config)`, which creates an iframe.
+  3. The Document Server downloads the file from `document.url`.
+  4. On save it POSTs to `editorConfig.callbackUrl`:
+     - `status` 2 = closed with changes (about 10s after the last user leaves)
+     - `status` 6 = forcesave (Save clicked with `customization.forcesave: true`)
+     - `status` 4 = closed, no changes
+     - `status` 3 / 7 = errors
+  5. The handler downloads `body.url`, stores it, and must reply `{"error":0}`.
+- **`document.key`** must change whenever the file's bytes change. Up to 128
+  chars of `0-9a-zA-Z-._=`. Use `${fileId}-v${versionNumber}`: the live file id
+  never changes (`server/files.ts:327` `saveNewVersion`), but the version
+  number does.
+- **Docker env:**
+  - `JWT_ENABLED` defaults to true.
+  - Set `JWT_SECRET` to the same value as the app's `ONLYOFFICE_JWT_SECRET`.
+  - Set `ALLOW_PRIVATE_IP_ADDRESS=true`, or the Document Server refuses to
+    fetch from the app over the Docker network.
+- **9.4 (May 2026):**
+  - The 20-open-documents limit is gone.
+  - It runs as a single process with no RabbitMQ and no database.
+  - Recommended: 4 GB RAM and 2 cores.
+  - The image is about 1.3 GB.
+  - The Document Server keeps no permanent data (only its cache), so nothing
+    new needs backing up.
+- **Paid-only features. Don't build on them:**
+  - Automation API (`createConnector`)
+  - `setReferenceData` (linked workbooks)
+  - `customization.logo` / `customer` / `features`
+  - Mobile editing
+  - `onRequestCompareFile` (old compare API; the new `onRequestSelectDocument`
+    is free)
+- **Security rules:**
+  - Never hand the user's 24h app JWT to the Document Server. Today
+    `/api/files/:id/content` accepts `?token=` (`server/routes.ts:1205`).
+    ONLYOFFICE gets its own **short-lived, single-file** download tokens.
+  - The callback route sits outside `authenticateToken` (`server.ts:226`) and
+    is verified with the ONLYOFFICE JWT.
+  - Register all new `/api/*` routes **before** the JSON 404 catch-all
+    (`server.ts:820`).
+- **Where it plugs in:**
+  - **Open in editor:** every open goes through `openTargetFor`
+    (`src/pages/documents/openTarget.ts:23`).
+  - **Editor routes:** `src/App.tsx:155-170`.
+  - **File routes:**
+    - `POST /api/files/:id` (`server/routes.ts:1159`)
+    - `GET …/content` (`:1205`)
+    - `POST …/versions` (`:1248`)
+  - **Versions:** `saveNewVersion` / `listVersions` (`server/files.ts:327`, `:375`).
+  - **Live refresh:** `broadcastChange({type:'file'…})`.
+  - **Presence:** only `/tools/sheets` reports a `fileId` today
+    (`src/utils/locationInfo.ts:24`).
+  - **Signatures:** `removeWhiteBackground` is at `src/pages/PdfEditor.tsx:88`.
+    Browser-saved signatures are in localStorage key `pdfEditorSignatures`
+    (`:137`).
+- **Keep** `src/utils/pdfOverlayTransform.ts`. The takeoff printout pipeline
+  uses it (`proposalGenerator.ts`). The takeoff canvas shares no code with the
+  PDF editor.
+- **Images:** `.github/workflows/docker.yml` builds images only for listed
+  branches. Its default tagging publishes
+  `ghcr.io/phlurblepoot/frugal-takeoff:<branch>`.
+
+---
+
+## Phase 0 — Infrastructure and test setup
+
+- [x] Add `onlyoffice` to the push branches in `.github/workflows/docker.yml`
+  so every push builds `ghcr.io/phlurblepoot/frugal-takeoff:onlyoffice`.
+  (`b66a8d1`; first image built green in Actions run #543)
+- [x] `docker-compose.yml`: an `onlyoffice` service pinned to
+  `onlyoffice/documentserver:9.4.0.1`, with `JWT_SECRET`,
+  `ALLOW_PRIVATE_IP_ADDRESS=true` and `restart: unless-stopped`. Both services
+  share compose's default network. (`b66a8d1`)
+- [x] App env vars, documented in `.env.example` and `docker-compose.yml`
+  (`b66a8d1`):
+  - `ONLYOFFICE_PUBLIC_URL`: what browsers use, e.g. `https://docs.<domain>`
+  - `ONLYOFFICE_INTERNAL_URL`: what the app uses for commands and
+    conversions. Defaults to the public URL.
+  - `APP_INTERNAL_URL`: what the Document Server uses to reach the app.
+    Defaults to `APP_PUBLIC_URL`.
+  - `ONLYOFFICE_JWT_SECRET`
+- [x] `docs/onlyoffice-setup.md`: Unraid containers and a shared custom
+  network, the Nginx Proxy Manager proxy host (WebSockets on, SSL), the
+  Cloudflare record, a `/healthcheck` quick check, and a troubleshooting table
+  keyed to the Settings messages. (`b66a8d1`)
+- [x] Admin **Settings → Document Editor** tab (`b66a8d1`):
+  - Server: `server/onlyoffice/` has `config.ts` (reads and validates env),
+    `tokens.ts` (short-lived single-purpose link tokens, key derived from the
+    app secret so they can never pass as logins) and `client.ts` (signed
+    `/command` and `/converter` calls, reused in Phase 1/4).
+  - Routes: `GET /api/onlyoffice/status` (admin) and the token-gated
+    `GET /api/onlyoffice/selftest/:id`.
+  - The checks:
+    - app → ONLYOFFICE via the command service's `version` call (also proves
+      the secret matches)
+    - ONLYOFFICE → app via a `txt → docx` conversion that downloads a test file
+      from `APP_INTERNAL_URL`
+    - browser → ONLYOFFICE by loading `api.js` (`src/utils/onlyofficeApi.ts`,
+      reused in Phase 1)
+  - Each failure names the setting to fix.
+  - Evidence:
+    - unit tests `server/onlyoffice/*.test.ts` (18, including a fake Document
+      Server that verifies both signatures and really downloads the test file),
+      `src/utils/onlyofficeApi.test.ts` and
+      `src/pages/settings/DocumentEditorTab.test.tsx`
+    - e2e `e2e/onlyoffice-settings.spec.ts`
+    - a manual browser run against a stand-in Document Server showing both the
+      failure messages (ECONNREFUSED) and three **Working** checks
+    - full unit suite 3227/3227 (270 files)
+    - full e2e suite: 102 passed, 1 skipped (the conditional fresh-install
+      restore spec, skipped before this work too)
+- [x] **(Nathan)** Check the Unraid server has about 4 GB of RAM to spare. (2026-09-25)
+- [x] **(Nathan)** Create the test subdomain `docs-test.<domain>` in Cloudflare
+  and Nginx Proxy Manager (guide §5). (2026-09-25)
+- [x] **(Nathan)** Start the ONLYOFFICE test container. Point the existing test
+  app container at the `:onlyoffice` image with the four variables (guide §4).
+  (2026-09-25)
+- [x] **(Nathan)** Settings → Document Editor on the test app shows three
+  **Working** checks against the real ONLYOFFICE. (2026-09-25)
+
+## Phase 1 — Core editor (replaces the old editors)
+
+**Server** (`server/onlyoffice/`), all in `5b40b46`:
+- [x] Config builder (`editorConfig.ts`):
+  - file type → `documentType` (pdf / word / cell / slide), from the shared
+    table `src/utils/officeFormats.ts`
+  - `key` = `${fileId}-v${versionNumber}-${sha256[0..12]}`. The hash covers an
+    "overwrite" regenerate, which resets the version number to 1.
+  - user = `{ id, name: username }`
+  - `permissions`: edit, comment, review (track changes) and fill forms when
+    editing
+  - `customization.forcesave: true` and a Close button
+  - `uiTheme` follows the app's light/dark theme at open
+  - signed with the shared JWT secret
+  - titles always carry the extension (generated documents often don't)
+- [x] `POST /api/onlyoffice/config/:fileId` (signed-in users):
+  - returns the signed config
+  - phones get `type: "mobile"`, `mode: "view"`; legacy formats and old
+    versions also open view-only
+  - admin-only kinds are hidden from non-admins, as in Documents
+  - error codes: `not-configured` / `unsupported` / `onlyoffice-unreachable`
+- [x] `GET /api/onlyoffice/file/:fileId?t=`: ONLYOFFICE-only download with an
+  8-hour single-file link token.
+- [x] `POST /api/onlyoffice/callback/:fileId`:
+  - verifies ONLYOFFICE's signature (Bearer header by default, or `token` in
+    the body) and trusts only the signed fields
+  - checks the key belongs to this file
+  - saves on 2/3/6/7, as ONLYOFFICE's reference handler does; 3/7 are logged
+  - ends the session on 2/3/4
+  - saves for a file are applied one at a time
+  - downloads over `ONLYOFFICE_INTERNAL_URL` first
+  - replies `{"error":1}` on failure, so ONLYOFFICE keeps the edits and tells
+    the editors
+  - has its own 10 MB body parser
+- [x] Version rule, via `editor_sessions` (migration 37):
+  - the first save archives the pre-session bytes
+  - later saves overwrite in place only while the live file is still exactly
+    what this session wrote (version and hash); otherwise a new version
+  - identical bytes add no version
+  - everyone who opens the file during a session gets that session's key
+  - a session ONLYOFFICE no longer has (checked with the command service's
+    `info`) is dropped
+- [x] Migration 37: `files.createdBy`, set on upload, new-version upload,
+  regenerate and editor saves. Archived versions keep their author.
+  `replaceLiveContent` updates size and hash on in-place saves.
+- [x] `broadcastChange` on every save, so Documents refreshes live.
+
+**Client** (`330802e`):
+- [x] `src/pages/DocumentEditor.tsx` at `/tools/edit?fileId=`:
+  - loads `api.js` from the public URL the server returns
+  - mounts the editor into a plain placeholder node
+  - calls `destroyEditor` on unmount
+  - Close goes back
+  - errors (not set up, unreachable, `api.js` won't load, unsupported, not
+    found) get a clear message, a Settings link for admins ("ask an admin" for
+    others) and **Download instead**
+  - the sidebar collapses to the rail while a file is open, like the canvas
+  - renders nothing in PageTransition's outgoing copy (`useIsPresent`): that
+    wrapper briefly renders a newly entered route a second time, which started
+    ONLYOFFICE twice on every in-app "Open" and dropped a dialog opened in that
+    first moment. The e2e test asserts one config request. (`051352f`)
+- [x] `/tools/pdf`, `/tools/sheets`, `/pdf-editor` and `/spreadsheet-editor`
+  redirect to `/tools/edit`, keeping `fileId`.
+- [x] `openTargetFor` sends every office format to `/tools/edit`:
+  - known extension first, then mime
+  - `kindFromMime` maps Word, PowerPoint and OpenDocument files to `document`
+  - `MimeIcon` has Word, Excel and PowerPoint glyphs
+- [x] File pickers get an `office` accept category (`FilePickerModal`,
+  `AddFilesButton`, `useDropZone`). The preview modal's "Open in editor" now
+  opens Word/PowerPoint too; the preview itself stays a generic card for them.
+- [x] Sidebar and command palette: one **Document Editor** entry replaces "PDF
+  Editor" and "Spreadsheet". The landing page lists recently opened files
+  (client-side, like recent projects), plus **Open from Documents** and **Open
+  from computer**.
+- [x] "Open from computer" (`OpenFromComputerModal`):
+  - pick an active project (required) and a type (Document / Spreadsheet /
+    Other / custom types)
+  - uploads with the project's customer, then opens the file
+  - turns away non-editor files before uploading
+- [x] Presence: `locationInfo` reports `fileId` for `/tools/edit`, so the
+  Documents "being edited" dots work for every file type; the presence label is
+  "Document editor".
+
+**Remove the old editors** (`330802e`):
+- [x] Moved `removeWhiteBackground` into `src/utils/removeWhiteBackground.ts`,
+  with its pixel rule split out and unit-tested.
+- [x] Deleted `PdfEditor.tsx` and `SpreadsheetEditor.tsx` (and their tests).
+- [x] Deleted `src/utils/sheetBridge.ts` (and its tests).
+- [x] Deleted `server/realtime/sheetFlush.ts` and `sheetSessions.ts` (and their
+  tests, and `registerRealtime.sheets.test.ts`).
+- [x] Removed the `sheet-*` socket events, sheet rooms and last-leave flush from
+  `registerRealtime.ts`, and their client helpers and tests in
+  `CollaborationContext.tsx`.
+- [x] `server.ts`:
+  - no sheet store or flush engine
+  - shutdown now only stops mail sync
+  - the socket buffer is back to socket.io's default (the 30 MB limit existed
+    only for sheet state)
+- [x] Removed the `sheetStore.clearSession` hooks in `server/routes.ts`.
+- [x] Removed the drafts API (routes and client helpers), plus the now-unused
+  client `saveFileVersion`. The `POST /api/files/:id/versions` route stays.
+- [x] Deleted `e2e/sheets-editor.spec.ts`, `e2e/collab-sheets.spec.ts` and the
+  `seedSpreadsheetFile` fixture. Dropped `SHEET_FLUSH_INTERVAL_MS` from the
+  Playwright server command.
+- [x] Uninstalled `@fortune-sheet/react`. `xlsx` and `exceljs` stay: the AIA
+  export, SOV import, takeoff export and preview use them.
+- [x] Left the old `sheet_sessions`, `sheet_ops` and `drafts` tables in place,
+  unused. The project-delete cascade and the regenerate path still clear old
+  `drafts` rows. Dropping them is in "Later".
+
+**Tests:**
+- [x] Unit tests:
+  - `server/onlyoffice/editorRoutes.test.ts` (21, against a fake Document
+    Server that signs callbacks and serves saves): config contents and
+    signature; file-link scope; view-only cases; admin-only and unsupported
+    files; session joining; dead-session recovery; unreachable ONLYOFFICE;
+    unsigned, wrong-secret and wrong-file callbacks; the one-version-per-session
+    rule; an outside change mid-session → new version; unchanged bytes;
+    status 4; body-token form; internal-then-given download; failed download →
+    `{"error":1}`; status 3; deleted file; format change; back-to-back saves
+  - plus `files.test.ts` (createdBy, `replaceLiveContent`), migration 37,
+    `officeFormats`, `openTarget`, `DocumentEditor.test.tsx` (fake DocsAPI:
+    config passthrough, teardown, phone, Close, every error state, landing),
+    `OpenFromComputerModal.test.tsx`, `removeWhiteBackground`
+  - full unit suite 3174/3174 (268 files)
+- [x] E2E, `e2e/document-editor.spec.ts`, against the unconfigured e2e server
+  (instead of a stubbed `api.js`):
+  - the not-set-up error with its Settings link and a working download
+  - old-link redirects
+  - sidebar → landing
+  - "Open from computer" filing the upload into a project
+  - `e2e/documents.spec.ts` now expects `/tools/edit`
+  - full e2e suite at `051352f`: 102 passed, 1 skipped (a conditional spec,
+    skipped before this work too)
+  - an earlier full run that overlapped a smoke test found the Settings-spec
+    name clash and the transition double-mount, both fixed in `051352f`
+- [x] Manual run against a stand-in Document Server over real HTTP:
+  - opened from Documents → `/tools/edit` with a word/edit config
+  - the stand-in downloaded the file through its link
+  - Save → version 2; second Save → same version 2 overwritten; close →
+    overwritten and session ended; the next open got a new key
+  - the page fills the screen beside the rail
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  - edit and save a PDF, an .xlsx and a .docx
+  - two users editing the same file
+  - phone view-only
+  - Documents shows the new version after closing
+
+  (Nathan, 2026-09-26: "tested it all, everything works")
+
+## Phase 2 — Versions and generated documents
+
+- [x] Regenerate always creates a new version. Remove the
+  `VersionOrOverwriteDialog` prompt from the `DocumentActionsBar` regenerate
+  paths, and stop sending `mode=overwrite` for generated documents.
+  - The dialog and its test are deleted. The server's overwrite mode
+    (`overwriteLive`, `PutOpts.mode`) is gone too, so an old client asking
+    for it still gets a new version.
+  - The toast after a regenerate says the previous version is kept.
+  - Archived versions now keep the date their bytes were made, not the date
+    they were archived (the history showed every version at the time of the
+    next one).
+- [x] Update `useGeneratedDocument` / `DocumentStatusChip` so an ONLYOFFICE edit
+  reads correctly ("edited after generating").
+  - Editor saves stamp `files.versionOrigin = 'editor'`; a restore stamps
+    `'restore'`; an upload or generate clears it. `/api/documents/by-source`
+    returns it.
+  - Chip: "PDF edited" (blue), or "PDF edited, out of date" once the record
+    changes after the edit; "Earlier PDF restored" (amber). Tooltips explain.
+  - An edited document counts as current until the record changes after the
+    edit, so Send mails the edited copy (the edit is deliberate, e.g. a
+    signature). A restored older version never counts as current, so Send
+    rebuilds.
+- [x] Delete older versions: `DELETE /api/files/:id/versions/:versionId`.
+  - Allowed for admins, or the version's `createdBy`. Old versions with no
+    `createdBy` are admin-only.
+  - The live version can't be deleted this way.
+  - Add a trash button in the Documents version history list, with a confirm.
+  - The Documents version list (`src/pages/documents/VersionHistory.tsx`) also
+    shows who made each version, an "edited"/"restored" tag, download (named
+    `Scope (v2).docx`) and **restore** with a confirm.
+- [x] In-editor version history:
+  - `onRequestHistory` lists `/api/files/:id/versions`
+  - `onRequestHistoryData` returns a signed per-version URL
+  - `onRequestRestore` restores **as a new version**, so nothing is lost
+  - Built as: `GET /api/onlyoffice/history/:fileId` (the list, with authors
+    and change logs; the current version carries the open session's key) and
+    `GET /api/onlyoffice/history/:fileId/:version` (signed `setHistoryData`,
+    with `previous` and `changesUrl` when a log was kept). Leaving the history
+    view restarts the editor, as ONLYOFFICE requires. Restore is only offered
+    where the file opens for editing.
+  - Restore is `POST /api/files/:id/restore` (Documents page and editor):
+    - No editing session: the version's bytes become a new version on top.
+    - Open in the editor: only the person restoring, from inside that editor,
+      alone in it, may restore. Anyone else gets "X is editing this file";
+      the Documents page tells you to use the editor's Version History.
+    - Then ONLYOFFICE is asked to save what is open (command `forcesave`), and
+      the restore waits for that save (30 s, else nothing changes). So typing
+      that hadn't been saved yet is kept as its own version.
+    - The session is then retired (`editor_superseded_sessions`); the next
+      open starts fresh on the restored file. ONLYOFFICE's late closing save
+      for the old session is dropped unless it holds changes made after the
+      restore (by the change dates it sends; by the bytes when it sends none).
+- [x] Store the callback's `history` / `changesurl` per version, so version
+  history can highlight what changed. (server, 2026-09-26)
+  - Kept in `editor_changes` (migration 38) when a session closes (status 2
+    or 3), against the version that session made. Only when the session made
+    exactly one version on top of what it opened; otherwise ONLYOFFICE would
+    highlight against the wrong earlier version. The zip is downloaded and
+    stored, since ONLYOFFICE's link expires.
+  - The editor frame downloads the zip itself, cross-origin:
+    `GET /api/onlyoffice/changes/:fileId/:version?t=` answers with
+    `Access-Control-Allow-Origin` set to ONLYOFFICE's public address.
+- [x] Tests: regenerate → new version; delete-version permissions; restore
+  creates a version.
+  - `server/onlyoffice/historyRoutes.test.ts` (21, fake Document Server that
+    answers `info` and `forcesave` and posts the save back): the list, signed
+    data, change-log CORS and link scope, admin-only files, restore by number
+    and by row id, current/other-file refusals, extension follows the bytes,
+    others editing → 409, Documents-page restore while open → 409, stale
+    session ignored, save-first-then-restore, nothing unsaved, save timeout →
+    nothing changes, late closing save dropped / kept by date / judged by
+    bytes, `changeTimes`
+  - `editorRoutes.test.ts` +6: users tracked, `versionOrigin`, change log
+    stored (also when the close brings no new bytes), not stored when the
+    session made two versions, a failed log download never fails the save
+  - `files.test.ts`: regenerate always versions (even with `mode=overwrite`),
+    archived dates, delete-version permissions (author, non-author, admin,
+    no author, live row, other file)
+  - client: `VersionHistory.test.tsx` (7), `DocumentEditor.test.tsx` +7
+    (history, data, close → restart, restore, restore refused, view-only has
+    no Restore), `DocumentActionsBar`, `useGeneratedDocument`, proposal and
+    punch tests updated for the missing prompt
+  - full unit suite 3215/3215 (269 files)
+  - e2e: `document-actions.spec.ts` and `mail-item-send.spec.ts` regenerate
+    without a prompt; `documents.spec.ts` new "version history: restore …
+    delete" test
+  - full e2e suite: 102 passed, 1 skipped (the same conditional spec), 1
+    failed: `mail-item-send.spec.ts` still clicked the removed prompt. Fixed
+    in the same commit as this line; that spec then passed (2/2)
+  - smoke against the real server and a stand-in Document Server over HTTP
+    (13 checks): session → one "edited" version with its log; history list and
+    signed data; the log downloads cross-origin; restore blocked from the
+    Documents page while open; in-editor restore kept the unsaved typing as
+    v3 and restored v1 as v4; the old session's late close was dropped; the
+    next open got a fresh key; blocked while someone else edits; delete v2;
+    the live version can't be deleted
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  (Nathan, 2026-09-26: "tested it all, everything works")
+  - edit a document, close it, then File → Version History: the versions show
+    with names, and the edited one highlights its changes
+  - restore an older version from the editor, and from the Documents page
+    (with the file closed)
+  - regenerate an invoice PDF: no prompt, a new version appears; delete an old
+    one from Documents
+  - edit a generated PDF in the editor: its chip says "PDF edited"
+
+## Phase 3 — New documents, templates, signatures and stamps
+
+- [x] Bundle ONLYOFFICE's blank `new.docx`, `new.xlsx` and `new.pdf` (form)
+  from `ONLYOFFICE/document-templates` (Apache-2.0; keep the license notice).
+  - The en-US files (Letter paper), unchanged, in
+    `server/documentLibrary/blank/` with `LICENSE` and a `NOTICE.md` naming
+    the source commit.
+- [x] `POST /api/documents/new`: blank or template, name, projectId, kind. It
+  copies into storage with `createdBy` and returns the fileId.
+  - `server/documentLibrary.ts` + `documentLibraryRoutes.ts`. The project is
+    required except for company documents; the kind must be an upload kind
+    (not photo); a template must match the type; the name gets its extension.
+  - Templates, company stamps and signatures are ordinary files with three
+    new system kinds (`document-template`, `company-stamp`, `signature`):
+    hidden from Documents, kept by the Storage orphan cleanup, versions and
+    backups work unchanged. Templates open in the editor for admins only.
+- [x] "New document" dialog:
+  - type: Word / Excel / PDF form
+  - start from: Blank or a template of that type
+  - name
+  - project: preselected inside a project, required on the main page
+  - document type
+  - then opens the editor
+  - (`src/pages/documents/NewDocumentModal.tsx`. A company document needs no
+    project. Archived projects aren't offered.)
+- [x] Buttons on **Project → Documents** and the **main Documents page**.
+  Command-palette actions "New Word document", "New spreadsheet" and "New PDF
+  form".
+  - Project → Documents is the Documents page filtered to that project, so it
+    is one "New document" button; filtered to one project, that project is
+    preselected. The palette opens it with `?new=docx|xlsx|pdf`, keeping the
+    project you are in (or the Documents filters you came from).
+- [x] Settings → new admin-only **Document Templates** tab (the AIA Template tab
+  stays):
+  - add, rename and delete templates
+  - templates open in the editor for changes
+  - stored as a system file kind so they don't show up in project Documents
+- [x] Offer `docs/Template.docx` (letterhead) as a one-click starter template.
+  ("Add company letterhead", shown until a `Letterhead.docx` template exists.)
+- [x] Profile signatures under Settings → User Preferences → "My signatures":
+  - upload several
+  - name each one
+  - pick a default
+  - white background removed on upload
+  - Private to their owner: the list, changes and the bytes (also blocked on
+    the login-free `/api/images/:id/raw` route). Removed with their user.
+- [x] One-time import of any browser-saved `pdfEditorSignatures` from the old
+  editor. (When My signatures first opens in that browser; a signature that
+  fails to upload stays for the next try.)
+- [x] Company stamps: managed in the Document Templates tab (admins upload, with
+  the same background removal). Everyone can insert them.
+- [x] Editor **Insert → Image → From storage** (`onRequestInsertImage`) opens a
+  picker with: My signatures (default first), Company stamps, Project photos,
+  and other images in Documents. It inserts through signed URLs.
+  - `POST /api/onlyoffice/insert-image/:fileId` checks each pick (someone
+    else's signature reads as missing; admin-only kinds for admins) and signs
+    the `insertImage` data with link-token URLs ONLYOFFICE downloads over the
+    Docker network. WebP/HEIC are skipped with a message (the editor takes
+    PNG, JPEG, GIF, BMP, TIFF). Offered only where the file opens for editing.
+  - "Photos and images in Documents…" is the shared file picker (images only),
+    starting on the document's project; clearing the filter reaches the rest.
+- [x] **Save copy to project** (`onRequestSaveAs`): the copy (e.g. a PDF of a
+  Word letter) is saved as a new file in the same project's Documents.
+  - `POST /api/onlyoffice/save-copy/:fileId` only downloads links on
+    ONLYOFFICE's own public or internal address (no fetching arbitrary URLs
+    for the browser). Same project and customer; a spreadsheet copy is a
+    spreadsheet; a company document's copy stays a company document.
+- [x] **(Nathan)** Check ONLYOFFICE's own signature fields work (no code
+  expected): in a new PDF form, add a signature field and sign it.
+  (Nathan, 2026-09-26: "tested it all, everything works")
+- [x] Tests: new-document route, template kinds hidden from project lists,
+  signature CRUD and permissions.
+  - `server/documentLibrary.test.ts` (15): blanks for all three types (bytes
+    equal the bundled files), from a template (latest version, type must
+    match, missing template), project required except company documents,
+    kind rules, defaults; template add/rename (extension kept)/delete with
+    versions, admin-only, format check, letterhead once, hidden from
+    Documents, kept by orphan cleanup; stamps admin-only, images only;
+    signatures several/named/default/fallback, private (list, change, bytes,
+    and the login-free image route), removed with their user
+  - `extrasRoutes.test.ts` (10): signed insert links that serve the image,
+    someone else's signature refused, WebP skipped, command kept, not set
+    up, admin-only documents; save copy filed with project/customer,
+    spreadsheet and company-document copies, non-ONLYOFFICE links refused
+    without fetching, failed download and unknown format save nothing
+  - `editorRoutes.test.ts`: templates open in the editor for admins only
+  - client: `NewDocumentModal` (5), `DocumentTemplatesTab` (6),
+    `MySignatures` (4, with the old-editor import), `InsertImagePicker` (2),
+    `DocumentEditor` +4 (picker with the default first, stamps, skipped
+    images, view-only has no insert, save copy), `CommandPalette` +2,
+    `dataUrlToBlob`
+  - e2e `e2e/document-library.spec.ts` (5): New document → editor with the
+    file filed right; palette → dialog on the type with the project
+    preselected; letterhead once, upload, rename, start from a template (bytes
+    copied); a stamp with its cleared preview; old-editor signature import,
+    add, make default
+  - full unit suite 3248/3248; full e2e suite 108 passed, 1 skipped (the same
+    conditional spec), 0 failed
+  - smoke against the real server and a stand-in Document Server over HTTP
+    (15 checks): letterhead → new document → ONLYOFFICE downloads it; a blank
+    PDF form is a PDF; the signature isn't on the login-free route; the stand-in
+    downloaded both signed image links; Save Copy as filed the converted PDF
+    in the project; a non-ONLYOFFICE copy link refused; Documents shows the new
+    files and not the library; orphan cleanup counts nothing
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  (Nathan, 2026-09-26: "tested it all, everything works")
+  - Documents → New document: a Word, an Excel and a PDF form, blank and from
+    a template; each opens in the editor and saves
+  - Settings → Document Templates: add the letterhead, open it in the editor,
+    change it, then start a new document from it
+  - add a company stamp and two signatures (one default); in the editor,
+    Insert → Image → From storage inserts each, and a project photo
+  - File → Save Copy as → PDF lands in the project's Documents
+
+## Phase 4 — Conversions
+
+- [x] Conversion API client (`/converter`, JWT, async polling) in
+  `server/onlyoffice/`.
+  - `convert()` asks with `async: true` and re-sends the same request until
+    `endConvert`, within an overall time limit; ONLYOFFICE's error codes
+    become plain reasons (password-protected, too large, can't read it…).
+    Options: `region`, `spreadsheetLayout`, `thumbnail`.
+  - `services.ts` makes the conversion and thumbnail services once at startup
+    and shares them with the upload route and the editor routes.
+- [x] **Old formats on upload** (.xls, .doc, .rtf, .odt, .ods, .pages,
+  .numbers…):
+  - the original is saved first
+  - the converted .docx/.xlsx is saved as a new version with the extension
+    updated
+  - if conversion fails, keep the original and show a warning
+  - Done in `POST /api/files/:id` itself, so every upload path gets it
+    (Documents upload, file pickers, "Open from computer"), for people's own
+    uploads only (not generated documents). Presentations (.ppt, .odp,
+    Keynote) become .pptx too. The list lives in `src/utils/officeFormats.ts`
+    so "Open from computer" accepts those files as well.
+  - The converted version is stamped `versionOrigin = 'convert'`; the
+    Documents version list tags it "converted" once a later version sits on
+    top of it. The upload shows a notice either way:
+    "converted, the original is kept as version 1", or "Kept as .xls: <why>"
+    (including when the editor isn't set up).
+- [x] **AIA pay app "Make PDF" button**:
+  - converts xlsx → pdf with `region: en-US`
+  - saved as a PDF linked to the pay app
+  - offered as an attachment when emailing the pay app
+  - In the pay app editor, beside the document bar. It saves unsaved changes
+    and regenerates a missing or out-of-date workbook first, so the PDF always
+    matches the pay app. Stored as kind `payapp-pdf` (admin-only, like the
+    workbook), a new version each time.
+  - Layout (Nathan, 2026-09-26): landscape; both sheets; every column fitted
+    to the page width; the G702 all on one page; the G703 over as many pages
+    as its rows need, with the change orders starting on a new page.
+    - The workbook carries it (built-in and admin-template alike): G702
+      fit 1 wide × 1 tall, G703 fit 1 wide × automatic height, a manual page
+      break before the change-order section, landscape Letter. Excel prints
+      the same way.
+    - The conversion sends `spreadsheetLayout: { orientation: 'landscape',
+      ignorePrintArea: false }`. Any `spreadsheetLayout` makes ONLYOFFICE
+      print the entire workbook; without one it printed only the active sheet
+      (the first version's PDF had the G702 but no G703). Fit and scale are
+      left unset so each sheet's own settings and page breaks apply (checked
+      in ONLYOFFICE's source: sdkjs `asc_nativePrint`, server
+      `converterservice.js`; page breaks count when the height is automatic).
+    - Workbooks generated before this change lack the layout, so Make PDF
+      rebuilds any workbook older than 2026-09-26 14:30 UTC once.
+  - Pay apps had no Email before. They now have one like the other records
+    (`POST /api/aia/pay-apps/:id/send`, admin-only, same recipients as
+    invoices); the PDF is pre-attached when it matches the pay app.
+- [x] **Thumbnails in Documents**:
+  - first-page PNG (`thumbnail.first`), cached per file version (sha256)
+  - generated in the background after upload or save
+  - shown in the Documents list and grid, with an icon fallback
+  - `server/onlyoffice/thumbnails.ts`: `<dataDir>/thumbnails/<sha256>.png`,
+    320 px, one at a time; also made on demand when the list asks (202 while
+    pending); a file ONLYOFFICE can't render isn't retried for an hour.
+    Swept of stale pictures after start and daily; not backed up (rebuilt on
+    demand).
+  - Shown in the Documents table and the phone cards (loaded as rows scroll
+    into view), and in the hover card for Word/Excel files.
+- [x] **Photo thumbnails** (Nathan asked 2026-09-26; no ONLYOFFICE needed):
+  - `sharp` (new dependency, prebuilt libvips, nothing to add to the Docker
+    image) shrinks JPEG, PNG, WebP, GIF, TIFF and AVIF photos to a 480 px
+    WebP, upright by EXIF orientation, transparency kept, cached as
+    `<dataDir>/thumbnails/<sha256>.webp` and swept like the others. About
+    0.1 s for a 12-megapixel photo; two at a time; made on first ask and after
+    an upload.
+  - `GET /api/images/:id/thumb`: no login, like `/raw` (plain `<img>` tags),
+    never a signature. Anything it can't shrink (HEIC, which this sharp
+    build can't read; SVG; a broken file, not retried for an hour) redirects
+    to the original.
+  - Used by the photo tiles (issue/punch/task/RFI/CO/invoice/daily report
+    photos, the project page's Recent photos, proposal photos), the
+    Documents list and phone cards, and the hover card. Lightboxes and the
+    viewer still show the full photo.
+  - Tests: `server/onlyoffice/conversions.test.ts` +6 (WebP size, EXIF
+    rotation, transparency, fallbacks, signature 404, one job per photo,
+    after upload + sweep), `src/utils/photoFormats.test.ts` (2), `FileThumb`
+    +2, e2e `documents.spec.ts` (the photo row shows a loaded WebP).
+- [x] Tests: conversion client (mocked Document Server), upload conversion keeps
+  the original, thumbnail cache.
+  - `server/onlyoffice/conversions.test.ts` (13, fake converter and cache):
+    polling with the same request, error reasons, the time limit; which
+    formats convert; upload → v1 kept + v2 converted and renamed, failure
+    keeps the original with the reason, "not set up", modern formats and
+    generated documents untouched; pay app PDF (en-US, no forced layout, same
+    PDF back when nothing changed, a new version when it did, admin-only,
+    needs the workbook, failure stores nothing); thumbnails (202 then PNG,
+    new bytes → new thumbnail, none for images/admin-only/not set up, no
+    retry loop, made after upload, swept)
+  - `server/routes.test.ts`: pay app email with the workbook first and the
+    PDF along, linked to the pay app, admin-only
+  - client: `FileThumb` (4), `uploadConversion` (2), `AiaPayAppEditor` +3
+    (and the bar now has Email), `DocumentActionsBar` +1 (pre-attached files),
+    `OpenFromComputerModal` +1 (Pages accepted, notice shown)
+  - e2e `e2e/conversions.spec.ts` (2): an .xls upload on a server without
+    ONLYOFFICE is kept and the reason shown; the pay app editor has Email and
+    Make PDF, which generates the workbook, says ONLYOFFICE isn't set up, and
+    leaves the bar showing the new workbook (this found the bar not
+    refreshing; fixed)
+  - smoke against the real server and a stand-in Document Server (10
+    checks): .xls → .xlsx with the upload kept as v1, the stand-in converting
+    exactly the bytes it downloaded through the signed link (after answering
+    "still working" once); thumbnails 202 → PNG, also for the converted file;
+    pay app PDF en-US from the workbook, found by source, a second run with a
+    changed workbook → v2
+  - full unit suite 3289/3289; full e2e suite 110 passed, 1 skipped (the
+    same conditional spec), 0 failed
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  (Nathan, 2026-09-26: "tested it all, everything works", including the pay
+  app PDF layout and photo thumbnails)
+  - upload an .xls, a .doc and (if you have one) a Pages or Numbers file: each
+    becomes .xlsx/.docx with the original as version 1
+  - Documents shows first-page thumbnails for Word, Excel and PDF files
+  - a pay app: Make PDF, open it (US dates and money, pages set up right),
+    then Email: the workbook and the PDF are both attached
+  - the pay app PDF again after the layout fix: landscape, G702 on page one,
+    the G703 after it fitted to the width, and the change orders starting on
+    a new page (try one with enough lines to run past a page)
+  - photos: Documents rows and the photo tiles on an issue or punch item show
+    the photo (small and quick), turned the right way up; clicking still
+    opens the full-size photo
+
+## Phase 5 — Notification bell
+
+- [x] `notifications` table (id, userId, type, title, body, link, createdAt,
+  readAt) plus routes: list, mark read, mark all read.
+  - Migration 39 (also `actorUserId`, and the RFI columns below).
+    `server/notifications.ts` (`Notifier`): nobody is notified about their own
+    act or as a user that doesn't exist; links must be in-app paths; text is
+    clipped; read ones are pruned after 90 days and unread after a year (after
+    start and daily); a deleted user's go with them.
+  - `server/notificationRoutes.ts`: `GET /api/notifications` (newest 50 and
+    the unread count), `POST /api/notifications/:id/read`,
+    `POST /api/notifications/read-all`. Each person sees only their own.
+- [x] Push new notifications live over the existing socket.
+  - Every signed-in socket joins `user:<id>`; the `notification` event carries
+    a new one or "these (or all) were read", so other tabs and devices keep
+    in step. The client reloads the list on every reconnect.
+- [x] Bell in the sidebar **next to the user list** (`SidebarPresence`):
+  - unread badge
+  - panel listing notifications
+  - clicking one opens its link and marks it read
+  - works collapsed and expanded, and on mobile
+  - `src/components/shell/NotificationBell.tsx`, state in
+    `src/context/NotificationsContext.tsx`. Beside "N online" when expanded,
+    under it on the thin rail. Badge shows up to "9+"; the panel has "Mark all
+    read" and an explanation when empty. On phones the menu button shows a
+    red dot while anything is unread, and the panel spans the screen.
+  - Fixed 2026-09-27 (found by the Phase 7 e2e run): a list load that set
+    out before a live notification could answer after it and wipe it out
+    (badge back to 0, "Nothing yet") until the next reload. Only the newest
+    load counts now, and one overtaken by a live event loads again.
+    `NotificationBell` +2 (both fail without the fix).
+- [x] **@mentions** in document comments:
+  - `onRequestUsers` (`c: "mention"`) returns the app's users
+  - ONLYOFFICE keys mentions by email and users have none, so use a stable
+    per-user id address and map it back
+  - `onRequestSendNotify` creates a notification with a link that opens the
+    document at the comment (`onMakeActionLink` / `actionLink`)
+  - ONLYOFFICE shows the address under the name and types it into the comment
+    (`+maria@team.invalid`), so the address is made from the username rather
+    than the id, under the reserved `.invalid` domain (never deliverable);
+    ".2" is added if two usernames come out the same. Matched back to users
+    by lookup (`server/onlyoffice/mentionRoutes.ts`).
+  - Only people who can open the file are listed or notified (an admin-only
+    document: admins only). The link is `/tools/edit?fileId=…&comment=…`;
+    the config route passes the comment's action link on as
+    `editorConfig.actionLink`, which scrolls to it in Word, Excel and
+    PowerPoint (PDF just opens). A comment's "Get link" makes the same link.
+  - ONLYOFFICE has no mentions in its phone editor.
+- [x] **Replies to my comments**: settle the open question above first, then
+  build what's possible.
+  - Nathan chose "only replies that @mention" (see Open questions): a reply
+    that @mentions someone notifies them like any mention, and its link opens
+    that thread. Nothing else to build.
+- [x] **Tasks assigned to me**: notify on assign and reassign (`server/taskStore.ts`).
+  No notification when you assign yourself.
+  - In the task routes: on create with an assignee, and on a save that
+    changes it. The link opens the task (`/tasks?open=<id>`).
+- [x] **RFIs**:
+  - Add migration `rfis.assigneeUserId` and an "Assigned to" field on the RFI
+    form.
+  - Record `sentByUserId` when an RFI is sent.
+  - Notify the assignee when assigned.
+  - Notify the assignee and the sender when a GC answer is detected (mail
+    inbound hook).
+  - "Assigned to" is internal (not on the RFI PDF). A save from a client that
+    doesn't send the field leaves it alone. A deleted user is unassigned.
+  - The sender is whoever last emailed it (`applySendEffects`). The GC-answer
+    notice fires once per captured reply (retries and duplicates tell nobody
+    twice) and once per person when the sender is also the assignee. Links
+    open the RFI (`/project/<id>/rfis?open=<id>`).
+- [x] Tests: notification store and routes, and each trigger.
+  - `server/notifications.test.ts` (9): store rules (it never throws), routes, and the live push
+    over a real socket.io server (both of her tabs get it, nobody else does).
+  - `server/notificationTriggers.test.ts` (8): tasks (assign, self, reassign,
+    unchanged save), RFIs (assign, reassign, unassign, unknown user, field
+    left alone, sender recorded), mentions (address rules checked against
+    ONLYOFFICE's own mention pattern, who's listed, who's notified, admin-only
+    files, the link), and the config carrying the comment link, signed.
+  - `server/mail/inboundHooks.test.ts` +2: the GC answer tells assignee and
+    sender once.
+  - client: `NotificationBell` (6), `DocumentEditor` +5 (mention list, notify,
+    Get link, open at a comment, none when viewing), `RfiEditor` +3,
+    `editorLinks` (2).
+  - e2e `e2e/notifications.spec.ts` (4): a task assigned by someone else rings
+    the bell live and opens the task; an RFI opens from the bell with its
+    assignee shown; the phone dot, drawer bell and full-width panel; the bell
+    beside who's online, expanded and collapsed.
+  - smoke against the real server (8 checks): task and RFI assignments and a
+    mention arrive live on her socket; the mention list and address; the
+    link opens the editor config at the comment, signed; mark all read
+    reaches her other tabs; nobody else sees hers.
+  - full unit suite 3344/3344; full e2e suite 111 passed and 2 failed, both in
+    `e2e/document-library.spec.ts` because the e2e store is kept between runs
+    and those Phase 3 tests counted what an earlier run had added. They now
+    clear templates, stamps and signatures first, and pass twice in a row.
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE:
+  (Nathan, 2026-09-27: "all the notification tests worked")
+  - in a Word, an Excel and a PowerPoint file, add a comment and type "+" or
+    "@": the list shows teammates (not yourself); pick one and post
+  - the person mentioned gets the bell (live if they're signed in), and
+    clicking it opens the file at that comment
+  - assign someone a task and an RFI; they get the bell and it opens the item
+  - on a phone: the dot on the menu button, the bell in the drawer
+- [x] **Phone push notifications** (Nathan asked 2026-09-27; added to this
+  phase): everything the bell shows also pops up on the devices a person
+  turned it on for, even with the app closed.
+  - Standard Web Push, no outside accounts: `web-push` builds each message
+    (encrypted with the device's keys, signed with this server's VAPID key
+    pair, made once and kept in settings under the private `push.` prefix).
+    `server/push.ts` posts it with a 10 s limit, only ever to Google's,
+    Apple's, Mozilla's or Microsoft's push services (an allowlist: the address
+    comes from the browser). A device the service no longer knows (404/410)
+    is dropped. Contact for the push services: `PUSH_CONTACT`, else
+    `APP_PUBLIC_URL`.
+  - Migration 40 `push_subscriptions` (one row per device; the same browser
+    signing in as someone else moves to them). Routes in
+    `server/pushRoutes.ts`: config, devices, subscribe, unsubscribe, remove a
+    device, send a test. Deleting a user removes theirs.
+  - `notifier.onNew` pushes every new notification with the unread count, so
+    nobody is pushed about their own act either.
+  - The app is installable (needed for iPhone): `/manifest.webmanifest`
+    (named from Settings), icons in `public/icons` (made by
+    `scripts/app-icons.mjs`: a floor plan under a dimension line, white on
+    blue; also the browser tab icon now), and `public/sw.js`, which only shows
+    pushes and opens their links (no caching, so releases are never stale).
+    A tap brings an open app forward and goes to the link; otherwise it opens
+    the app there (`?fromNotification=`). Either way that notification is
+    marked read. The installed app's icon shows the unread count where the
+    phone supports it.
+  - **Settings → User Preferences → Phone notifications**
+    (`src/pages/settings/PhoneNotifications.tsx`): turn on/off for this
+    device, send a test, and the list of devices (switch off a lost one).
+    An iPhone Safari tab shows the Home Screen steps instead. The bell's
+    panel links there ("Get these on your phone…"). Setup notes:
+    `docs/onlyoffice-setup.md` §9.
+  - Tests: `server/push.test.ts` (11: key pair kept, push-service allowlist,
+    the message decrypted with the device's keys and the VAPID claims
+    checked, per-user sending, 410 forgets / 5xx counts as failed / network
+    errors never throw, device moves and removal, clipping, routes, manifest,
+    the bell pushing with the unread count); client: `push` (9: iPhone needs
+    the Home Screen, blocked/off/on, subscribe with the server key, start over
+    on a key change, off), `serviceWorker` (4: runs `public/sw.js`: shows the
+    push, badge, tap with the app open or closed, no outside links),
+    `PhoneNotifications` (6), `NotificationBell` +3 (tap handling, badge);
+    e2e `e2e/push-notifications.spec.ts` (3): manifest, icons and sw.js
+    served; the real service worker registers in Chromium; turning on
+    registers the device with the server (only the browser's call to Google
+    stood in for) and turning off removes it; the bell links to the section.
+- [x] **(Nathan)** Phone notifications on real phones (with the Phase 6 check):
+  (Nathan, 2026-09-27: "push notifications worked too")
+  - Android: Settings → User Preferences → Phone notifications → Turn on for
+    this device → Send a test; then have someone assign you a task with the
+    app closed, and tap the notification
+  - iPhone: in Safari, Share → Add to Home Screen, open from the icon, sign
+    in, turn it on, Send a test; the same assignment test; the number on the
+    app icon
+
+## Phase 6 — Viewers: mail attachments and share links
+
+- [x] **Mail attachments:** Word, Excel and PowerPoint attachments (and old
+  formats) open in the ONLYOFFICE viewer (`mode: view`) instead of downloading.
+  - They're served to the Document Server with a short-lived per-attachment
+    token.
+  - "Save to project" (`SaveAttachmentsModal`) stays.
+  - Change `src/pages/mail/AttachmentChips.tsx`, which currently opens only
+    PDFs and images inline.
+  - The chip opens `/tools/view?message=…&att=…&name=…`
+    (`src/pages/AttachmentViewer.tsx`) in a new tab, for any format ONLYOFFICE
+    reads except PDF (the type or, for a generic type, the name decides; .txt
+    and .csv too). PDFs and images still open in the browser, the rest
+    download. When the viewer can't open, the page says why and offers the
+    download.
+  - `POST /api/mail/messages/:id/attachments/:attId/viewer` (the message's
+    owner only) returns a signed view-only config
+    (`server/onlyoffice/viewers.ts`): no callback, nothing editable, key from
+    message + name + size (reopening uses ONLYOFFICE's cache), phones get the
+    phone viewer. Its download link is
+    `GET /api/mail/viewer-file/:id/:attId?t=…`, a link token for that one
+    attachment (`mailatt:<message>:<attachment>`) that lasts an hour; it
+    streams through the same provider path as a download (the attachment
+    streaming was shared out of the download route for this). Nothing is
+    stored.
+- [x] **Share links:** `/share/:id` opens the ONLYOFFICE embedded viewer
+  (`type: embedded`, view-only, anonymous) for any document type. This works on
+  phones.
+  - `GET /api/share/:shareId/viewer` (public, like the link): for a
+    single-file share of anything ONLYOFFICE reads (PDF printouts now; any
+    document once Phase 7 shares them). Anonymous "Guest", view only, no
+    Close button, its own document key (the editor's would join a live editing
+    session and show unsaved edits to anyone with the link).
+  - `/api/share/:id/info` now says `viewer: true|false`; `ShareView` shows the
+    viewer under its header (Download kept) and falls back to its own preview
+    (the PDF `<object>`, the image) when the viewer isn't set up or fails.
+    Page-set and image shares are unchanged.
+  - Shared building block: `src/components/OnlyofficeViewer.tsx`.
+- [x] Tests: attachment token scope; the share viewer config never grants edit.
+  - `server/onlyoffice/viewers.test.ts` (8): share viewer embedded, view only
+    (plain and signed config), Guest, own key, ONLYOFFICE can fetch exactly
+    the shared file, images/page sets/unknown shares/not set up; attachments
+    view only for the owner, fetchable by ONLYOFFICE, old format by name,
+    phone viewer, PDF refused, other people's mail 404, not set up; the link
+    opens that one attachment only (another attachment, another message, no
+    token, a login token, an expired token all refused) and lasts an hour.
+  - `server/mail/routes.test.ts` unchanged and passing after the streaming was
+    shared.
+  - client: `AttachmentViewer` (7: config, phone, download fallback, missing
+    link; the share page's viewer, fallback on failure, images kept),
+    `AttachmentChips` +1 (Word and an old .xls sent as a generic type open the
+    viewer in a new tab).
+  - e2e `e2e/viewers.spec.ts` (2): a Word attachment opens the viewer tab,
+    which (without ONLYOFFICE here) explains and downloads the right bytes; a
+    shared PDF keeps its own preview when the viewer isn't set up.
+  - smoke against the real server and the stand-in Document Server (9
+    checks): a seeded Word attachment opens view only and the stand-in
+    downloads exactly its bytes through the link, which won't open the other
+    attachment; an old .xls opens in the phone viewer; someone else's mail
+    404s; a shared PDF gets the embedded viewer (view only, own key, on a
+    phone) and the stand-in downloads it; an image share keeps its preview.
+  - full unit suite 3393/3393; full e2e suite 118 passed, 2 skipped (the
+    conditional specs), 0 failed (with phone push included)
+- [x] **(Nathan)** Manual check on the test container with the real ONLYOFFICE
+  (with the phone notification check above). Share link (Nathan, 2026-09-27:
+  "opened perfectly even when logged out"); mail attachments with the Phase 7
+  check (Nathan, 2026-09-27: "tested it all, everything works"):
+  - Mail: open a message with a Word or Excel attachment and click it; it
+    opens read-only in a new tab. Try an old .doc/.xls if you have one.
+    "Save to Documents…" still works.
+  - Share a takeoff print from Documents (right-click, Share…) and open the
+    link on a phone and a computer, signed out: the PDF shows in the viewer,
+    with Download.
+
+## Phase 7 — Sharing upgrades
+
+- [x] Share button for **every document** (Documents row menu and preview
+  modal), not just takeoff printouts.
+  - Row menu "Share…" on every row (`RowContextMenu.tsx`); "Share" in the
+    preview modal (`DocumentViewerModal.tsx`, `doc-viewer-share`). The server
+    decides what may be shared (`mayShareFile`, `server/shares.ts`): what the
+    person can see (non-admins never invoices, pay apps and the like), and
+    never signatures, templates or stamps.
+  - Plan pages keep their link buttons, now titled "Share page" (they opened
+    the old dialog; they now open the new one with the link already made).
+- [x] **Several documents under one link** (Nathan asked 2026-09-27: "can it
+  also be possible to select multiple files and share them with a single
+  link?").
+  - Select documents, then **Share** in the bulk bar (`documents-bulk-share`,
+    up to 50). New share kind `files`: `resourceId` holds the file ids. The
+    link's name is "<project>: N documents" when they're all from one
+    project, else "N documents".
+  - Public page (`ShareView.tsx` `SharedFiles`): a list with sizes and a
+    download for each; a file opens like a single-file link (the viewer,
+    else the PDF/image preview, else a download card), with a back button
+    (`?f=<n>`). Routes `GET /api/share/:id/file/:index` and
+    `/api/share/:id/viewer/:index`.
+  - The link shows in each of its documents' links lists ("with 2 other
+    documents"); stopping it there stops it for all, after a warning.
+- [x] Migration: add `expiresAt` and `revokedAt` to `shares`.
+  - Migration 41 `share-expiry`: `expiresAt`, `revokedAt`, `createdBy`, and an
+    index on `resourceId`.
+  - Choose 7 / **30 (default)** / 90 days / never when creating a link; the
+    share window shows the expiry and can change it (counted from now).
+  - Public share routes return a friendly "link expired" page.
+    - Every public route asks `activeShare()` first: 410 with
+      `code: expired|revoked`, 404 `missing`. The page says which ("This link
+      has expired", "This link was turned off", "This link doesn't exist")
+      and what to do.
+- [x] Existing links migrate with `expiresAt = NULL` (never expire), keep
+  working, and appear in the active-links list, where they can be turned off.
+- [x] Creating a share no longer silently reuses an old link (`server.ts:547`)
+  once expiry exists.
+  - The old share routes moved out of `server.ts` and `server/routes.ts` into
+    `server/shareRoutes.ts`; `POST /api/shares` always makes a new link.
+- [x] Per-file **active links list** with "Stop sharing".
+  - `GET /api/shares?fileId=` lists a file's working links (its own and
+    several-documents links it's in), newest first, with who made each.
+    "Stop sharing" (`DELETE /api/shares/:id`) keeps the row so the link can
+    say it was turned off.
+  - One window for all of it (`src/components/ShareLinkModal.tsx`,
+    `useShare()`): the links list, a new link with its expiry, and the chosen
+    link's QR code, address and Copy.
+- [x] Only people who can see every file a link opens can list, change or
+  stop it (a non-admin never sees an invoice's links, or a several-documents
+  link that includes one). Found in review; before, any signed-in person
+  could list any file's links.
+- [x] Downloads by name work for any file name (found in review: a hand-built
+  `Content-Disposition` made Node throw on an en dash; now `res.attachment`).
+- [x] A viewer already open can't keep downloading after sharing stops.
+  - Found while testing: the share viewer's config (which reaches the
+    browser) held a signed file link good for 8 hours. The Document Server now
+    fetches a shared file through the share link itself
+    (`shareFileLink`, `server/onlyoffice/links.ts`), which checks the link on
+    every fetch. A viewer already on screen keeps showing what it loaded.
+- [x] Fix the README's sharing description to match.
+- [x] Tests: expiry, revoke, public routes reject expired or revoked links.
+  - `server/shares.test.ts` (12): 30 days by default, 7/90/never, anything
+    else refused; never reused; a new expiry from now or never; an expired
+    link is 410 with its reason on every public route (single, several,
+    pages, viewer, info); stopped vs never existed; links from before expiry
+    keep working, never expire, show in the list and can be stopped; several
+    documents listed, served, downloaded by name (an en dash too), opened in
+    the viewer (through the share link); a file's links include
+    several-documents links and drop them once stopped; 1 to 50 documents;
+    who may share what; links to what someone can't see aren't listed,
+    changed or stopped for them; page and page-set links unchanged.
+  - `server/onlyoffice/viewers.test.ts` +1: the viewer downloads through the
+    share link, and stops once sharing stops.
+  - client: `ShareLinkModal` (7: a document's links incl. several-documents
+    ones, new link with the chosen expiry and its QR, change expiry, stop with
+    the several-documents warning, a page link made at once, several
+    documents, errors), `ShareView` (9: expired / stopped / missing pages,
+    the several-documents list and missing files, open one and back, download
+    card, expiry note, older links), `DocumentsBulkBar` +2,
+    `DocumentViewerModal` +2, `RowContextMenu` (Share on every document),
+    `AttachmentViewer` updated (download link `?download=1`).
+  - e2e `e2e/sharing.spec.ts` (3): share a document from the row menu for 7
+    days, open it signed out, download the bytes, stop sharing, and the
+    signed-out page says it was turned off; several documents from the bulk
+    bar, listed in a document's links, opened one by one signed out, stopped
+    for both; a plan page's link made as its window opens.
+  - smoke against the real server and the stand-in Document Server (19
+    checks): several documents for 7 days; the signed-out list says which
+    open in the viewer; the Word file opens embedded, view only, on a phone,
+    own key; the stand-in downloads exactly the Word file and the PDF through
+    the share link; a zip is left to the page and downloads by name; the
+    PDF's links list it; expiry changed to never; stopping it cuts off the
+    viewer already handed out, says "turned off", and drops it from the list;
+    one document lasts 30 days and is never reused; a non-admin can't share an
+    invoice but can share documents; 45 days refused.
+  - on the final code: lint clean; full unit suite 3427/3427; full e2e suite
+    122 passed, 1 skipped (a conditional spec), 0 failed. (The run before
+    caught the bell race fixed under Phase 5.)
+- [x] **(Nathan)** Manual check on the test container (Nathan, 2026-09-27:
+  "tested it all, everything works"):
+  - Documents: right-click any document, **Share…**. Pick 7 days, **Create
+    link**, copy it, and open it on a phone signed out. Then **Stop sharing**
+    and reload the phone: it says the link was turned off.
+  - Select two or three documents, **Share** in the bar at the top, create
+    the link, and open it signed out: the list, each file in the viewer,
+    Download.
+  - A plan page's link button still gives a link straight away.
+  - An old share link from before this update still opens.
+
+## Phase 8 — Finish and merge
+
+- [x] `npm run lint`, `npm test` and `npm run test:e2e` all passing
+  (`febdd36`).
+  - The first full e2e run on the Phase 8 code (`ba90541`) failed one test,
+    `e2e/mail-phase2.spec.ts` "convert-from-thread": the RFI editor opened
+    and closed a moment later. Cause: `PageTransition` mounted every newly
+    entered page twice (first inside the fading-out wrapper, whose `<Outlet>`
+    renders the route that matches now, then in its own), so a page acting
+    on a one-shot `?open=` lost what it opened. The same double mount was
+    behind the Phase 1 editor workaround (`051352f`) and RestorePage's. Not
+    ONLYOFFICE work and live on `testing`, so fixed there (`181d537`: the
+    outgoing wrapper renders nothing; a `PageTransition` test reproduces the
+    mail → RFI case and fails without the fix; plus the Sunday "my hours"
+    test fix `testing` lacked), verified on `testing` (unit 3203/3203, e2e
+    101 passed, 1 skipped), then merged into `onlyoffice` (`409f1d6`).
+    `DocumentEditor`'s guard stays, its comment updated.
+  - On the merged code (`febdd36`): lint clean; unit 3428/3428; full e2e
+    122 passed, 1 skipped (a conditional spec), 0 failed.
+- [x] **(Nathan)** Full walkthrough on the test container (Nathan,
+  2026-09-27: "tested it all, everything works"):
+  - edit PDF, xlsx and docx
+  - two people editing at once
+  - phone view
+  - new document from blank and from a template
+  - insert signature and stamp
+  - version history, restore and delete
+  - regenerate a generated document
+  - AIA Make PDF
+  - old-format upload
+  - mail attachment viewer
+  - share link with expiry and stop-sharing
+  - bell notifications (mention, task, RFI)
+- [x] Docs:
+  - README (feature overview, editor sections, tech stack, deployment)
+    - Feature table: Document editor, Documents, Notifications rows replace
+      PDF editor and Spreadsheet editor; Self-host says two containers.
+    - "Documents and the document editor" and "Notifications" sections
+      replace the PDF and spreadsheet editor sections; the dead
+      `pdf-editor.png` link is gone (`docs/screenshots/` is empty).
+    - Docker deployment: the ONLYOFFICE container, its shared secret, 4 GB,
+      its own subdomain, and what works without it. First-time setup checks
+      Settings → Document Editor. Settings table matches the real tabs.
+      Tech stack: ONLYOFFICE Docs API instead of Fortune Sheet; web-push,
+      sharp, the pinned ONLYOFFICE image.
+    - Not touched: the older "Bid pipeline and email" section, which predates
+      the Mail client and is stale for reasons outside this project (offered
+      to Nathan as a separate task).
+  - `docs/onlyoffice-setup.md` final pass
+    - Written for test and production; the test container goes back to the
+      `:testing` image after the merge (`:onlyoffice` stops updating).
+  - `.env.example`
+    - `APP_PUBLIC_URL` added (ONLYOFFICE and push fall back on it); a note
+      that editing needs the ONLYOFFICE container.
+- [x] Changelog entry in `src/pages/Settings.tsx`, and version bump to **4.0.0**
+  (the editors are replaced and a new container is required).
+  - 12 entries, dated 2026-09-27 (**change the date if the merge lands on
+    another day**). `package.json` and the root of `package-lock.json` are
+    4.0.0; `src/pages/appVersion.test.ts` checks they agree.
+- [x] Production rollout notes:
+  - back up
+  - add the production ONLYOFFICE container and subdomain
+  - set env vars
+  - switch image
+  - `docs/onlyoffice-setup.md` §7 "Production: upgrading to 4.0.0": back up
+    (the app also copies its database before migrating, but on the same disk
+    and without files), a new secret, RAM; the container, DNS, proxy host and
+    healthcheck; the four variables; the image, the automatic migrations
+    37–41 (additive); checks; what to tell everyone (new editor, old
+    signatures move to My signatures, phone notifications per device, old
+    share links); and going back (the old image runs on the new database but
+    reopens stopped or expired share links; or restore the backup).
+- [x] Merge `onlyoffice` into `testing`. Remove the ONLYOFFICE note from
+  `CLAUDE.md`. (Nathan, 2026-09-27: "go ahead and merge")
+  - Fast-forward: `testing` now at `fad80a8`, then this commit, which removes
+    the `CLAUDE.md` section and drops `onlyoffice` from the branches
+    `.github/workflows/docker.yml` builds (the `:onlyoffice` image no longer
+    updates).
+  - **(Nathan)** Switch the test container back to the `:testing` image.
+  - Nathan asked for a pull request from `testing` to `main` next (the
+    production rollout, `docs/onlyoffice-setup.md` §7, follows it).
+  - `testing` has nothing `onlyoffice` lacks (checked 2026-09-27, and again
+    after merging the transition fix in), so this is a fast-forward. Also drop `onlyoffice` from the branches in
+    `.github/workflows/docker.yml`, and switch the test container back to
+    `:testing`.
+  - Only after Nathan's walkthrough above.
+
+---
+
+## Later (not in this project)
+
+- **Frugal Takeoff panel inside the editors** (plugin): insert takeoff
+  quantities, price packages, and project or customer info.
+- **Word templates for generated documents**: design proposals, invoices and
+  change orders in Word; the app fills them in and converts to PDF. Replaces
+  hand-coded jsPDF layouts.
+- **AI plugin with a local model** (Ollama / LM Studio / OpenAI-compatible).
+- **Compare / combine** with another file from Documents
+  (`onRequestSelectDocument`).
+- **Mail merge** from the customers list.
+- **PDF forms "Complete & Submit"** turns field values into app records.
+- **Locked cell ranges** with the app's user list (`onRequestUsers`
+  `c: "protect"`). Nearly free once @mentions exist.
+- **Rename inside the editor** kept in sync with Documents (`onRequestRename`).
+- **"Save as PDF" for any spreadsheet**, not just AIA.
+- More notification types (a file I edited was changed, etc.).
+- Drop the unused `sheet_sessions`, `sheet_ops` and drafts tables.

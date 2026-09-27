@@ -7,7 +7,7 @@
 // the same query string — see ProjectDocumentsRedirect below.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useParams, useSearchParams } from 'react-router-dom';
-import { FolderOpen, Upload } from 'lucide-react';
+import { FilePlus2, FolderOpen, Upload } from 'lucide-react';
 import { Customer } from '../../types';
 import {
   DocumentRow, ProjectSummary, deleteFile, fetchFileBlob, getCustomers, getDocumentTypes,
@@ -17,10 +17,13 @@ import { useToast } from '../../components/Toast';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { DocumentsBulkBar } from './DocumentsBulkBar';
+import { useShare } from '../../components/ShareLinkModal';
 import { DocumentsFilterBar } from './DocumentsFilterBar';
 import { downloadBlob, DocumentsTable } from './DocumentsTable';
 import { MultiSelectOption } from './MultiSelectDropdown';
 import { UploadDocumentsModal } from './UploadDocumentsModal';
+import { NewDocumentModal } from './NewDocumentModal';
+import { isNewDocumentType, type NewDocumentType } from '../../utils/officeFormats';
 import { CustomDocType, KIND_OPTIONS } from './docTypes';
 
 const PAGE_SIZE = 100;
@@ -93,6 +96,17 @@ export const DocumentsPage: React.FC = () => {
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadInitialFiles, setUploadInitialFiles] = useState<File[] | undefined>(undefined);
+
+  // "New document" (ONLYOFFICE Phase 3). `?new=docx|xlsx|pdf` opens it on that
+  // type (the command palette's "New Word document" etc.); the param is
+  // dropped once read so Back and a reload don't reopen it.
+  const [newDocType, setNewDocType] = useState<NewDocumentType | null>(null);
+  const newParam = searchParams.get('new');
+  useEffect(() => {
+    if (!newParam) return;
+    setNewDocType(isNewDocumentType(newParam) ? newParam : 'docx');
+    setSearchParams(prev => { const next = new URLSearchParams(prev); next.delete('new'); return next; }, { replace: true });
+  }, [newParam, setSearchParams]);
 
   // Filter option sources / upload-modal pickers — loaded once. Every
   // project/customer is offered (not just those with a visible document) so
@@ -207,6 +221,26 @@ export const DocumentsPage: React.FC = () => {
   });
   const clearSelection = () => setSelected(new Set());
   const selectedRows = rows.filter(r => selected.has(r.id));
+
+  // One public link to the ticked documents (ONLYOFFICE Phase 7). Named for
+  // their project when they share one, so the page says whose they are.
+  const share = useShare();
+  const shareRows = (targets: DocumentRow[]) => {
+    if (targets.length === 1) {
+      const name = targets[0].name ?? 'Document';
+      share({ title: `Share ${name}`, target: { type: 'file', resourceId: targets[0].id }, name });
+      return;
+    }
+    const projects = new Set(targets.map(r => r.projectName ?? ''));
+    const [project] = [...projects];
+    const name = projects.size === 1 && project ? `${project}: ${targets.length} documents` : `${targets.length} documents`;
+    share({
+      title: `Share ${targets.length} documents`,
+      target: { type: 'files', fileIds: targets.map(r => r.id) },
+      name,
+      fileNames: targets.map(r => r.name ?? 'Document'),
+    });
+  };
 
   // ── Mutations (shared by bulk bar + per-row actions) ─────────────────────────
   const archiveRows = async (targets: DocumentRow[], nextArchived: boolean) => {
@@ -324,12 +358,17 @@ export const DocumentsPage: React.FC = () => {
           <FolderOpen size={22} className="text-accent-600 dark:text-accent-400" />
           <h1 className="text-xl font-bold text-ink">Documents</h1>
         </div>
-        <Button
-          data-testid="documents-upload"
-          onClick={() => { setUploadInitialFiles(undefined); setUploadOpen(true); }}
-        >
-          <Upload size={15} />Upload
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" data-testid="documents-new" onClick={() => setNewDocType('docx')}>
+            <FilePlus2 size={15} />New document
+          </Button>
+          <Button
+            data-testid="documents-upload"
+            onClick={() => { setUploadInitialFiles(undefined); setUploadOpen(true); }}
+          >
+            <Upload size={15} />Upload
+          </Button>
+        </div>
       </div>
 
       <DocumentsFilterBar
@@ -363,6 +402,7 @@ export const DocumentsPage: React.FC = () => {
         onArchive={archiveRows}
         onChangeKind={changeKindBulk}
         onDelete={deleteRows}
+        onShare={shareRows}
       />
 
       {loading ? (
@@ -406,6 +446,14 @@ export const DocumentsPage: React.FC = () => {
         customers={customers}
         customTypes={customTypes}
         initialFiles={uploadInitialFiles}
+      />
+
+      <NewDocumentModal
+        open={newDocType !== null}
+        onClose={() => setNewDocType(null)}
+        initialType={newDocType ?? 'docx'}
+        // Filtered to one project (the project's Documents tab): file it there.
+        initialProjectId={projectIds.length === 1 ? projectIds[0] : undefined}
       />
     </div>
   );

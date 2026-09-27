@@ -1,7 +1,7 @@
 // src/pages/documents/RowContextMenu.test.tsx
 // The per-row menu is pure presentation over documentsPolicy — this covers the
-// items whose visibility is kind-dependent (Share link, Delete), which is where
-// the takeoff-print rules land.
+// items whose visibility is kind-dependent (Delete), which is where the
+// takeoff-print rules land, and Share, which every document offers.
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -33,29 +33,24 @@ const renderMenu = (r: DocumentRow, over: Partial<React.ComponentProps<typeof Ro
 };
 
 describe('RowContextMenu', () => {
-  it('offers Share link and Delete on a takeoff print', () => {
+  it('offers Share and Delete on a takeoff print', () => {
     const { onShare, onClose } = renderMenu(takeoffPrint);
-    fireEvent.click(screen.getByRole('menuitem', { name: /Share link/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Share/ }));
     expect(onShare).toHaveBeenCalledWith(takeoffPrint);
     expect(onClose).toHaveBeenCalled();
     expect(screen.getByRole('menuitem', { name: /Delete/ })).toBeInTheDocument();
   });
 
-  it('offers Share link on a takeoff export too', () => {
-    renderMenu(row({ kind: 'takeoff-export', source: { type: 'takeoff-print', id: 'po-2', label: 'x', href: null } }));
-    expect(screen.getByRole('menuitem', { name: /Share link/ })).toBeInTheDocument();
-  });
-
-  it('does not offer Share link on an ordinary upload or an owned generated document', () => {
+  it('offers Share on any document (ONLYOFFICE Phase 7)', () => {
     renderMenu(row({ kind: 'document' }));
-    expect(screen.queryByRole('menuitem', { name: /Share link/ })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: /Share/ })).toBeInTheDocument();
     // Delete is still there — a loose direct upload is deletable.
     expect(screen.getByRole('menuitem', { name: /Delete/ })).toBeInTheDocument();
   });
 
-  it('a proposal document gets neither Share link nor Delete (its proposal owns it)', () => {
+  it('a proposal document can be shared but not deleted (its proposal owns it)', () => {
     renderMenu(row({ kind: 'proposal', source: { type: 'proposal', id: 'pr1', label: 'Proposal #1', href: null } }));
-    expect(screen.queryByRole('menuitem', { name: /Share link/ })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: /Share/ })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /Delete/ })).toBeNull();
   });
 });

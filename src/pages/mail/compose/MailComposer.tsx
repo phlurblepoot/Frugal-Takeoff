@@ -377,9 +377,8 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     } catch (err) {
       // Stay open: the body is the user's work, and a transport failure is
       // usually something they can retry or fix (a bad address, SMTP asleep).
-      // An item send that was cancelled on the way (the document's
-      // version/overwrite prompt dismissed, or a failed pre-send save that has
-      // already said so) is not a failure and gets no second message.
+      // An item send that was cancelled on the way (a failed pre-send save
+      // that has already said so) is not a failure and gets no second message.
       if (!(err instanceof DocumentGenerationCancelled)) {
         toast(err instanceof Error ? err.message : 'Could not send the message', { type: 'error' });
       }

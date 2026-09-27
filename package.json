@@ -1,7 +1,7 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "3.3.0",
+  "version": "4.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -19,7 +19,6 @@
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
-    "@fortune-sheet/react": "^1.0.4",
     "@tailwindcss/vite": "^4.1.14",
     "@tiptap/extension-link": "^3.31.0",
     "@tiptap/extension-placeholder": "^3.31.0",
@@ -55,12 +54,14 @@
     "react-konva": "^19.2.3",
     "react-konva-utils": "^2.0.0",
     "react-router-dom": "^7.13.1",
+    "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "tesseract.js": "^7.0.0",
     "use-image": "^1.1.4",
     "uuid": "^13.0.0",
     "vite": "^6.2.0",
+    "web-push": "^3.6.7",
     "xlsx": "^0.18.5",
     "yauzl": "^3.4.0"
   },
@@ -79,6 +80,7 @@
     "@types/nodemailer": "^8.0.0",
     "@types/supertest": "^7.2.0",
     "@types/uuid": "^10.0.0",
+    "@types/web-push": "^3.6.4",
     "@types/yauzl": "^3.4.0",
     "autoprefixer": "^10.4.21",
     "supertest": "^7.2.2",

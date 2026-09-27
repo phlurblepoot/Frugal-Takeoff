@@ -7,11 +7,11 @@
 // pdfjs config mirrors src/pages/project/proposal/shrinkPdf.ts exactly (same
 // legacy build + worker import) so the two code paths share one pdf.js
 // setup. Byte fetching reuses fetchFileBlob (src/utils/store.ts) — the same
-// authenticated fetch PdfEditor uses — rather than a raw fetch call.
+// authenticated fetch the rest of the app uses — rather than a raw fetch call.
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
-import { fetchFileBlob } from '../../utils/store';
+import { fetchFileBlob, getImageThumbUrl } from '../../utils/store';
 import { SHEET_MIMES } from './openTarget';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -151,10 +151,11 @@ export async function getPreviewThumb(
   const key = cacheKey(row.id, row.versionNumber);
 
   if (kind === 'image') {
-    // No fetch: the <img> element loads the raw stream itself. Trivial to
+    // No fetch: the <img> element loads it itself — the photo shrunk, which
+    // the server swaps for the original when it can't shrink one. Trivial to
     // recompute (it's just a URL string), so not worth spending eviction
     // budget on.
-    return { kind: 'image', url: `/api/images/${row.id}/raw` };
+    return { kind: 'image', url: getImageThumbUrl(row.id, row.versionNumber) };
   }
 
   if (kind !== 'pdf') return { kind: 'icon' };

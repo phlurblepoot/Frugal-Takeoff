@@ -6,24 +6,17 @@ import { test, expect, seedProjectWithPage } from './fixtures/test';
 
 // Characterization spec for the shared document-actions rollout (spec
 // docs/superpowers/specs/2026-08-29-document-actions-rollout): the
-// DocumentActionsBar (Generate/Open/Download/Send + status chip + the
-// version-or-overwrite dialog) mounted in the invoice editor, and the
-// AddFilesButton/FilePickerModal (Upload tab) mounted via PhotoDropCard in
-// the issue editor.
+// DocumentActionsBar (Generate/Open/Download/Send + status chip) mounted in
+// the invoice editor, and the AddFilesButton/FilePickerModal (Upload tab)
+// mounted via PhotoDropCard in the issue editor.
 //
-// DocumentActionsBar and VersionOrOverwriteDialog each render their own
-// `<Modal>`, and Modal portals to document.body (src/components/ui/Modal.tsx)
-// — so once the version dialog is open there are TWO role="dialog" elements
-// on the page. Its testids (doc-version-new/overwrite/cancel) are unique on
-// the page regardless, so those steps query them directly on `authedPage`
-// rather than through a `dialog` locator; the invoice editor's own dialog
-// locator is only used for the line-item edit, which happens before that
-// second dialog exists.
+// Regenerating always makes a new version (ONLYOFFICE decision 2026-09-25):
+// there is no version-or-overwrite prompt any more.
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_PHOTO_PNG = join(__dirname, 'fixtures', 'assets', 'test-page.png');
 
-test('invoice document actions: generate → edit goes out of date → version → /versions has 2 rows', async ({
+test('invoice document actions: generate → edit goes out of date → regenerate → /versions has 2 rows', async ({
   authedPage, apiToken, request,
 }) => {
   const { token } = apiToken;
@@ -67,13 +60,11 @@ test('invoice document actions: generate → edit goes out of date → version �
   await authedPage.getByRole('button', { name: 'Save invoice' }).click();
   await expect(authedPage.getByTestId('doc-status')).toHaveText('PDF out of date');
 
-  // Regenerate: a file already exists, so the version/overwrite dialog asks
-  // first. It is a second, separately-portaled Modal — query its testids
-  // directly rather than through editorDialog.
+  // Regenerate: straight into a new version, no prompt; the old PDF stays in
+  // the history.
   await authedPage.getByTestId('doc-generate').click();
-  await expect(authedPage.getByText('Replace the existing PDF?')).toBeVisible();
-  await authedPage.getByTestId('doc-version-new').click();
   await expect(authedPage.getByTestId('doc-status')).toHaveText('PDF up to date', { timeout: 30_000 });
+  await expect(authedPage.getByRole('dialog')).toHaveCount(1); // just the invoice editor
 
   const bySource = await request.get(
     `/api/documents/by-source?sourceType=invoice&sourceId=${invoice.id}&kind=invoice`,

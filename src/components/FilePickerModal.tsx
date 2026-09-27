@@ -28,6 +28,8 @@ import { DocumentHoverPreview } from '../pages/documents/DocumentHoverPreview';
 import { MimeIcon } from '../pages/documents/MimeIcon';
 import { CustomDocType, KIND_OPTIONS, kindLabel, kindTone } from '../pages/documents/docTypes';
 import { MultiSelectOption } from '../pages/documents/MultiSelectDropdown';
+import { OFFICE_FORMATS } from '../utils/officeFormats';
+import { reportConversions } from '../utils/uploadConversion';
 
 const PAGE_SIZE = 100;
 const MIMES: Record<NonNullable<FilePickerModalProps['accept']>, string[] | undefined> = {
@@ -38,6 +40,7 @@ const MIMES: Record<NonNullable<FilePickerModalProps['accept']>, string[] | unde
     'application/vnd.ms-excel',
     'text/csv',
   ],
+  office: OFFICE_FORMATS.map(f => f.mime),
   any: undefined,
 };
 // Default `accept` attribute for the file input when the upload config
@@ -47,6 +50,7 @@ const INPUT_ACCEPT: Record<NonNullable<FilePickerModalProps['accept']>, string |
   pdf: 'application/pdf,.pdf',
   image: 'image/*',
   spreadsheet: '.xlsx,.xls,.csv',
+  office: OFFICE_FORMATS.map(f => `.${f.ext}`).join(','),
   any: undefined,
 };
 const fmtSize = (n: number) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
@@ -72,7 +76,7 @@ export interface FilePickerModalProps {
   onClose: () => void;
   /** Optional because a `returnBlobs` caller uses onPickBlobs instead. */
   onPick?: (rows: DocumentRow[]) => void | Promise<void>;
-  accept?: 'pdf' | 'image' | 'spreadsheet' | 'any';
+  accept?: 'pdf' | 'image' | 'spreadsheet' | 'office' | 'any';
   multi?: boolean;
   excludeFileIds?: string[];
   initialProjectIds?: string[];
@@ -265,6 +269,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
     };
 
     const done: { row: DocumentRow; blob: Blob }[] = [];
+    const conversions: Parameters<typeof reportConversions>[1] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       mark(i, 'uploading');
@@ -280,6 +285,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
         // upload that actually succeeded.
         const meta = await getFileMeta(res.fileId).catch(() => null);
         done.push({ row: rowFromUpload(res.fileId, meta, file, upload), blob: file });
+        conversions.push({ name: file.name, conversion: res.conversion });
         mark(i, 'done');
       } catch {
         mark(i, 'error');
@@ -297,6 +303,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
     if (done.length < files.length) {
       toast(`Uploaded ${done.length} of ${files.length} files`, { type: done.length ? 'warning' : 'error' });
     }
+    reportConversions(toast, conversions);
     // Every upload failed: stay open on the failure list rather than handing
     // the caller an empty batch and closing.
     if (!done.length) return;

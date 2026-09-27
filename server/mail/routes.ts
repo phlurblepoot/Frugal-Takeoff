@@ -20,6 +20,7 @@ import type { AttachmentMeta, AttachmentHint, Addr, MailProvider, MoveResult } f
 import { AuthExpiredError, ProviderNotFoundError } from './providers/types';
 import { getFakeProvider } from './providers/fakeRegistry';
 import type { Seeded } from './providers/fake';
+import type { AttachmentViewer } from '../onlyoffice/viewers';
 
 export interface BodyPayload { html: string; text: string; blockedRemoteImages: number; attachments: AttachmentMeta[] }
 export interface MailRouteDeps {
@@ -32,6 +33,9 @@ export interface MailRouteDeps {
   env: NodeJS.ProcessEnv;
   /** The app's own JWT secret — signs the OAuth `state` envelope. */
   jwtSecret: string;
+  /** Word/Excel/PowerPoint attachments in the ONLYOFFICE viewer (Phase 6,
+   *  server/onlyoffice/viewers.ts). Without it they only download. */
+  attachmentViewer?: AttachmentViewer;
   /** Injectable so route tests never reach a real provider. */
   oauthExchange?: typeof exchangeCode;
   /** Rate limiter for the unauthenticated Graph webhook. Injectable so a test
@@ -704,23 +708,68 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     } catch (e) { fail(res, e, 'Failed to load message'); }
   });
 
-  app.get('/api/mail/messages/:id/attachments/:attId', authOrQueryToken, async (req, res) => {
-    const m = ownedMessage(req, req.params.id);
-    if (!m) return res.status(404).json({ error: 'Message not found' });
-    if (isPending(m)) return res.status(404).json({ error: 'This message is still being filed by the mail server — its attachments will be available in a minute' });
+  const PENDING_ATTACHMENT = 'This message is still being filed by the mail server — its attachments will be available in a minute';
+
+  /** Streams one attachment from the provider. */
+  const sendAttachment = async (res: express.Response, m: MessageRowRaw, attId: string, inline: boolean): Promise<void> => {
     try {
       const metas: AttachmentMeta[] = JSON.parse(m.attachmentsJson || '[]');
-      const { att } = await getAttachmentFresh(m, wantedAttachment(metas, req.params.attId));
+      const { att } = await getAttachmentFresh(m, wantedAttachment(metas, attId));
       res.setHeader('Content-Type', att.mime || 'application/octet-stream');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       if (att.size) res.setHeader('Content-Length', String(att.size));
-      res.setHeader('Content-Disposition', `${req.query.inline === '1' ? 'inline' : 'attachment'}; filename="${(att.name || 'attachment').replace(/["\r\n]/g, '')}"`);
+      res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${(att.name || 'attachment').replace(/["\r\n]/g, '')}"`);
       att.stream.on('error', err => { console.error('[mail] attachment stream failed', err); res.destroy(); });
       // A client that navigates away mid-download closes the response; without
       // this the provider stream keeps pulling bytes nobody will ever read.
       res.on('close', () => { if (!res.writableEnded) endStream(att.stream); });
       att.stream.pipe(res);
-    } catch (e) { fail(res, e, `Failed to load attachment attId=${req.params.attId} message=${m.id} account=${m.accountId}`); }
+    } catch (e) { fail(res, e, `Failed to load attachment attId=${attId} message=${m.id} account=${m.accountId}`); }
+  };
+
+  app.get('/api/mail/messages/:id/attachments/:attId', authOrQueryToken, async (req, res) => {
+    const m = ownedMessage(req, req.params.id);
+    if (!m) return res.status(404).json({ error: 'Message not found' });
+    if (isPending(m)) return res.status(404).json({ error: PENDING_ATTACHMENT });
+    await sendAttachment(res, m, req.params.attId, req.query.inline === '1');
+  });
+
+  // The document viewer for a Word, Excel or PowerPoint attachment (ONLYOFFICE
+  // Phase 6): the attachment's owner gets a view-only config whose download
+  // link opens this one attachment, for an hour.
+  app.post('/api/mail/messages/:id/attachments/:attId/viewer', authenticateToken, (req, res) => {
+    const m = ownedMessage(req, req.params.id);
+    if (!m) return res.status(404).json({ error: 'Message not found' });
+    if (isPending(m)) return res.status(404).json({ error: PENDING_ATTACHMENT });
+    const wanted = wantedAttachment(indexedAttachments(m), req.params.attId);
+    if (!wanted.meta) return res.status(404).json({ error: 'That attachment is not on this message' });
+    if (!deps.attachmentViewer) return res.status(503).json({ error: "The document viewer isn't set up.", code: 'not-configured' });
+    const user = userOf(req) as { id: string; username?: string };
+    const opened = deps.attachmentViewer.config({
+      messageId: m.id, attId: wanted.attId, name: wanted.meta.name || 'attachment', mime: wanted.meta.mime || '', size: wanted.meta.size || 0,
+      user: { id: String(user.id), name: String(user.username || user.id) },
+      device: req.body?.device === 'phone' ? 'phone' : 'desktop',
+      theme: req.body?.theme === 'dark' ? 'dark' : 'light',
+    });
+    if ('error' in opened) {
+      return opened.error === 'not-configured'
+        ? res.status(503).json({ error: "The document viewer isn't set up, so attachments download instead.", code: 'not-configured' })
+        : res.status(415).json({ error: "This kind of attachment isn't shown in the document viewer.", code: 'unsupported' });
+    }
+    res.json(opened);
+  });
+
+  // For the Document Server only (it has no user session): the link token
+  // opens this one attachment, for an hour, and nothing else.
+  app.get('/api/mail/viewer-file/:id/:attId', async (req, res) => {
+    const token = typeof req.query.t === 'string' ? req.query.t : '';
+    if (!deps.attachmentViewer || !deps.attachmentViewer.verify(token, req.params.id, req.params.attId)) {
+      return res.status(403).json({ error: 'Invalid or expired link' });
+    }
+    const m = db.prepare('SELECT * FROM mail_messages WHERE id = ?').get(req.params.id) as MessageRowRaw | undefined;
+    if (!m) return res.status(404).json({ error: 'Message not found' });
+    if (isPending(m)) return res.status(404).json({ error: PENDING_ATTACHMENT });
+    await sendAttachment(res, m, req.params.attId, false);
   });
 
   app.post('/api/mail/messages/:id/attachments/save', authenticateToken, async (req, res) => {

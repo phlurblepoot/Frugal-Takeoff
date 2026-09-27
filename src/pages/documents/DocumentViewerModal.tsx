@@ -1,8 +1,8 @@
 // src/pages/documents/DocumentViewerModal.tsx
 // Centered viewer opened by a Documents row click
 // (docs/superpowers/specs/2026-08-17-document-previews-design.md §Decisions).
-// The old row-click behavior (jump straight to /tools/pdf, /tools/sheets or a
-// raw image tab) is still one click away as "Open in editor" — this just puts
+// The old row-click behavior (jump straight to the document editor or a raw
+// image tab) is still one click away as "Open in editor" — this just puts
 // a look-before-you-leap step in front of it.
 //
 // Mounted only while a row is open (DocumentsTable renders it conditionally),
@@ -11,7 +11,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, ExternalLink, Link2,
+  Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, ExternalLink, Link2, Share2,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { DocumentRow, fetchFileBlob, formatBytes, getImageUrl } from '../../utils/store';
@@ -47,7 +47,9 @@ export const DocumentViewerModal: React.FC<{
   /** Suppress the Archive button for hosts that don't own archiving (e.g. an
    *  editor's DocumentActionsBar preview). */
   hideArchive?: boolean;
-}> = ({ row, customTypes, onClose, onOpenInEditor, onDownload, onArchive, hideArchive = false }) => {
+  /** Share a public link to it (ONLYOFFICE Phase 7); left out where not given. */
+  onShare?: (row: DocumentRow) => void;
+}> = ({ row, customTypes, onClose, onOpenInEditor, onDownload, onArchive, hideArchive = false, onShare }) => {
   const kind = previewKindFor(row.mime);
 
   // ── PDF: one document handle for the modal's lifetime, page flips render
@@ -250,6 +252,11 @@ export const DocumentViewerModal: React.FC<{
           >
             <Link2 size={15} />{row.source.label}
           </Link>
+        )}
+        {onShare && (
+          <Button variant="secondary" data-testid="doc-viewer-share" onClick={() => onShare(row)}>
+            <Share2 size={15} />Share
+          </Button>
         )}
         <Button variant="secondary" data-testid="doc-viewer-download" onClick={() => onDownload(row)}>
           <Download size={15} />Download

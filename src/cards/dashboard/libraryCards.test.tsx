@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import React from 'react';
 import { ThemeProvider } from '../../context/ThemeContext';
 import type { CardContext, CardWidth } from '../types';
+import { startOfWeek } from '../../utils/time';
 
 const {
   getProjectsSummary, getOutstandingProposals, getMyTimeEntries, getDashboardMoney,
@@ -192,10 +193,10 @@ describe('dash-proposals', () => {
 
 describe('dash-my-hours', () => {
   it('shows CountUp hours computed from this weeks entries', async () => {
-    const monday = new Date();
-    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-    monday.setHours(9, 0, 0, 0);
-    const clockInMs = monday.getTime();
+    // The app's weeks run Sunday to Saturday: an entry at the start of this
+    // one counts whatever day the test runs (a Monday-based date failed on
+    // Sundays).
+    const clockInMs = startOfWeek();
     getMyTimeEntries.mockResolvedValue([
       { id: 't1', projectId: null, clockIn: clockInMs, clockOut: clockInMs + 2 * 3_600_000, description: '' },
     ]);

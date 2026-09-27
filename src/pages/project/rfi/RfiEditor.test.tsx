@@ -11,6 +11,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { Rfi } from '../../../utils/store';
 
 const h = vi.hoisted(() => ({
+  getAssignableUsers: vi.fn(),
   getRfi: vi.fn(),
   saveRfi: vi.fn(),
   sendRfi: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock('../../../context/CollaborationContext', () => ({
 vi.mock('../../../utils/store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../utils/store')>()),
   getRfi: h.getRfi,
+  getAssignableUsers: h.getAssignableUsers,
   saveRfi: h.saveRfi,
   sendRfi: h.sendRfi,
   setRfiResponse: h.setRfiResponse,
@@ -178,6 +180,39 @@ beforeEach(() => {
   h.mailLinks.mockResolvedValue([]);
   h.mailThread.mockRejectedValue(new Error('not found'));
   h.bannerProps.last = null;
+  h.getAssignableUsers.mockResolvedValue([
+    { id: 'u1', username: 'nathan', role: 'admin' }, { id: 'u2', username: 'maria', role: 'user' },
+  ]);
+});
+
+describe('RfiEditor — Assigned to (Phase 5)', () => {
+  it('picks a teammate and saves them as the assignee', async () => {
+    mount();
+    const select = screen.getByLabelText('Assigned to') as HTMLSelectElement;
+    await screen.findByRole('option', { name: 'maria' });
+    expect(select.value).toBe('');
+    fireEvent.change(select, { target: { value: 'u2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(h.saveRfi).toHaveBeenCalledTimes(1));
+    expect(h.saveRfi.mock.calls[0][1]).toMatchObject({ assigneeUserId: 'u2' });
+  });
+
+  it('shows who it is assigned to, and can unassign', async () => {
+    mount(rfi({ assigneeUserId: 'u2' }));
+    await screen.findByRole('option', { name: 'maria' });
+    const select = screen.getByLabelText('Assigned to') as HTMLSelectElement;
+    expect(select.value).toBe('u2');
+    fireEvent.change(select, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(h.saveRfi).toHaveBeenCalledTimes(1));
+    expect(h.saveRfi.mock.calls[0][1]).toMatchObject({ assigneeUserId: null });
+  });
+
+  it('keeps an assignee the list no longer has', async () => {
+    mount(rfi({ assigneeUserId: 'gone' }));
+    expect(await screen.findByRole('option', { name: 'Former user' })).toBeInTheDocument();
+    expect((screen.getByLabelText('Assigned to') as HTMLSelectElement).value).toBe('gone');
+  });
 });
 
 describe('RfiEditor — document actions', () => {

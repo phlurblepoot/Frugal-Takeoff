@@ -18,11 +18,15 @@ import { migrations } from './server/migrationList';
 import { registerDataRoutes, registerEmailRoutes } from './server/routes';
 import { registerAiRoutes } from './server/aiRoutes';
 import { getAiRunner } from './server/ai';
-import { registerRealtime, sheetRoom } from './server/realtime/registerRealtime';
+import { NOTIFICATION_EVENT, registerRealtime, userRoom } from './server/realtime/registerRealtime';
+import { Notifier } from './server/notifications';
+import { registerNotificationRoutes } from './server/notificationRoutes';
+import { PushService } from './server/push';
+import { createAttachmentViewer } from './server/onlyoffice/viewers';
+import { registerPushRoutes } from './server/pushRoutes';
+import { registerShareRoutes } from './server/shareRoutes';
 import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
-import { SheetSessionStore } from './server/realtime/sheetSessions';
-import { SheetFlushEngine } from './server/realtime/sheetFlush';
 import { loadMailCrypto } from './server/mail/crypto';
 import type { MailContext } from './server/mail/context';
 import type { MailCrypto } from './server/mail/crypto';
@@ -37,6 +41,10 @@ import { registerBackupRoutes } from './server/backup/routes';
 import { createDriveStore } from './server/backup/drive';
 import { readDrive } from './server/backup/settings';
 import { BackupScheduler } from './server/backup/scheduler';
+import { registerOnlyofficeRoutes } from './server/onlyoffice/routes';
+import { removeUserSignatures } from './server/documentLibrary';
+import { createOnlyofficeServices } from './server/onlyoffice/services';
+import { CALLBACK_PATH_PREFIX as ONLYOFFICE_CALLBACK_PATH_PREFIX } from './server/onlyoffice/editorRoutes';
 
 dotenv.config();
 
@@ -129,11 +137,6 @@ async function startServer() {
     cors: {
       origin: "*",
     },
-    // Default (1e6 bytes) is smaller than the sheet-state-sync size guard
-    // (25MB, see registerRealtime.ts) — without raising this, a legitimately
-    // large-but-under-guard state payload would be killed by the transport
-    // before ever reaching our handler's own size check, with no ack sent.
-    maxHttpBufferSize: 30 * 1024 * 1024,
   });
 
   // Two mail paths bring their own body parser, and this one runs first, so it
@@ -142,9 +145,12 @@ async function startServer() {
   //     express.raw parser lives in registerMailRoutes);
   //   * the Graph and Pub/Sub webhooks are unauthenticated and open to the
   //     internet, so each takes a 256 KB express.json() of its own instead of
-  //     this 50 MB one.
+  //     this 50 MB one;
+  //   * the ONLYOFFICE save callback needs no login either (the Document
+  //     Server signs it), so it has its own smaller parser too.
   const jsonParser = express.json({ limit: "50mb" });
-  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === '/api/setup/restore/upload' || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH;
+  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === '/api/setup/restore/upload' || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH
+    || p.startsWith(ONLYOFFICE_CALLBACK_PATH_PREFIX);
   app.use((req, res, next) => (ownParser(req.path) ? next() : jsonParser(req, res, next)));
 
   // JWT secret resolution order:
@@ -166,23 +172,6 @@ async function startServer() {
 
   const broadcastChange = createChangeFeed(io);
 
-  const sheetStore = new SheetSessionStore(db);
-  // SHEET_FLUSH_INTERVAL_MS: e2e-only override (playwright.config.ts sets it
-  // low) so autosave tests don't have to wait out the real 15s production
-  // cadence; unset in normal/production runs, which keep SheetFlushEngine's
-  // own DEFAULT_INTERVAL_MS.
-  const flushIntervalMs = process.env.SHEET_FLUSH_INTERVAL_MS ? Number(process.env.SHEET_FLUSH_INTERVAL_MS) : undefined;
-  // I5: surfaces flush failures/recoveries to the sheet's live participants
-  // (SpreadsheetEditor's autosave chip) — every failure path was previously
-  // console-only.
-  const sheetFlush = new SheetFlushEngine(db, sheetStore, DATA_DIR, {
-    intervalMs: flushIntervalMs,
-    notify: (fileId, event) => {
-      io.to(sheetRoom(fileId)).emit(event === 'failed' ? 'sheet-flush-failed' : 'sheet-flush-recovered', { fileId });
-    },
-  });
-  sheetFlush.start();
-
   // One token verifier, shared by realtime, the data routes and the mail routes
   // so a token means the same thing everywhere.
   const verifyToken = (token: string) => {
@@ -194,16 +183,25 @@ async function startServer() {
     verifyToken,
     db,
     broadcastChange,
-    sheetStore,
-    sheetFlush,
   });
 
-  // Best-effort flush-on-shutdown: a container stop (SIGTERM) or Ctrl-C
-  // (SIGINT) should not lose edits sitting in a dirty sheet session's journal
-  // waiting for the next autosave tick. Guarded against double-registration
+  // The notification bell (ONLYOFFICE Phase 5): stored per user, pushed live to
+  // every tab they have open. Old ones are pruned after start and daily.
+  const notifier = new Notifier(db, (userId, ev) => { io.to(userRoom(userId)).emit(NOTIFICATION_EVENT, ev); });
+  setTimeout(() => notifier.prune(), 5 * 60_000).unref();
+  setInterval(() => notifier.prune(), 24 * 3600_000).unref();
+  // …and to the phones (and computers) they turned push notifications on for.
+  const push = new PushService({ db, contact: process.env.PUSH_CONTACT || process.env.APP_PUBLIC_URL || null });
+  notifier.onNew(n => {
+    void push.send(n.userId, { id: n.id, title: n.title, body: n.body, link: n.link, unread: notifier.unreadCount(n.userId) });
+  });
+
+  // Clean shutdown: a container stop (SIGTERM) or Ctrl-C (SIGINT) stops the
+  // mail sync workers before exiting. Guarded against double-registration
   // (each signal only ever fires this handler once per process) and skipped
   // entirely in tests, which construct their own harness instead of calling
-  // startServer().
+  // startServer(). Document edits need nothing here: ONLYOFFICE holds them
+  // and retries its save callback.
   let shuttingDown = false;
   // Assigned further down (the mail subsystem needs routes/auth in place first);
   // hoisted so the shutdown handler can stop its sync workers.
@@ -211,8 +209,8 @@ async function startServer() {
   const flushAndExit = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`Received ${signal}, flushing dirty spreadsheet sessions before exit...`);
-    Promise.allSettled([mailScheduler?.stop(), sheetFlush.flushAll()]).finally(() => process.exit(0));
+    console.log(`Received ${signal}, stopping mail sync before exit...`);
+    Promise.allSettled([mailScheduler?.stop()]).finally(() => process.exit(0));
   };
   process.once('SIGTERM', () => flushAndExit('SIGTERM'));
   process.once('SIGINT', () => flushAndExit('SIGINT'));
@@ -247,6 +245,13 @@ async function startServer() {
     next();
   };
 
+  // ONLYOFFICE conversions and thumbnails, shared by the upload route and the
+  // editor routes (docs/onlyoffice-setup.md). Idle until ONLYOFFICE is set up.
+  const onlyofficeServices = createOnlyofficeServices({ env: process.env, appJwtSecret: JWT_SECRET, db, dataDir: DATA_DIR });
+  // Thumbnails of files that are gone or replaced: tidy once after start, then daily.
+  setTimeout(() => onlyofficeServices.thumbnails.sweep(), 5 * 60_000).unref();
+  setInterval(() => onlyofficeServices.thumbnails.sweep(), 24 * 3600_000).unref();
+
   registerDataRoutes(app, {
     db,
     dataDir: DATA_DIR,
@@ -255,8 +260,12 @@ async function startServer() {
     requireAdmin,
     verifyToken,
     broadcastChange,
-    sheetStore,
+    onlyoffice: onlyofficeServices,
+    notifier,
   });
+  registerNotificationRoutes(app, { authenticateToken, notifier });
+  registerPushRoutes(app, { db, authenticateToken, push });
+  registerShareRoutes(app, { db, dataDir: DATA_DIR, env: process.env, authenticateToken });
 
   // The Playwright e2e harness logs in many times per run (per-worker session +
   // a few explicit logins per spec), which would trip a 10/min cap. Detect the
@@ -399,6 +408,10 @@ async function startServer() {
       
       db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
       db.prepare('DELETE FROM user_preferences WHERE userId = ?').run(req.params.id);
+      removeUserSignatures(db, DATA_DIR, req.params.id);
+      notifier.removeUser(req.params.id);
+      push.removeUser(req.params.id);
+      db.prepare('UPDATE rfis SET assigneeUserId = NULL WHERE assigneeUserId = ?').run(req.params.id);
       broadcastChange({ type: 'user', id: req.params.id, action: 'deleted', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
@@ -477,7 +490,8 @@ async function startServer() {
   // nextInvoiceNumber) — internal bookkeeping, not a user setting. Withholding
   // it from GET keeps it out of the client's settings object, so the Settings
   // page can never round-trip a stale copy back and roll the counter backwards.
-  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.', 'invoiceNumber', 'backup.'];
+  // push.: the VAPID key pair phone notifications are signed with (server/push.ts).
+  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.', 'invoiceNumber', 'backup.', 'push.'];
   const isPrivateSettingKey = (key: string) => SETTINGS_PRIVATE_PREFIXES.some(p => key.startsWith(p));
   app.get("/api/settings", (req, res) => {
     try {
@@ -508,65 +522,7 @@ async function startServer() {
     }
   });
 
-  // ── Sharing API ───────────────────────────────────────────────────────────────
-
-  // Public: get share info (does not expose internal resourceId)
-  app.get('/api/share/:shareId/info', (req, res) => {
-    try {
-      const row = db.prepare('SELECT type, name, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; name: string; resourceId: string } | undefined;
-      if (!row) return res.status(404).json({ error: 'Share not found' });
-      if (row.type === 'pages') {
-        try {
-          const pages = JSON.parse(row.resourceId) as { imageId: string; name: string; pageNumber?: string }[];
-          return res.json({ type: row.type, name: row.name, count: pages.length });
-        } catch { /* fall through */ }
-      }
-      res.json({ type: row.type, name: row.name });
-    } catch {
-      res.status(500).json({ error: 'Server error' });
-    }
-  });
-
-  // Public: return name/pageNumber metadata for one page in a 'pages' share
-  app.get('/api/share/:shareId/page-info/:index', (req, res) => {
-    try {
-      const share = db.prepare('SELECT type, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; resourceId: string } | undefined;
-      if (!share || share.type !== 'pages') return res.status(404).json({ error: 'Share not found' });
-      const pages = JSON.parse(share.resourceId) as { imageId: string; name: string; pageNumber?: string }[];
-      const idx = parseInt(req.params.index, 10);
-      if (isNaN(idx) || idx < 0 || idx >= pages.length) return res.status(404).json({ error: 'Page not found' });
-      const { name, pageNumber } = pages[idx];
-      res.json({ name, pageNumber });
-    } catch {
-      res.status(500).json({ error: 'Server error' });
-    }
-  });
-
-  // Authenticated: create a share
-  app.post('/api/shares', authenticateToken, (req, res) => {
-    try {
-      const { type, resourceId, name } = req.body as { type: string; resourceId: string; name: string };
-      if (!type || !resourceId) return res.status(400).json({ error: 'Missing fields' });
-      // Reuse existing share for same resourceId if it exists
-      const existing = db.prepare('SELECT id FROM shares WHERE resourceId = ?').get(resourceId) as { id: string } | undefined;
-      if (existing) return res.json({ id: existing.id });
-      const id = crypto.randomUUID();
-      db.prepare('INSERT INTO shares (id, type, resourceId, name, createdAt) VALUES (?, ?, ?, ?, ?)').run(id, type, resourceId, name || '', Date.now());
-      res.json({ id });
-    } catch {
-      res.status(500).json({ error: 'Server error' });
-    }
-  });
-
-  // Authenticated: delete a share
-  app.delete('/api/shares/:id', authenticateToken, (req, res) => {
-    try {
-      db.prepare('DELETE FROM shares WHERE id = ?').run(req.params.id);
-      res.json({ success: true });
-    } catch {
-      res.status(500).json({ error: 'Server error' });
-    }
-  });
+  // Share links (info, create, list, expiry, stop): server/shareRoutes.ts.
 
   // Checklists API removed — feature moved to /api/tasks (collaborative Tasks page).
   // The `checklists` table is retained as a data backup (see migration 11); do not drop it.
@@ -618,6 +574,7 @@ async function startServer() {
     crypto: mailCrypto,
     providerFactory: (a, auth) => createMailProvider(a, auth, defaultProviderDeps(db, mailCrypto)),
     broadcastChange,
+    notifier,
   };
   // publicUrl is what lets Graph accounts use change notifications instead of
   // polling alone: the scheduler both points Microsoft at our webhook and keeps
@@ -640,6 +597,8 @@ async function startServer() {
     publicUrl: process.env.APP_PUBLIC_URL || null,
     env: process.env,
     jwtSecret: JWT_SECRET,
+    // Word/Excel/PowerPoint attachments open in the ONLYOFFICE viewer (Phase 6).
+    attachmentViewer: createAttachmentViewer(process.env, onlyofficeServices.tokens),
   });
 
   registerEmailRoutes(app, {
@@ -661,6 +620,12 @@ async function startServer() {
   const backupScheduler = new BackupScheduler({ db, run: (t, trigger) => backupRoutes.runAndWait(t, trigger), hasDrive: () => !!readDrive(db, mailCrypto) });
   backupRoutes.setScheduler(backupScheduler);
   backupScheduler.start();
+
+  // ONLYOFFICE document editor (docs/onlyoffice-setup.md).
+  registerOnlyofficeRoutes(app, {
+    env: process.env, appJwtSecret: JWT_SECRET, authenticateToken, requireAdmin,
+    db, dataDir: DATA_DIR, broadcastChange, services: onlyofficeServices, notifier,
+  });
 
   // Before the first sync tick: a reply that lands in that tick must still be
   // captured against its RFI.

@@ -34,6 +34,14 @@ describe('isUpToDate', () => {
   it('is true when there is no updatedAt to compare against', () => {
     expect(isUpToDate(doc({ createdAt: 4 }), undefined)).toBe(true);
   });
+  it('counts an edit in the Document Editor as current until the record changes after it', () => {
+    expect(isUpToDate(doc({ createdAt: 10, versionOrigin: 'editor' }), 5)).toBe(true);
+    expect(isUpToDate(doc({ createdAt: 4, versionOrigin: 'editor' }), 5)).toBe(false);
+  });
+  it('never counts a restored older version as current', () => {
+    expect(isUpToDate(doc({ createdAt: 10, versionOrigin: 'restore' }), 5)).toBe(false);
+    expect(isUpToDate(doc({ createdAt: 10, versionOrigin: 'restore' }), undefined)).toBe(false);
+  });
 });
 
 describe('useGeneratedDocument', () => {

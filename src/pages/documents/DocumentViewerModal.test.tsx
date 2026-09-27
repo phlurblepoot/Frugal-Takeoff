@@ -48,7 +48,7 @@ const props = {
 
 const destroy = vi.fn().mockResolvedValue(undefined);
 
-const renderModal = (row: DocumentRow, over: Partial<typeof props> = {}) => render(
+const renderModal = (row: DocumentRow, over: Partial<typeof props> & { onShare?: (r: DocumentRow) => void } = {}) => render(
   <MemoryRouter><DocumentViewerModal row={row} {...props} {...over} /></MemoryRouter>
 );
 
@@ -93,6 +93,20 @@ describe('DocumentViewerModal', () => {
     expect(wrap.className).toMatch(/\bitems-start\b/);
     expect(canvas.className).toMatch(/\bmax-h-\[/);
     expect(canvas.className).toMatch(/\bw-auto\b/);
+  });
+
+  it('offers Share for the open document when the page can share (Phase 7)', async () => {
+    const onShare = vi.fn();
+    const row = makeRow();
+    renderModal(row, { onShare });
+    fireEvent.click(await screen.findByTestId('doc-viewer-share'));
+    expect(onShare).toHaveBeenCalledWith(row);
+  });
+
+  it('has no Share button where the page gives it nothing to share with', async () => {
+    renderModal(makeRow());
+    await screen.findByTestId('doc-viewer-modal');
+    expect(screen.queryByTestId('doc-viewer-share')).toBeNull();
   });
 
   it('hides page navigation for a single-page pdf', async () => {

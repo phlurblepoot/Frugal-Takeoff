@@ -1674,4 +1674,146 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 37,
+    name: 'onlyoffice-editor',
+    // ADDITIVE (ONLYOFFICE Phase 1, docs/superpowers/specs/2026-09-25-onlyoffice-checklist.md):
+    //   * files.createdBy — who produced each version (upload, generate or an
+    //     editor save). NULL on every existing row: history from before this
+    //     migration has no known author.
+    //   * editor_sessions — one row per file while an ONLYOFFICE editing
+    //     session is open, so everyone who opens the file joins that session
+    //     (same document key) and its saves follow the one-version-per-session
+    //     rule. Rows go when ONLYOFFICE reports the session closed.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(files)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('createdBy')) db.exec(`ALTER TABLE files ADD COLUMN createdBy TEXT;`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS editor_sessions (
+          fileId             TEXT PRIMARY KEY,
+          docKey             TEXT NOT NULL,
+          baseVersionNumber  INTEGER NOT NULL,
+          savedVersionNumber INTEGER,
+          savedSha256        TEXT,
+          startedAt          INTEGER NOT NULL,
+          lastSavedAt        INTEGER,
+          lastSavedBy        TEXT
+        );
+      `);
+    },
+  },
+  {
+    version: 38,
+    name: 'onlyoffice-history',
+    // ADDITIVE (ONLYOFFICE Phase 2 — version history, restore, delete):
+    //   * files.versionOrigin — how the live bytes of a version came to be:
+    //     'editor' (an ONLYOFFICE save), 'restore', or NULL (uploaded or
+    //     generated). Lets a generated document show it was edited by hand.
+    //   * editor_sessions.users — JSON array of the user ids ONLYOFFICE last
+    //     reported in the session (callback status 1); restore is refused
+    //     while anyone else is editing.
+    //   * editor_changes — per (file, version) the change log and changes zip
+    //     ONLYOFFICE sends when a session closes, so the editor's Version
+    //     History can highlight what changed.
+    //   * editor_superseded_sessions — sessions a restore replaced: a late
+    //     save from one is only kept (as a new version) if it holds edits made
+    //     after the restore.
+    up({ db }) {
+      const fileCols = (db.prepare(`PRAGMA table_info(files)`).all() as any[]).map((c: any) => c.name);
+      if (!fileCols.includes('versionOrigin')) db.exec(`ALTER TABLE files ADD COLUMN versionOrigin TEXT;`);
+      const sessionCols = (db.prepare(`PRAGMA table_info(editor_sessions)`).all() as any[]).map((c: any) => c.name);
+      if (!sessionCols.includes('users')) db.exec(`ALTER TABLE editor_sessions ADD COLUMN users TEXT;`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS editor_changes (
+          fileId        TEXT NOT NULL,
+          versionNumber INTEGER NOT NULL,
+          changesJson   TEXT NOT NULL,
+          serverVersion TEXT,
+          zip           BLOB,
+          createdAt     INTEGER NOT NULL,
+          PRIMARY KEY (fileId, versionNumber)
+        );
+        CREATE TABLE IF NOT EXISTS editor_superseded_sessions (
+          docKey     TEXT PRIMARY KEY,
+          fileId     TEXT NOT NULL,
+          lastSha256 TEXT,
+          closedAt   INTEGER NOT NULL
+        );
+      `);
+    },
+  },
+  {
+    version: 39,
+    name: 'notifications',
+    // ADDITIVE (ONLYOFFICE Phase 5 — the notification bell):
+    //   * notifications — one row per person told about something: an
+    //     @mention in a document comment, a task or RFI assigned to them, a
+    //     GC's answer to an RFI. readAt is NULL until they open or dismiss it.
+    //     actorUserId is who caused it (never notified about their own act).
+    //   * rfis.assigneeUserId — an internal "Assigned to" on RFIs.
+    //   * rfis.sentByUserId — who last emailed the RFI out; told, with the
+    //     assignee, when the GC's answer comes in.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id          TEXT PRIMARY KEY,
+          userId      TEXT NOT NULL,
+          type        TEXT NOT NULL,
+          title       TEXT NOT NULL,
+          body        TEXT,
+          link        TEXT,
+          actorUserId TEXT,
+          createdAt   INTEGER NOT NULL,
+          readAt      INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (userId, createdAt);
+      `);
+      const rfiCols = (db.prepare(`PRAGMA table_info(rfis)`).all() as any[]).map((c: any) => c.name);
+      if (!rfiCols.includes('assigneeUserId')) db.exec(`ALTER TABLE rfis ADD COLUMN assigneeUserId TEXT;`);
+      if (!rfiCols.includes('sentByUserId')) db.exec(`ALTER TABLE rfis ADD COLUMN sentByUserId TEXT;`);
+    },
+  },
+  {
+    version: 40,
+    name: 'push-subscriptions',
+    // ADDITIVE (ONLYOFFICE Phase 5 — phone push, added 2026-09-27): one row per
+    // device a person turned push notifications on for. endpoint is the
+    // browser's push-service address (unique: the same browser signing in as
+    // someone else moves it to them); p256dh/auth are the browser's keys that
+    // encrypt each message. Rows go when the push service says the
+    // subscription is gone, or when the person turns it off.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          id         TEXT PRIMARY KEY,
+          userId     TEXT NOT NULL,
+          endpoint   TEXT NOT NULL UNIQUE,
+          p256dh     TEXT NOT NULL,
+          auth       TEXT NOT NULL,
+          device     TEXT,
+          createdAt  INTEGER NOT NULL,
+          lastUsedAt INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions (userId);
+      `);
+    },
+  },
+  {
+    version: 41,
+    name: 'share-expiry',
+    // ADDITIVE (ONLYOFFICE Phase 7 — sharing upgrades):
+    //   * shares.expiresAt — when the link stops working; NULL = never. Links
+    //     made before this keep NULL, so they keep working (Nathan,
+    //     2026-09-25) and show in the file's active-links list to be turned off.
+    //   * shares.revokedAt — "Stop sharing": the row stays so the link can say
+    //     it was turned off, rather than that it never existed.
+    //   * shares.createdBy — who made it, shown in the links list.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(shares)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('expiresAt')) db.exec(`ALTER TABLE shares ADD COLUMN expiresAt INTEGER;`);
+      if (!cols.includes('revokedAt')) db.exec(`ALTER TABLE shares ADD COLUMN revokedAt INTEGER;`);
+      if (!cols.includes('createdBy')) db.exec(`ALTER TABLE shares ADD COLUMN createdBy TEXT;`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_shares_resourceId ON shares (resourceId);`);
+    },
+  },
 ];

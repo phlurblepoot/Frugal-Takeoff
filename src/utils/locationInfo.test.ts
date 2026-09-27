@@ -14,9 +14,9 @@ describe('locationFromPath', () => {
     expect(locationFromPath('/project/p1', '')).toEqual(
       { path: '/project/p1', projectId: 'p1', section: 'overview', pageId: undefined, fileId: undefined, label: undefined });
   });
-  it('parses the sheets tool with fileId', () => {
-    expect(locationFromPath('/tools/sheets', '?fileId=f42')).toEqual(
-      { path: '/tools/sheets', projectId: undefined, section: undefined, pageId: undefined, fileId: 'f42', label: undefined });
+  it('parses the document editor with fileId', () => {
+    expect(locationFromPath('/tools/edit', '?fileId=f42')).toEqual(
+      { path: '/tools/edit', projectId: undefined, section: undefined, pageId: undefined, fileId: 'f42', label: undefined });
   });
   it('parses plain routes', () => {
     expect(locationFromPath('/dashboard', '')).toEqual(

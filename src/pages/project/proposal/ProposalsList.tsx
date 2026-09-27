@@ -131,7 +131,7 @@ export const ProposalsList: React.FC = () => {
   };
 
   // Open PDF / Signed copy peek in the shared viewer modal first (same as every
-  // other list); its "Open in editor" link is the path into /tools/pdf.
+  // other list); its "Open in editor" link is the path into the document editor.
   const openFile = async (fileId: string, kind: 'proposal' | 'proposal-signed') => {
     try {
       const meta = await getFileMeta(fileId);

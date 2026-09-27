@@ -64,8 +64,8 @@ describe('describeLocation', () => {
   it.each([
     ['/dashboard', 'Dashboard'], ['/projects', 'Projects'], ['/tasks', 'Tasks'],
     ['/documents', 'Documents'], ['/customers', 'Customers'], ['/customers/c1', 'Customers'],
-    ['/time', 'Time'], ['/settings', 'Settings'], ['/tools/pdf', 'PDF editor'],
-    ['/tools/sheets', 'Spreadsheet editor'], ['/whatever', 'Online'],
+    ['/time', 'Time'], ['/settings', 'Settings'], ['/tools/edit', 'Document editor'],
+    ['/whatever', 'Online'],
   ])('%s -> %s', (path, expected) => expect(describeLocation({ path }, names)).toBe(expected));
 });
 

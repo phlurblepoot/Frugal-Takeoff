@@ -455,6 +455,49 @@ test('row actions column: version-history toggle only for multi-version rows', a
   await expect(authedPage.locator('table').getByText('v1', { exact: true })).toBeVisible();
 });
 
+test('version history: restore puts an older version back as a new one; delete removes one', async ({
+  authedPage, request, apiToken,
+}) => {
+  const seeded = await seedCustomerWithPortfolio(request, apiToken.token);
+  const auth = { Authorization: `Bearer ${apiToken.token}` };
+  const name = `history-${randomUUID().slice(0, 8)}.txt`;
+  const id = randomUUID();
+  const create = await request.post(
+    `/api/files/${id}?projectId=${seeded.inProgressProjectId}&kind=document&name=${encodeURIComponent(name)}`,
+    { headers: { ...auth, 'Content-Type': 'text/plain' }, data: Buffer.from('first') },
+  );
+  if (!create.ok()) throw new Error(`upload failed: ${create.status()} ${await create.text()}`);
+  const bump = await request.post(`/api/files/${id}/versions`, { headers: { ...auth, 'Content-Type': 'text/plain' }, data: Buffer.from('second') });
+  if (!bump.ok()) throw new Error(`version bump failed: ${bump.status()} ${await bump.text()}`);
+
+  await authedPage.goto(`/documents?projectIds=${seeded.inProgressProjectId}`);
+  await rowFor(authedPage, name).getByLabel('Version history', { exact: true }).click();
+  // Scoped to the table: the mobile card list renders its own copy.
+  const history = authedPage.locator('table').getByTestId('version-history');
+  const v1 = history.getByTestId('version-row').filter({ hasText: /^v1/ });
+  await expect(v1).toContainText('by ');
+
+  await v1.getByRole('button', { name: /restore/ }).click();
+  const confirmDialog = authedPage.getByRole('dialog');
+  await expect(confirmDialog).toContainText('Restore version 1?');
+  await confirmDialog.getByRole('button', { name: 'Restore' }).click();
+  await expect(authedPage.getByText('Version 1 restored as version 3')).toBeVisible();
+
+  const versions = async () => (await (await request.get(`/api/files/${id}/versions`, { headers: auth })).json()) as { id: string; versionNumber: number; versionOrigin: string | null }[];
+  expect((await versions()).map(v => v.versionNumber)).toEqual([3, 2, 1]);
+  expect((await versions())[0].versionOrigin).toBe('restore');
+  const live = await request.get(`/api/files/${id}/content`, { headers: auth });
+  expect(await live.text()).toBe('first');
+
+  // The list now shows v2 and v1 under the restored v3; delete v2.
+  const v2 = history.getByTestId('version-row').filter({ hasText: /^v2/ });
+  await v2.getByRole('button', { name: 'Delete version 2' }).click();
+  await authedPage.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
+  await expect(authedPage.getByText('Version 2 deleted')).toBeVisible();
+  await expect(history.getByTestId('version-row').filter({ hasText: /^v2/ })).toHaveCount(0);
+  expect((await versions()).map(v => v.versionNumber)).toEqual([3, 1]);
+});
+
 // Document previews (docs/superpowers/specs/2026-08-17-document-previews-design.md):
 // hover card (DocumentHoverPreview.tsx) + viewer modal (DocumentViewerModal.tsx).
 // Row click now opens the modal instead of navigating straight to the editor —
@@ -474,10 +517,18 @@ test('document previews: hover shows a thumbnail card, click opens the viewer mo
   await authedPage.goto(`/documents?projectIds=${seeded.inProgressProjectId}`);
   await expect(photoRow).toHaveCount(1);
 
+  // The photo's row shows it shrunk (/api/images/:id/thumb, a WebP the
+  // server makes with sharp), not the type icon.
+  const rowThumb = photoRow.getByTestId('file-thumb').locator('img');
+  await expect(rowThumb).toHaveAttribute('src', new RegExp(`/api/images/${seeded.issuePhotoFileId}/thumb\\?v=`));
+  await expect.poll(() => rowThumb.evaluate((img: HTMLImageElement) => img.complete ? img.naturalWidth : 0)).toBeGreaterThan(0);
+  const shrunk = await request.get(`/api/images/${seeded.issuePhotoFileId}/thumb`);
+  expect(shrunk.headers()['content-type']).toBe('image/webp');
+
   // (a) Hover the image row: the card appears (past the 350ms delay) showing
-  // an <img> (previewEngine's image kind never fetches — it's the raw
-  // /api/images/:id/raw URL), then hides again once the pointer leaves the
-  // row for somewhere the row doesn't cover.
+  // an <img> (previewEngine's image kind never fetches — the <img> loads the
+  // shrunk /api/images/:id/thumb itself), then hides again once the pointer
+  // leaves the row for somewhere the row doesn't cover.
   await photoRow.hover();
   await expect(hoverCard).toBeVisible();
   await expect(hoverCard.locator('img')).toBeVisible();
@@ -517,11 +568,11 @@ test('document previews: hover shows a thumbnail card, click opens the viewer mo
   await expect(nextBtn).toBeDisabled();
   await expect(prevBtn).toBeEnabled();
 
-  // (e continued) "Open in editor" closes the modal and navigates to the pdf
-  // tool for this file (openTargetFor's pdf branch) — last step, since it
-  // leaves the Documents page.
+  // (e continued) "Open in editor" closes the modal and navigates to the
+  // document editor for this file (openTargetFor's edit branch) — last step,
+  // since it leaves the Documents page.
   await authedPage.getByTestId('doc-viewer-open-editor').click();
-  await expect(authedPage).toHaveURL(new RegExp(`/tools/pdf\\?fileId=${seeded.printoutFileId}$`));
+  await expect(authedPage).toHaveURL(new RegExp(`/tools/edit\\?fileId=${seeded.printoutFileId}$`));
 });
 
 test('document previews: right-click opens the context menu and dismisses any lingering hover card', async ({

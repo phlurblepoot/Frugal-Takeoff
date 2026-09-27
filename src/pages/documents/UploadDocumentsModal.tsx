@@ -15,6 +15,7 @@ import {
 import { useToast } from '../../components/Toast';
 import { Button, Checkbox, Field, Modal, Select } from '../../components/ui';
 import { DIRECT_UPLOAD_KINDS, kindLabel } from './docTypes';
+import { reportConversions } from '../../utils/uploadConversion';
 import { kindFromMime } from './openTarget';
 
 /** A remote (mail-attachment) source item, before it becomes an Entry. */
@@ -213,6 +214,7 @@ export const UploadDocumentsModal: React.FC<{
     if (remoteItems) return handleUploadRemote();
     setUploading(true);
     const uploaded = new Set<string>();
+    const results: Parameters<typeof reportConversions>[1] = [];
     for (const e of entries) {
       const local = e as Extract<Entry, { file: File }>;
       // A per-file company-document in an otherwise project/customer-tagged
@@ -221,13 +223,14 @@ export const UploadDocumentsModal: React.FC<{
       // picked.
       const tagged = local.kind !== 'company-document';
       try {
-        await saveBinaryFile(uuidv4(), local.file, {
+        const r = await saveBinaryFile(uuidv4(), local.file, {
           kind: local.kind,
           name: local.file.name,
           ...(tagged && projectId ? { projectId } : {}),
           ...(tagged && customerId ? { customerId } : {}),
         });
         uploaded.add(local.id);
+        results.push({ name: local.file.name, conversion: r.conversion });
       } catch { /* keep going, report the count below */ }
     }
     setUploading(false);
@@ -238,6 +241,7 @@ export const UploadDocumentsModal: React.FC<{
     const ok = uploaded.size;
     if (ok < entries.length) toast(`Uploaded ${ok} of ${entries.length} files`, { type: ok ? 'warning' : 'error' });
     else toast(`Uploaded ${ok} file${ok === 1 ? '' : 's'}`, { type: 'success' });
+    reportConversions(toast, results);
     if (ok > 0) onUploaded();
     if (ok === entries.length) onClose();
   };

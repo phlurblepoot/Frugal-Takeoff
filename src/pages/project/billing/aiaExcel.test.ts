@@ -441,3 +441,37 @@ describe('header and blank rows (spec 2026-09-11)', () => {
     expect(found).toBe(true);
   });
 });
+
+// Nathan's PDF rules (2026-09-26): landscape, every column fitted to the page
+// width, the G702 on one page, the G703 over as many pages as it needs with
+// the change orders starting on a new page. "Make PDF" prints from these.
+// exceljs keeps manual page breaks on the sheet but leaves them out of its types.
+const rowBreakIds = (ws: object) => ((ws as { rowBreaks?: { id: number }[] }).rowBreaks ?? []).map(b => b.id);
+
+describe('print layout', () => {
+  it('G702: landscape Letter, all on one page', async () => {
+    const ws = (await buildAiaWorkbook(ctx)).getWorksheet('G702')!;
+    expect(ws.pageSetup).toMatchObject({ orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1, paperSize: 1 });
+  });
+
+  it('G703: landscape, fitted to width, as tall as it needs, change orders on a new page', async () => {
+    const ws = (await buildAiaWorkbook(ctx)).getWorksheet('G703')!;
+    expect(ws.pageSetup).toMatchObject({ orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 });
+    expect(rowBreakIds(ws)).toEqual([CO_LABEL_ROW - 1]);
+  });
+
+  it('writes those settings into the file', async () => {
+    const { default: JSZip } = await import('jszip');
+    const blob = await buildAiaXlsxBlob(ctx);
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    const sheets = await Promise.all(['xl/worksheets/sheet1.xml', 'xl/worksheets/sheet2.xml'].map(p => zip.file(p)!.async('string')));
+    const [g702xml, g703xml] = sheets;
+    for (const xml of sheets) {
+      expect(xml).toContain('fitToPage="1"');
+      expect(xml).toMatch(/<pageSetup[^>]*orientation="landscape"/);
+    }
+    expect(g702xml).toMatch(/<pageSetup[^>]*fitToHeight="1"/);
+    expect(g703xml).toMatch(/<pageSetup[^>]*fitToHeight="0"/);
+    expect(g703xml).toMatch(new RegExp(`<rowBreaks[^>]*>\\s*<brk id="${CO_LABEL_ROW - 1}"[^>]*man="1"`));
+  });
+});
