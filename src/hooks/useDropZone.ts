@@ -11,7 +11,8 @@ import { officeFormatOf } from '../utils/officeFormats';
 // own `accept` straight through, so if the two unions ever drift the call
 // site fails to compile rather than silently letting the wrong files in.
 // 'office' is anything the document editor opens (utils/officeFormats.ts).
-export type DropAccept = 'pdf' | 'image' | 'spreadsheet' | 'office' | 'any';
+// 'image-pdf' is a photo or a PDF — a payment's check image or remittance.
+export type DropAccept = 'pdf' | 'image' | 'image-pdf' | 'spreadsheet' | 'office' | 'any';
 
 const SHEET_MIMES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -27,6 +28,7 @@ export const matchesAccept = (file: File, accept: DropAccept = 'any'): boolean =
   switch (accept) {
     case 'pdf': return file.type === 'application/pdf' || name.endsWith('.pdf');
     case 'image': return file.type.startsWith('image/');
+    case 'image-pdf': return file.type.startsWith('image/') || file.type === 'application/pdf' || name.endsWith('.pdf');
     case 'spreadsheet': return SHEET_MIMES.includes(file.type) || /\.(xlsx|xls|csv)$/.test(name);
     case 'office': return !!officeFormatOf({ mime: file.type, name: file.name });
     default: return true;

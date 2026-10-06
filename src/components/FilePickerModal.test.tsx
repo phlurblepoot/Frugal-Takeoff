@@ -92,6 +92,11 @@ describe('FilePickerModal', () => {
     ));
   });
 
+  it('asks the server for photos and PDFs together on accept="image-pdf"', async () => {
+    render(<FilePickerModal open onClose={() => {}} onPick={() => {}} accept="image-pdf" />);
+    await waitFor(() => expect((getDocuments as any).mock.calls[0][0].mimes).toEqual(['image/', 'application/pdf']));
+  });
+
   // The hover card is portalled to document.body as `fixed z-[240]` by
   // default, which is BEHIND the Modal overlay's z-[250] — inside the picker
   // it must be raised or it renders behind the dialog it belongs to.
@@ -287,6 +292,60 @@ describe('FilePickerModal — Upload tab', () => {
     await waitFor(() => expect(onPick).toHaveBeenCalled());
     expect(uploadProjectFile).toHaveBeenCalledTimes(1);
     expect(uploadProjectFile).toHaveBeenCalledWith('p1', good, 'photo', expect.anything());
+  });
+});
+
+// For a record that doesn't exist yet (a payment being recorded): the Upload
+// tab hands the chosen files back unstored and the caller files them later.
+describe('FilePickerModal — onPickFiles (staged uploads)', () => {
+  it('hands back the chosen files without storing them, and closes', async () => {
+    const onPickFiles = vi.fn();
+    const onPick = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <FilePickerModal open onClose={onClose} onPick={onPick} onPickFiles={onPickFiles} accept="image-pdf"
+        upload={{ kind: 'payment-attachment', projectId: 'p1' }} defaultTab="upload" />
+    );
+    const input = screen.getByTestId('picker-upload-input');
+    expect(input).toHaveAttribute('accept', 'image/*,application/pdf,.pdf');
+    expect(input).not.toHaveAttribute('capture');
+    const a = png('check.png');
+    const b = new File(['%PDF'], 'remit.pdf', { type: 'application/pdf' });
+    fireEvent.change(input, { target: { files: [a, b] } });
+
+    await waitFor(() => expect(onPickFiles).toHaveBeenCalledWith([a, b]));
+    expect(onClose).toHaveBeenCalled();
+    expect(uploadProjectFile).not.toHaveBeenCalled();
+    expect(saveBinaryFile).not.toHaveBeenCalled();
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it('stages a drag-drop the same way, still filtered by accept', async () => {
+    const onPickFiles = vi.fn();
+    render(
+      <FilePickerModal open onClose={() => {}} onPickFiles={onPickFiles} accept="image-pdf"
+        upload={{ kind: 'payment-attachment', projectId: 'p1' }} defaultTab="upload" />
+    );
+    const shot = png('check.png');
+    fireEvent.drop(screen.getByTestId('picker-dropzone'), {
+      dataTransfer: { files: [shot, new File(['a,b'], 'ledger.csv', { type: 'text/csv' })] },
+    });
+    await waitFor(() => expect(onPickFiles).toHaveBeenCalledWith([shot]));
+    expect(uploadProjectFile).not.toHaveBeenCalled();
+  });
+
+  it('leaves the Existing tab returning rows as before', async () => {
+    const onPick = vi.fn();
+    const onPickFiles = vi.fn();
+    render(
+      <FilePickerModal open onClose={() => {}} onPick={onPick} onPickFiles={onPickFiles}
+        upload={{ kind: 'payment-attachment', projectId: 'p1' }} />
+    );
+    await screen.findByText('Spec.pdf');
+    fireEvent.click(screen.getByRole('checkbox', { name: /Spec\.pdf/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Add 1 file/ }));
+    await waitFor(() => expect(onPick).toHaveBeenCalledWith([expect.objectContaining({ id: 'b' })]));
+    expect(onPickFiles).not.toHaveBeenCalled();
   });
 });
 

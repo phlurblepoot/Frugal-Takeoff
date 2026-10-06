@@ -1203,3 +1203,41 @@ describe('migration 42: pdf-attachments', () => {
     db.close();
   });
 });
+
+describe('migration 43: payment-attachments', () => {
+  it('adds payment_attachments to a v42 database, shaped like the other attachment tables, and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 42));
+    expect(tableNames(db)).not.toContain('payment_attachments');
+
+    runMigrations(db, dir, migrations);
+    expect(columnNames(db, 'payment_attachments')).toEqual(['id', 'paymentId', 'fileId', 'sortOrder', 'createdAt']);
+    const ins = db.prepare('INSERT INTO payment_attachments (id, paymentId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)');
+    ins.run('pa-1', 'pay1', 'check.jpg', 0, 1);
+    ins.run('pa-2', 'pay1', 'remit.pdf', 1, 1); // a photo and a PDF on one payment
+    expect(() => ins.run('pa-3', 'pay1', 'check.jpg', 2, 1)).toThrow(/UNIQUE/);
+    ins.run('pa-4', 'pay2', 'check.jpg', 0, 1); // the same file on another payment is fine
+
+    // Idempotent: replaying up() must not throw or touch the rows.
+    const m43 = migrations.find(m => m.version === 43)!;
+    expect(() => m43.up({ db, dataDir: dir })).not.toThrow();
+    expect(db.prepare('SELECT COUNT(*) c FROM payment_attachments').get()).toEqual({ c: 3 });
+    db.close();
+  });
+
+  it('indexes the table on paymentId and leaves existing payments untouched', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 42));
+    db.prepare(`INSERT INTO payments (id, targetType, targetId, date, amount, method, note, createdAt)
+                VALUES ('pay1', 'invoice', 'inv1', 5, 120.5, 'check', 'deposit', 6)`).run();
+    runMigrations(db, dir, migrations);
+    const cols = (db.prepare('PRAGMA index_info(idx_payment_attachments_payment)').all() as { name: string }[]).map(r => r.name);
+    expect(cols).toEqual(['paymentId']);
+    expect(db.prepare('SELECT * FROM payments').all()).toEqual([
+      { id: 'pay1', targetType: 'invoice', targetId: 'inv1', date: 5, amount: 120.5, method: 'check', note: 'deposit', createdAt: 6 },
+    ]);
+    db.close();
+  });
+});

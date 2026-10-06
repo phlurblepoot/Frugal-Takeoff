@@ -242,7 +242,7 @@ describe('storage + search + orphans', () => {
   it('orphan cleanup spares files only an attachment or photo table names', async () => {
     // Unnamed and project-less, so hidden from Documents: only the join rows
     // vouch for them.
-    const linked = ['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'co-att', 'rfi-att', 'iss-att', 'dr-att'];
+    const linked = ['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'co-att', 'rfi-att', 'iss-att', 'dr-att', 'pay-att'];
     for (const id of [...linked, 'loose-img']) {
       await request(app).post('/api/images').send({ id, data: PNG });
     }
@@ -258,6 +258,8 @@ describe('storage + search + orphans', () => {
     link('rfi_attachments', 'rfiId', 'rfi-att');
     link('issue_attachments', 'issueId', 'iss-att');
     link('daily_report_attachments', 'dailyReportId', 'dr-att');
+    // Migration 43: a payment can link a photo or PDF filed anywhere.
+    link('payment_attachments', 'paymentId', 'pay-att');
 
     expect((await request(app).get('/api/storage/orphans')).body.count).toBe(1);
     expect(await survivors([...linked, 'loose-img'])).toEqual(linked);
@@ -578,6 +580,24 @@ describe('deleteProject billing cascade', () => {
   });
 });
 
+describe('deleteProject payment attachments cascade', () => {
+  it('removes the attachment rows of payments on its invoices and pay applications', async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+    await request(app).post('/api/files/chk1?projectId=p1&kind=payment-attachment&name=Check.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('jpg'));
+    const inv = (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [] })).body.id;
+    const payApp = (await request(app).post('/api/projects/p1/aia/pay-apps').send({})).body.id;
+    const onInv = (await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: inv, amount: 10 })).body.id;
+    const onApp = (await request(app).post('/api/projects/p1/payments').send({ targetType: 'payapp', targetId: payApp, amount: 20 })).body.id;
+    await request(app).post(`/api/payments/${onInv}/attachments`).send({ fileId: 'chk1' }).expect(200);
+    await request(app).post(`/api/payments/${onApp}/attachments`).send({ fileId: 'chk1' }).expect(200);
+
+    await request(app).delete('/api/projects/p1').expect(200);
+    expect(db.prepare('SELECT COUNT(*) c FROM payment_attachments').get()).toEqual({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) c FROM payments').get()).toEqual({ c: 0 });
+  });
+});
+
 describe('deleteProject attachments cascade', () => {
   it('removes the PDF attachment rows of its change orders, issues, RFIs and daily reports', async () => {
     await request(app).post('/api/projects').send(PROJECT); // id p1
@@ -787,6 +807,114 @@ describe('unified project payment routes (admin-gated)', () => {
     expect(summary.status).toBe(200);
     expect(summary.body.paid.invoicesCents).toBe(30000);
     expect(summary.body.paid.payAppsCents).toBe(12500);
+  });
+});
+
+// The payment detail view (spec
+// docs/superpowers/specs/2026-10-06-payment-attachments-design.md).
+describe('payment detail, edit and attachment routes (admin-gated)', () => {
+  const events: EntityChangedEvent[] = [];
+  let adminApp: express.Express;
+  let invId: string;
+  let payId: string;
+
+  beforeEach(async () => {
+    events.length = 0;
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+    adminApp = express();
+    adminApp.use(express.json());
+    registerDataRoutes(adminApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'a1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: (e: EntityChangedEvent) => { events.push(e); },
+    });
+    invId = (await request(app).post('/api/projects/p1/invoices')
+      .send({ number: 'INV-5', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] })).body.id;
+    payId = (await request(app).post('/api/projects/p1/payments')
+      .send({ targetType: 'invoice', targetId: invId, date: 1000, amount: 40, method: 'check' })).body.id;
+    await request(app).post('/api/files/chk?projectId=p1&kind=payment-attachment&sourceType=payment&sourceId=x&name=Check.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('jpg'));
+    await request(app).post('/api/files/remit?projectId=p1&kind=document&name=Remittance.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
+    await request(app).post('/api/files/sheet?projectId=p1&kind=spreadsheet&name=Ledger.csv')
+      .set('Content-Type', 'text/csv').send(Buffer.from('a,b'));
+  });
+
+  it('rejects non-admins with 403 on every payment route', async () => {
+    const memberApp = express();
+    memberApp.use(express.json());
+    registerDataRoutes(memberApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+      broadcastChange: () => {},
+    });
+    expect((await request(memberApp).get(`/api/payments/${payId}`)).status).toBe(403);
+    expect((await request(memberApp).put(`/api/payments/${payId}`).send({ amount: 1 })).status).toBe(403);
+    expect((await request(memberApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'chk' })).status).toBe(403);
+    expect((await request(memberApp).delete(`/api/payments/${payId}/attachments/chk`)).status).toBe(403);
+    expect((await request(memberApp).delete(`/api/payments/${payId}`)).status).toBe(403);
+    expect((await request(app).get(`/api/payments/${payId}`)).body.amount).toBe(40); // nothing changed
+  });
+
+  it('GET returns the payment with its target label, project and attachments; 404 when unknown', async () => {
+    await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'chk' }).expect(200);
+    await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'remit' }).expect(200);
+    const res = await request(adminApp).get(`/api/payments/${payId}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: payId, targetType: 'invoice', targetId: invId, targetLabel: 'Invoice INV-5', projectId: 'p1', amount: 40 });
+    expect(res.body.attachments).toEqual([
+      expect.objectContaining({ fileId: 'chk', name: 'Check.jpg', mime: 'image/jpeg', kind: 'payment-attachment' }),
+      expect.objectContaining({ fileId: 'remit', name: 'Remittance.pdf', mime: 'application/pdf', kind: 'document' }),
+    ]);
+    expect((await request(adminApp).get('/api/payments/nope')).status).toBe(404);
+    // The project's list counts them for the row's paperclip.
+    expect((await request(adminApp).get('/api/projects/p1/payments')).body[0].attachmentCount).toBe(2);
+  });
+
+  it('PUT edits the payment and broadcasts payment updated with its project', async () => {
+    const res = await request(adminApp).put(`/api/payments/${payId}`).send({ date: 2000, amount: 55.5, method: 'ach', note: 'Wire ref 123' });
+    expect(res.status).toBe(200);
+    expect((await request(adminApp).get(`/api/payments/${payId}`)).body).toMatchObject({ date: 2000, amount: 55.5, method: 'ach', note: 'Wire ref 123' });
+    expect((await request(adminApp).get(`/api/invoices/${invId}`)).body.paidCents).toBe(5550);
+    expect(events).toEqual([expect.objectContaining({ type: 'payment', id: payId, projectId: 'p1', action: 'updated', byUserId: 'a1' })]);
+  });
+
+  it('PUT validates (400) and 404s an unknown payment, broadcasting nothing', async () => {
+    expect((await request(adminApp).put(`/api/payments/${payId}`).send({ amount: 0 })).status).toBe(400);
+    expect((await request(adminApp).put(`/api/payments/${payId}`).send({ amount: 'lots' })).status).toBe(400);
+    expect((await request(adminApp).put('/api/payments/nope').send({ amount: 5 })).status).toBe(404);
+    expect(events).toEqual([]);
+  });
+
+  it('POST/DELETE attachments link and unlink a photo or PDF and broadcast payment updated', async () => {
+    await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'chk' }).expect(200);
+    await request(adminApp).delete(`/api/payments/${payId}/attachments/chk`).expect(200);
+    expect((await request(adminApp).get(`/api/payments/${payId}`)).body.attachments).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'payment', id: payId, projectId: 'p1', action: 'updated' }),
+      expect.objectContaining({ type: 'payment', id: payId, projectId: 'p1', action: 'updated' }),
+    ]);
+  });
+
+  it('attachment routes: 400 without a fileId or for a non-photo/PDF, 404 for an unknown payment or file', async () => {
+    expect((await request(adminApp).post(`/api/payments/${payId}/attachments`).send({})).status).toBe(400);
+    expect((await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'sheet' })).status).toBe(400);
+    expect((await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'ghost' })).status).toBe(404);
+    expect((await request(adminApp).post('/api/payments/nope/attachments').send({ fileId: 'chk' })).status).toBe(404);
+    expect((await request(adminApp).delete('/api/payments/nope/attachments/chk')).status).toBe(404);
+    expect(events).toEqual([]);
+  });
+
+  it('DELETE removes the payment and its attachment rows, broadcasting with the project resolved first', async () => {
+    await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'chk' }).expect(200);
+    events.length = 0;
+    await request(adminApp).delete(`/api/payments/${payId}`).expect(200);
+    expect(db.prepare('SELECT COUNT(*) c FROM payment_attachments WHERE paymentId = ?').get(payId)).toEqual({ c: 0 });
+    expect(events).toEqual([expect.objectContaining({ type: 'payment', id: payId, projectId: 'p1', action: 'deleted' })]);
   });
 });
 

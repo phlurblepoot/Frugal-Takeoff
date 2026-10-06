@@ -34,8 +34,8 @@ export interface FileMeta {
   legacyFormat: string | null; // 'dataurl' | 'base64' | verbatim non-canonical prefix | null
   createdAt: number;
   customerId: string | null;
-  // Owning entity: invoice|payapp|change-order|issue|punch|rfi|task|proposal|
-  // printout|plan-set + its id. Null on loose uploads and legacy rows.
+  // Owning entity: invoice|payapp|payment|change-order|issue|punch|rfi|task|
+  // proposal|printout|plan-set + its id. Null on loose uploads and legacy rows.
   sourceType: string | null;
   sourceId: string | null;
   archived: number; // 0 | 1 — soft hide on the Documents page
@@ -58,6 +58,9 @@ export const SYSTEM_KINDS = [
   'issue-photo', 'punch-report', 'punch-photo', 'rfi', 'rfi-photo',
   'rfi-response', 'task-photo', 'payapp-export', 'email-attachment',
   'settings-asset', 'daily-report', 'daily-report-photo', 'payapp-pdf',
+  // A photo or PDF uploaded onto a payment (migration 43): a check image, a
+  // receipt, remittance advice. Admin-only, like the rest of billing.
+  'payment-attachment',
   // The document library (server/documentLibrary.ts, ONLYOFFICE Phase 3).
   'document-template', 'company-stamp', 'signature',
 ] as const;
@@ -73,6 +76,7 @@ export const SYSTEM_KINDS = [
 export const MULTI_INSTANCE_KINDS = [
   'issue-photo', 'punch-photo', 'task-photo', 'change-order-photo', 'invoice-photo',
   'rfi-photo', 'proposal-photo', 'plan-source', 'daily-report-photo',
+  'payment-attachment',
   // Several attachments saved from one email message share a source triple
   // (sourceType='mailMessage', sourceId=<messageId>) — spec §3.2. The kind
   // alone only covers the default; CONTAINER_SOURCE_TYPES below is what makes

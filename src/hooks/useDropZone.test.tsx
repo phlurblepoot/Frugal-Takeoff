@@ -47,6 +47,17 @@ describe('useDropZone', () => {
     expect(onAny.mock.calls[0][0]).toHaveLength(2);
   });
 
+  // A payment's check photo or remittance PDF (migration 43).
+  it('accepts photos and PDFs, and nothing else, for accept="image-pdf"', () => {
+    const onFiles = vi.fn();
+    const png = file('check.png', 'image/png');
+    const pdf = file('remit.pdf', 'application/pdf');
+    const untyped = file('ach.PDF', '');
+    const { result } = renderHook(() => useDropZone(onFiles, { accept: 'image-pdf' }));
+    act(() => result.current.dropProps.onDrop(evt([png, file('ledger.csv', 'text/csv'), pdf, untyped, file('a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')])));
+    expect(onFiles).toHaveBeenCalledWith([png, pdf, untyped]);
+  });
+
   // A drop of only the wrong type is a no-op, not an empty-array callback the
   // consumer has to guard against.
   it('does not call back when nothing survives the filter', () => {

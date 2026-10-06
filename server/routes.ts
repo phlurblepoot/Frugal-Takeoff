@@ -12,6 +12,7 @@ import { logActivity, listActivity } from './activity';
 import {
   listInvoices, getInvoice, createInvoice, saveInvoice, deleteInvoice,
   recordPayment, deletePayment, listProjectPayments, setInvoiceStatus,
+  getPayment, updatePayment, paymentProjectId, addPaymentAttachment, removePaymentAttachment,
   addInvoicePhoto, removeInvoicePhoto, addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus, deleteChangeOrder,
   addChangeOrderPhoto, removeChangeOrderPhoto,
@@ -382,18 +383,49 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json(r);
     } catch (e) { billingErr(e, res); }
   });
+  // payments are polymorphic (invoice|payapp) and carry no projectId column
+  // of their own; every route below resolves it via whichever target the
+  // payment points at (paymentProjectId) — before a delete, while it still can.
+  const broadcastPayment = (req: express.Request, id: string, projectId: string | null, action: 'updated' | 'deleted') => {
+    if (projectId) deps.broadcastChange({ type: 'payment', id, projectId, action, ...requestMeta(req) });
+  };
+  app.get('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const payment = getPayment(db, req.params.id);
+      if (!payment) return res.status(404).json({ error: 'Payment not found' });
+      res.json(payment);
+    } catch (e) { billingErr(e, res); }
+  });
+  // Date, amount, method and note only — what the payment paid never changes.
+  app.put('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const { date, amount, method, note } = req.body ?? {};
+      updatePayment(db, req.params.id, { date, amount, method, note });
+      broadcastPayment(req, req.params.id, paymentProjectId(db, req.params.id), 'updated');
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
   app.delete('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
     try {
-      // payments are polymorphic (invoice|payapp) and carry no projectId column
-      // of their own; resolve it via whichever target table the payment points at.
-      const before = db.prepare('SELECT targetType, targetId FROM payments WHERE id = ?').get(req.params.id) as
-        { targetType: string; targetId: string } | undefined;
+      const projectId = paymentProjectId(db, req.params.id);
       deletePayment(db, req.params.id);
-      if (before) {
-        const table = before.targetType === 'invoice' ? 'invoices' : 'aia_pay_apps';
-        const target = db.prepare(`SELECT projectId FROM ${table} WHERE id = ?`).get(before.targetId) as { projectId: string } | undefined;
-        if (target) deps.broadcastChange({ type: 'payment', id: req.params.id, projectId: target.projectId, action: 'deleted', ...requestMeta(req) });
-      }
+      broadcastPayment(req, req.params.id, projectId, 'deleted');
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  // Photos and PDFs on a payment (migration 43): shown on the payment only.
+  app.post('/api/payments/:id/attachments', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addPaymentAttachment(db, req.params.id, req.body.fileId);
+      broadcastPayment(req, req.params.id, paymentProjectId(db, req.params.id), 'updated');
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/payments/:id/attachments/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      removePaymentAttachment(db, req.params.id, req.params.fileId);
+      broadcastPayment(req, req.params.id, paymentProjectId(db, req.params.id), 'updated');
       res.json({ success: true });
     } catch (e) { billingErr(e, res); }
   });
@@ -1647,6 +1679,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       ['invoice_photos', 'fileId'], ['invoice_attachments', 'fileId'],
       ['change_order_attachments', 'fileId'], ['rfi_attachments', 'fileId'],
       ['issue_attachments', 'fileId'], ['daily_report_attachments', 'fileId'],
+      ['payment_attachments', 'fileId'],
       ['proposal_photos', 'fileId'], ['proposal_attachments', 'fileId'],
       ['proposals', 'fileId'], ['proposals', 'signedFileId'], ['rfis', 'responseFileId'],
     ];

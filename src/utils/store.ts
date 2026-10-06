@@ -1395,6 +1395,22 @@ export interface Payment {
   note: string | null;
   createdAt: number;
   targetLabel?: string;
+  /** Photos/PDFs on the payment (migration 43) — on the project payments list only. */
+  attachmentCount?: number;
+}
+// A photo or PDF on a payment — a check image, a receipt, remittance advice
+// (migration 43). Shown on the payment only. name/mime/size/kind/createdAt/
+// versionNumber are the file's own, so a file deleted since reads as nulls.
+export interface PaymentAttachment {
+  id: string; fileId: string; sortOrder: number;
+  name: string | null; mime: string | null; size: number | null;
+  kind: string | null; createdAt: number | null; versionNumber: number | null;
+}
+// GET /api/payments/:id — the payment detail view.
+export interface PaymentDetail extends Payment {
+  targetLabel: string;
+  projectId: string | null;
+  attachments: PaymentAttachment[];
 }
 export interface InvoicePhoto {
   id: string;
@@ -1579,12 +1595,29 @@ export const recordPayment = async (
   targetType: 'invoice' | 'payapp',
   targetId: string,
   input: { amount: number; date?: number | null; method?: string; note?: string }
-): Promise<void> => {
+): Promise<{ id: string }> => {
   const res = await billingJson('POST', `/api/projects/${projectId}/payments`, { targetType, targetId, ...input });
-  await handleResponse(res);
+  await handleResponse(res); return res.json();
 };
 export const deletePayment = async (id: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/payments/${id}`); await handleResponse(res);
+};
+export const getPayment = async (id: string): Promise<PaymentDetail> => {
+  const res = await fetchWithRetry(`/api/payments/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+// What it paid can't change — only these four.
+export const updatePayment = async (
+  id: string,
+  input: { amount: number; date?: number | null; method?: string | null; note?: string | null },
+): Promise<void> => {
+  const res = await billingJson('PUT', `/api/payments/${id}`, input); await handleResponse(res);
+};
+export const addPaymentAttachment = async (paymentId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('POST', `/api/payments/${paymentId}/attachments`, { fileId }); await handleResponse(res);
+};
+export const removePaymentAttachment = async (paymentId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/payments/${paymentId}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
 export const getChangeOrders = async (projectId: string): Promise<ChangeOrderListItem[]> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/change-orders`, { headers: { ...getAuthHeaders() } });

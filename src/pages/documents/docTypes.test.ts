@@ -17,6 +17,11 @@ describe('kindLabel', () => {
     expect(kindLabel('email-attachment')).toBe('Email Attachment');
   });
 
+  it('resolves the payment-attachment kind (a payment\'s check photo or PDF, migration 43)', () => {
+    expect(kindLabel('payment-attachment')).toBe('Payment Attachment');
+    expect(kindTone('payment-attachment')).toBe('emerald');
+  });
+
   it('resolves a custom:<id> kind against the supplied custom types list', () => {
     expect(kindLabel('custom:warranty', [{ id: 'warranty', label: 'Warranty' }])).toBe('Warranty');
   });

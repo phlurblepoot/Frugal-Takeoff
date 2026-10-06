@@ -28,6 +28,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.3.0',
+    date: 'October 6, 2026',
+    changes: [
+      'Payments can now have photos and PDFs attached — a photo of the check, a receipt, remittance advice or an ACH confirmation. Add them while recording a payment with Attach under the form (or drag them onto it; on a phone, Attach can take a photo), and they are saved with the payment when you click Record.',
+      'Click a payment on Billing → Payments to open it: change its date, amount, method or note, delete it, and see its attachments — photos open full size, PDFs open in the viewer — and add more or remove them. A paperclip on the row shows how many it has.',
+      'Attachments stay on the payment: they do not appear in the invoice\'s payment list, on invoice or pay application PDFs or emails, or in reports. Like the rest of billing, only admins can see them (in Documents they are listed as "Payment Attachment", for admins only).',
+      'Changing a payment\'s amount marks its invoice\'s or pay application\'s PDF out of date, since Paid and Balance change; changing only the date, method or note does not.',
+      'Note for self-hosters: this update adds one new database table for the attachments (migration 43, additive — existing data untouched).',
+    ],
+  },
+  {
     version: '4.2.0',
     date: 'October 6, 2026',
     changes: [

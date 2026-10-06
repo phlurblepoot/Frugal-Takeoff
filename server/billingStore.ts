@@ -259,6 +259,8 @@ export function removeInvoiceAttachment(db: Database.Database, invoiceId: string
 
 export function deleteInvoice(db: Database.Database, id: string): void {
   const tx = db.transaction(() => {
+    // Its payments go with it, and their attachment rows before them.
+    db.prepare("DELETE FROM payment_attachments WHERE paymentId IN (SELECT id FROM payments WHERE targetType = 'invoice' AND targetId = ?)").run(id);
     db.prepare("DELETE FROM payments WHERE targetType = 'invoice' AND targetId = ?").run(id);
     db.prepare('DELETE FROM invoice_lines WHERE invoiceId = ?').run(id);
     db.prepare('DELETE FROM invoice_photos WHERE invoiceId = ?').run(id);
@@ -268,7 +270,7 @@ export function deleteInvoice(db: Database.Database, id: string): void {
   tx();
 }
 
-interface PaymentInput { date?: number | null; amount?: number; method?: string; note?: string; }
+interface PaymentInput { date?: number | null; amount?: number; method?: string | null; note?: string | null; }
 
 // A payment targets an invoice OR an AIA pay application (polymorphic, migration 13).
 export function recordPayment(db: Database.Database, targetType: string, targetId: string, input: PaymentInput): { id: string } {
@@ -308,30 +310,138 @@ export function deletePayment(db: Database.Database, id: string): void {
     // Paid/Balance figures the insert does.
     const row = db.prepare('SELECT targetType, targetId FROM payments WHERE id = ?').get(id) as
       { targetType: string; targetId: string } | undefined;
+    db.prepare('DELETE FROM payment_attachments WHERE paymentId = ?').run(id);
     db.prepare('DELETE FROM payments WHERE id = ?').run(id);
     if (row) touchPaymentTarget(db, row.targetType, row.targetId, Date.now());
   });
   tx();
 }
 
+// Edits a recorded payment's date, amount, method and note; what it paid
+// (targetType/targetId) never moves — paying a different record is a delete
+// and a new payment. Validated like recordPayment. An omitted (or null) date
+// keeps the one it has: a recorded payment always has one (recordPayment
+// defaults it to now). Blank method/note are stored as NULL.
+//
+// Paid/Balance on the target's generated PDF come from the amounts alone, so
+// only an amount change stamps the target out of date the way a record or a
+// delete does. A date, method or note fix leaves its PDF current (the same
+// reasoning as saveInvoice's notes-only exemption).
+export function updatePayment(db: Database.Database, id: string, input: PaymentInput): void {
+  const tx = db.transaction(() => {
+    const row = db.prepare('SELECT targetType, targetId, date, amount, method, note FROM payments WHERE id = ?').get(id) as
+      { targetType: string; targetId: string; date: number | null; amount: number; method: string | null; note: string | null } | undefined;
+    if (!row) throw new NotFoundError('Payment not found');
+    const amount = input.amount === undefined ? row.amount : input.amount;
+    if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('Payment amount must be a positive number');
+    if (input.date != null && !Number.isFinite(input.date)) throw new ValidationError('Payment date must be a timestamp');
+    const method = input.method === undefined ? row.method
+      : (typeof input.method === 'string' && input.method.trim() ? input.method.trim() : null);
+    const note = input.note === undefined ? row.note : normalizeNotes(input.note);
+    db.prepare('UPDATE payments SET date = ?, amount = ?, method = ?, note = ? WHERE id = ?')
+      .run(input.date ?? row.date, amount, method, note, id);
+    if (toCents(amount) !== toCents(row.amount)) touchPaymentTarget(db, row.targetType, row.targetId, Date.now());
+  });
+  tx();
+}
+
+// What a payment paid, in words: 'Invoice 1001' / 'Application #3'. Expects
+// the payment as `p`, its invoice as `i` and its pay application as `a`.
+const PAYMENT_TARGET_LABEL_SQL = `CASE
+    WHEN p.targetType = 'invoice' THEN
+      CASE WHEN i.number IS NOT NULL AND i.number <> '' THEN 'Invoice ' || i.number ELSE 'Invoice' END
+    WHEN p.targetType = 'payapp' THEN 'Application #' || a.number
+    ELSE NULL
+  END`;
+const PAYMENT_TARGET_JOINS = `LEFT JOIN invoices i ON p.targetType = 'invoice' AND p.targetId = i.id
+    LEFT JOIN aia_pay_apps a ON p.targetType = 'payapp' AND p.targetId = a.id`;
+
 // All payments across a project's invoices AND pay applications, with a resolved
 // human label per target. Money fields are passed through (amount REAL dollars).
+// attachmentCount drives the paperclip on the Payments tab's rows.
 export function listProjectPayments(db: Database.Database, projectId: string): any[] {
   return db.prepare(`
     SELECT p.id, p.targetType, p.targetId, p.date, p.amount, p.method, p.note, p.createdAt,
-           CASE
-             WHEN p.targetType = 'invoice' THEN
-               CASE WHEN i.number IS NOT NULL AND i.number <> '' THEN 'Invoice ' || i.number ELSE 'Invoice' END
-             WHEN p.targetType = 'payapp' THEN 'Application #' || a.number
-             ELSE NULL
-           END AS targetLabel
+           ${PAYMENT_TARGET_LABEL_SQL} AS targetLabel,
+           (SELECT COUNT(*) FROM payment_attachments pa WHERE pa.paymentId = p.id) AS attachmentCount
     FROM payments p
-    LEFT JOIN invoices i ON p.targetType = 'invoice' AND p.targetId = i.id
-    LEFT JOIN aia_pay_apps a ON p.targetType = 'payapp' AND p.targetId = a.id
+    ${PAYMENT_TARGET_JOINS}
     WHERE (p.targetType = 'invoice' AND p.targetId IN (SELECT id FROM invoices WHERE projectId = ?))
        OR (p.targetType = 'payapp' AND p.targetId IN (SELECT id FROM aia_pay_apps WHERE projectId = ?))
     ORDER BY p.date DESC, p.createdAt DESC, p.rowid DESC
   `).all(projectId, projectId) as any[];
+}
+
+// Payments carry no projectId of their own (migration 13); it is whichever
+// record they paid's. Null for an unknown payment or one whose target is gone.
+export function paymentProjectId(db: Database.Database, id: string): string | null {
+  const row = db.prepare(`SELECT COALESCE(i.projectId, a.projectId) AS projectId FROM payments p ${PAYMENT_TARGET_JOINS} WHERE p.id = ?`)
+    .get(id) as { projectId: string | null } | undefined;
+  return row?.projectId ?? null;
+}
+
+// ── Payment attachments (migration 43) ───────────────────────────────────────
+// Photos and PDFs on a payment: a check image, a receipt, remittance advice,
+// an ACH confirmation. One table holds both; the file's mime tells them apart.
+// They show on the payment ONLY — never in the invoice editor's payment list,
+// on an invoice/pay app PDF or in a report — so attaching or removing one
+// changes no generated document and stamps nothing on the payment's target.
+const isPaymentAttachmentMime = (mime: unknown): boolean =>
+  typeof mime === 'string' && (mime.startsWith('image/') || mime === 'application/pdf');
+
+export interface PaymentAttachmentRow {
+  id: string; fileId: string; sortOrder: number;
+  // The file's own row (null for a file deleted since): enough to tell a photo
+  // from a PDF, list it, and open it in the document viewer.
+  name: string | null; mime: string | null; size: number | null;
+  kind: string | null; createdAt: number | null; versionNumber: number | null;
+}
+
+function listPaymentAttachments(db: Database.Database, paymentId: string): PaymentAttachmentRow[] {
+  return db.prepare(`SELECT pa.id, pa.fileId, pa.sortOrder, f.name, f.mime, f.size, f.kind, f.createdAt, f.versionNumber
+    FROM payment_attachments pa LEFT JOIN files f ON f.id = pa.fileId
+    WHERE pa.paymentId = ? ORDER BY pa.sortOrder, pa.createdAt`).all(paymentId) as PaymentAttachmentRow[];
+}
+
+// One payment for its detail view: the row, what it paid (targetLabel), the
+// project it belongs to, and its attachments.
+export function getPayment(db: Database.Database, id: string): any | null {
+  const row = db.prepare(`
+    SELECT p.id, p.targetType, p.targetId, p.date, p.amount, p.method, p.note, p.createdAt,
+           ${PAYMENT_TARGET_LABEL_SQL} AS targetLabel,
+           COALESCE(i.projectId, a.projectId) AS projectId
+    FROM payments p
+    ${PAYMENT_TARGET_JOINS}
+    WHERE p.id = ?
+  `).get(id) as any;
+  if (!row) return null;
+  return { ...row, attachments: listPaymentAttachments(db, id) };
+}
+
+function requirePayment(db: Database.Database, paymentId: string): void {
+  if (!db.prepare('SELECT id FROM payments WHERE id = ?').get(paymentId)) throw new NotFoundError('Payment not found');
+}
+
+// Any stored photo or PDF can be attached — one uploaded from the payment, or
+// one already in the app (it is linked, not copied or re-typed). Attaching a
+// file the payment already has is a no-op.
+export function addPaymentAttachment(db: Database.Database, paymentId: string, fileId: unknown): void {
+  requirePayment(db, paymentId);
+  if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
+  const f = db.prepare('SELECT mime FROM files WHERE id = ?').get(fileId) as { mime: string } | undefined;
+  if (!f) throw new NotFoundError('File not found');
+  if (!isPaymentAttachmentMime(f.mime)) throw new ValidationError('Only photos and PDFs can be attached to a payment');
+  if (db.prepare('SELECT 1 FROM payment_attachments WHERE paymentId = ? AND fileId = ?').get(paymentId, fileId)) return;
+  const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM payment_attachments WHERE paymentId = ?').get(paymentId) as { m: number }).m;
+  db.prepare('INSERT INTO payment_attachments (id, paymentId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), paymentId, fileId, max + 1, Date.now());
+}
+
+// Unlinks the file from the payment; the file itself stays in Documents, as a
+// record's removed photo does. Removing one that isn't attached is a no-op.
+export function removePaymentAttachment(db: Database.Database, paymentId: string, fileId: string): void {
+  requirePayment(db, paymentId);
+  db.prepare('DELETE FROM payment_attachments WHERE paymentId = ? AND fileId = ?').run(paymentId, fileId);
 }
 
 // Status-only change (draft→sent→paid or back). Version-checked like saveInvoice

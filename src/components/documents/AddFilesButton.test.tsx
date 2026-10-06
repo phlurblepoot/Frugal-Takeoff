@@ -43,6 +43,13 @@ describe('AddFilesButton', () => {
     });
   });
 
+  it('passes onPickFiles through for a picker that stages uploads instead of storing them', () => {
+    const onPickFiles = vi.fn();
+    render(<AddFilesButton label="Attach" accept="image-pdf" upload={{ kind: 'payment-attachment', projectId: 'p1' }} onPick={() => {}} onPickFiles={onPickFiles} />);
+    fireEvent.click(screen.getByRole('button', { name: /Attach/ }));
+    expect(h.props).toMatchObject({ accept: 'image-pdf', onPickFiles });
+  });
+
   it('defaults to multi-select', () => {
     render(<AddFilesButton label="Add files" accept="any" onPick={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /Add files/ }));

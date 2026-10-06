@@ -204,6 +204,24 @@ describe('route mutations broadcast entity-changed', () => {
     c.close();
   });
 
+  it('PUT /api/payments/:id and its attachment routes broadcast payment updated with the target\'s project', async () => {
+    await request(app).post('/api/projects').send({ id: 'p10b', name: 'P10b', pages: [], takeoffs: [] }).expect(200);
+    const inv = await request(app).post('/api/projects/p10b/invoices').send({ number: 'INV-10b', lines: [] }).expect(200);
+    const pay = await request(app).post('/api/projects/p10b/payments')
+      .send({ targetType: 'invoice', targetId: inv.body.id, amount: 25 }).expect(200);
+    await request(app).post('/api/files/chk?projectId=p10b&kind=payment-attachment&name=Check.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('jpg')).expect(200);
+    const c = await connectedClient();
+    const evts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 3);
+    await request(app).put(`/api/payments/${pay.body.id}`).send({ amount: 30 }).expect(200);
+    await request(app).post(`/api/payments/${pay.body.id}/attachments`).send({ fileId: 'chk' }).expect(200);
+    await request(app).delete(`/api/payments/${pay.body.id}/attachments/chk`).expect(200);
+    for (const e of await evts) {
+      expect(e).toMatchObject({ type: 'payment', id: pay.body.id, projectId: 'p10b', action: 'updated' });
+    }
+    c.close();
+  });
+
   it('POST /api/projects/:id/change-orders broadcasts changeOrder created', async () => {
     await request(app).post('/api/projects').send({ id: 'p11', name: 'P11', pages: [], takeoffs: [] }).expect(200);
     const c = await connectedClient();

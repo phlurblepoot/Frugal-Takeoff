@@ -1870,4 +1870,29 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 43,
+    name: 'payment-attachments',
+    // ADDITIVE: photos and PDFs on a payment — a check image, a receipt,
+    // remittance advice, an ACH confirmation. One join table for both, the
+    // same shape as the attachment tables of migrations 34 and 42; the file's
+    // mime tells a photo from a PDF. Unlike those, nothing here ever reaches a
+    // generated document: the attachments show only on the payment itself
+    // (spec docs/superpowers/specs/2026-10-06-payment-attachments-design.md).
+    // Existing payments simply have none. IF NOT EXISTS makes replaying up()
+    // a no-op.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS payment_attachments (
+          id TEXT PRIMARY KEY,
+          paymentId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(paymentId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_payment_attachments_payment ON payment_attachments (paymentId);
+      `);
+    },
+  },
 ];

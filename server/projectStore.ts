@@ -334,8 +334,11 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
       db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
     }
     // Billing rows (Phase 4a/7b) — payments are polymorphic (invoice OR payapp),
-    // so remove them up front for BOTH targets before invoices/pay-apps vanish.
-    db.prepare("DELETE FROM payments WHERE (targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)) OR (targetType = 'payapp' AND targetId IN (SELECT id FROM aia_pay_apps WHERE projectId = ?))").run(id, id);
+    // so remove them up front for BOTH targets before invoices/pay-apps vanish,
+    // and their attachment rows (migration 43) before the payments.
+    const PROJECT_PAYMENTS = "(targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)) OR (targetType = 'payapp' AND targetId IN (SELECT id FROM aia_pay_apps WHERE projectId = ?))";
+    db.prepare(`DELETE FROM payment_attachments WHERE paymentId IN (SELECT id FROM payments WHERE ${PROJECT_PAYMENTS})`).run(id, id);
+    db.prepare(`DELETE FROM payments WHERE ${PROJECT_PAYMENTS}`).run(id, id);
     db.prepare('DELETE FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM invoices WHERE projectId = ?').run(id);
     // A record's PDF attachments (migration 42) go before the record itself.

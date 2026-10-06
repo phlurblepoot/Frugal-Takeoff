@@ -13,8 +13,9 @@ const ALWAYS_EXCLUDED_KINDS = ['plan', 'settings-asset', 'document-template', 'c
 
 // Billing-priced kinds — hidden from non-admins (spec §Decisions "Role
 // visibility"). change-order-photo and printout are deliberately NOT here:
-// they carry no dollar figures.
-export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'payapp-pdf', 'change-order', 'proposal', 'proposal-signed'] as const;
+// they carry no dollar figures. payment-attachment is: a check image carries
+// the customer's bank details as well as the amount (migration 43).
+export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'payapp-pdf', 'change-order', 'proposal', 'proposal-signed', 'payment-attachment'] as const;
 
 // Generated documents that are nonetheless deletable. Everything else with a
 // sourceType is owned by a record you delete it at (an invoice, an issue, a
@@ -54,6 +55,7 @@ const KIND_LABELS: Record<string, string> = {
   'daily-report': 'Daily Report',
   'daily-report-photo': 'Daily Report Photo',
   'email-attachment': 'Email Attachment',
+  'payment-attachment': 'Payment Attachment',
 };
 const genericLabel = (kind: string): string => KIND_LABELS[kind] ?? kind;
 
@@ -300,6 +302,20 @@ const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
     sql: ph => `SELECT id, number FROM aia_pay_apps WHERE id IN (${ph})`,
     label: row => `Pay App #${row.number ?? '?'}`,
     href: pid => pid ? `/project/${pid}/billing?tab=pay-apps` : null,
+  },
+  // A payment's photos and PDFs (migration 43). Named after what it paid —
+  // a payment has no number of its own — and the link opens that payment on
+  // the Payments tab (PaymentsSection's ?open=).
+  payment: {
+    sql: ph => `SELECT p.id, p.targetType, i.number AS invoiceNumber, a.number AS payAppNumber
+      FROM payments p
+      LEFT JOIN invoices i ON p.targetType = 'invoice' AND i.id = p.targetId
+      LEFT JOIN aia_pay_apps a ON p.targetType = 'payapp' AND a.id = p.targetId
+      WHERE p.id IN (${ph})`,
+    label: row => row.targetType === 'payapp'
+      ? `Payment — Pay App #${row.payAppNumber ?? '?'}`
+      : `Payment — Invoice #${row.invoiceNumber || '?'}`,
+    href: (pid, id) => pid ? `/project/${pid}/billing?tab=payments&open=${encodeURIComponent(id)}` : null,
   },
   'change-order': {
     sql: ph => `SELECT id, number FROM change_orders WHERE id IN (${ph})`,

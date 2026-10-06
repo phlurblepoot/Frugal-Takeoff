@@ -408,6 +408,15 @@ describe('upsert-by-source uploads', () => {
     expect(readFileContent(dir, 'drp2')!.toString()).toBe('photo-2');
   });
 
+  it('never versions payment attachments onto each other — a check photo then a remittance PDF are two documents', () => {
+    const SOURCE_PAY = { kind: 'payment-attachment', sourceType: 'payment', sourceId: 'pay-1', projectId: 'p1' };
+    const photo = putBuffer(db, dir, 'chk', Buffer.from('check'), 'image/jpeg', { ...SOURCE_PAY, name: 'Check.jpg' });
+    const pdf = putBuffer(db, dir, 'remit', Buffer.from('%PDF'), 'application/pdf', { ...SOURCE_PAY, name: 'Remittance.pdf' });
+    expect(photo).toMatchObject({ id: 'chk', versioned: false });
+    expect(pdf).toMatchObject({ id: 'remit', versioned: false });
+    expect(getMeta(db, 'chk')).toMatchObject({ mime: 'image/jpeg', name: 'Check.jpg', versionNumber: 1 });
+  });
+
   it('never versions a multi-instance kind — an entity has many photos', () => {
     const first = putBuffer(db, dir, 'ph1', Buffer.from('photo-a'), 'image/jpeg', { kind: 'issue-photo', sourceType: 'issue', sourceId: 'issue-1' });
     const second = putBuffer(db, dir, 'ph2', Buffer.from('photo-b'), 'image/jpeg', { kind: 'issue-photo', sourceType: 'issue', sourceId: 'issue-1' });

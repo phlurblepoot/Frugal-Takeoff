@@ -12,13 +12,14 @@ import {
   toCents, sumCents, listInvoices, getInvoice, createInvoice, saveInvoice,
   deleteInvoice, ValidationError, ConflictError, NotFoundError,
   recordPayment, deletePayment, setInvoiceStatus, listProjectPayments, paidCentsFor,
+  getPayment, updatePayment, paymentProjectId, addPaymentAttachment, removePaymentAttachment,
   addInvoicePhoto, removeInvoicePhoto, addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus,
   deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
   addChangeOrderAttachment, updateChangeOrderAttachment, removeChangeOrderAttachment,
   listBilledDocuments,
 } from './billingStore';
-import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp, lockSov, SovLockedError } from './aiaStore';
+import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp, lockSov, SovLockedError, deletePayApp } from './aiaStore';
 
 let db: Database.Database;
 let dir: string;
@@ -315,6 +316,173 @@ describe('payments + status', () => {
     expect(r.version).toBe(2);
     expect(getInvoice(db, id)!.status).toBe('sent');
     expect(() => setInvoiceStatus(db, id, 'galactic')).toThrow(ValidationError);
+  });
+});
+
+// Payment detail view, edits and attachments (spec
+// docs/superpowers/specs/2026-10-06-payment-attachments-design.md).
+describe('payment detail, edits and attachments (migration 43)', () => {
+  const invoiceWithPayment = (amount = 40) => {
+    const inv = createInvoice(db, 'p1', { number: 'INV-7', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
+    const pay = recordPayment(db, 'invoice', inv.id, { date: 1000, amount, method: 'check', note: 'deposit' });
+    return { invoiceId: inv.id, paymentId: pay.id };
+  };
+  const invoiceUpdatedAt = (id: string) => (db.prepare('SELECT updatedAt FROM invoices WHERE id = ?').get(id) as any).updatedAt;
+  const attachmentRows = (paymentId: string) =>
+    (db.prepare('SELECT COUNT(*) c FROM payment_attachments WHERE paymentId = ?').get(paymentId) as any).c;
+
+  it('getPayment returns the payment, what it paid, its project and its attachments; null when unknown', () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    jpgFile('check');
+    addPaymentAttachment(db, paymentId, 'check');
+    expect(getPayment(db, paymentId)).toEqual(expect.objectContaining({
+      id: paymentId, targetType: 'invoice', targetId: invoiceId, date: 1000, amount: 40,
+      method: 'check', note: 'deposit', targetLabel: 'Invoice INV-7', projectId: 'p1',
+      attachments: [expect.objectContaining({ fileId: 'check', sortOrder: 0, name: 'check.jpg', mime: 'image/jpeg', size: 1, kind: 'invoice-photo' })],
+    }));
+    expect(getPayment(db, 'nope')).toBeNull();
+  });
+
+  it('getPayment and paymentProjectId resolve a pay application target too', () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 4, 'draft', 1, 1)").run();
+    const { id } = recordPayment(db, 'payapp', 'app1', { amount: 500 });
+    expect(getPayment(db, id)).toMatchObject({ targetLabel: 'Application #4', projectId: 'p1', attachments: [] });
+    expect(paymentProjectId(db, id)).toBe('p1');
+    expect(paymentProjectId(db, 'nope')).toBeNull();
+  });
+
+  it('attaches photos and PDFs in add order, idempotently', () => {
+    const { paymentId } = invoiceWithPayment();
+    jpgFile('front'); pdfFile('remit');
+    addPaymentAttachment(db, paymentId, 'front');
+    addPaymentAttachment(db, paymentId, 'remit');
+    addPaymentAttachment(db, paymentId, 'front'); // no second row
+    expect(getPayment(db, paymentId)!.attachments).toEqual([
+      expect.objectContaining({ fileId: 'front', sortOrder: 0, mime: 'image/jpeg' }),
+      expect.objectContaining({ fileId: 'remit', sortOrder: 1, mime: 'application/pdf', name: 'remit.pdf' }),
+    ]);
+    expect(attachmentRows(paymentId)).toBe(2);
+  });
+
+  it('refuses anything but a photo or a PDF, an unknown file, a blank fileId and an unknown payment', () => {
+    const { paymentId } = invoiceWithPayment();
+    putBuffer(db, dir, 'sheet', Buffer.from('x'), 'text/csv', { projectId: 'p1', kind: 'document', name: 'sheet.csv' });
+    putBuffer(db, dir, 'doc', Buffer.from('x'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', { projectId: 'p1', kind: 'document', name: 'a.docx' });
+    expect(() => addPaymentAttachment(db, paymentId, 'sheet')).toThrow(ValidationError);
+    expect(() => addPaymentAttachment(db, paymentId, 'doc')).toThrow(ValidationError);
+    expect(() => addPaymentAttachment(db, paymentId, 'missing')).toThrow(NotFoundError);
+    expect(() => addPaymentAttachment(db, paymentId, '')).toThrow(ValidationError);
+    jpgFile('ok');
+    expect(() => addPaymentAttachment(db, 'no-such-payment', 'ok')).toThrow(NotFoundError);
+    expect(attachmentRows(paymentId)).toBe(0);
+  });
+
+  it('removes an attachment (a missing one is a no-op); an unknown payment is NotFound', () => {
+    const { paymentId } = invoiceWithPayment();
+    jpgFile('a'); pdfFile('b');
+    addPaymentAttachment(db, paymentId, 'a');
+    addPaymentAttachment(db, paymentId, 'b');
+    removePaymentAttachment(db, paymentId, 'a');
+    removePaymentAttachment(db, paymentId, 'not-attached');
+    expect(getPayment(db, paymentId)!.attachments.map((a: any) => a.fileId)).toEqual(['b']);
+    expect(() => removePaymentAttachment(db, 'no-such-payment', 'b')).toThrow(NotFoundError);
+    // Unlinked, not deleted: the file itself stays in Documents.
+    expect(db.prepare('SELECT id FROM files WHERE id = ?').get('a')).toBeTruthy();
+  });
+
+  // Attachments live on the payment only — nothing a generated invoice or pay
+  // app PDF prints changes, so the target's freshness clock must not move.
+  it('attaching and removing leave the target invoice\'s updatedAt alone', async () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    const before = invoiceUpdatedAt(invoiceId);
+    await new Promise(r => setTimeout(r, 2));
+    jpgFile('a');
+    addPaymentAttachment(db, paymentId, 'a');
+    removePaymentAttachment(db, paymentId, 'a');
+    expect(invoiceUpdatedAt(invoiceId)).toBe(before);
+  });
+
+  it('listProjectPayments counts each payment\'s attachments', () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    const other = recordPayment(db, 'invoice', invoiceId, { date: 2000, amount: 10 });
+    jpgFile('a'); pdfFile('b');
+    addPaymentAttachment(db, paymentId, 'a');
+    addPaymentAttachment(db, paymentId, 'b');
+    const byId = Object.fromEntries(listProjectPayments(db, 'p1').map(p => [p.id, p]));
+    expect(byId[paymentId].attachmentCount).toBe(2);
+    expect(byId[other.id].attachmentCount).toBe(0);
+  });
+
+  it('updatePayment edits date, amount, method and note; the target never moves', () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    updatePayment(db, paymentId, { date: 5000, amount: 60.25, method: 'ach', note: 'Final payment', targetId: 'other' } as any);
+    expect(getPayment(db, paymentId)).toMatchObject({
+      date: 5000, amount: 60.25, method: 'ach', note: 'Final payment', targetType: 'invoice', targetId: invoiceId,
+    });
+    expect(getInvoice(db, invoiceId)!.paidCents).toBe(6025);
+  });
+
+  it('updatePayment keeps what it is not given; a null date keeps the date; blank method/note clear to null', () => {
+    const { paymentId } = invoiceWithPayment();
+    updatePayment(db, paymentId, { note: 'only the note' });
+    expect(getPayment(db, paymentId)).toMatchObject({ date: 1000, amount: 40, method: 'check', note: 'only the note' });
+    updatePayment(db, paymentId, { date: null, method: '  ', note: '   ' });
+    expect(getPayment(db, paymentId)).toMatchObject({ date: 1000, amount: 40, method: null, note: null });
+  });
+
+  it('updatePayment validates like recordPayment and 404s an unknown payment', () => {
+    const { paymentId } = invoiceWithPayment();
+    expect(() => updatePayment(db, paymentId, { amount: 0 })).toThrow(ValidationError);
+    expect(() => updatePayment(db, paymentId, { amount: -5 })).toThrow(ValidationError);
+    expect(() => updatePayment(db, paymentId, { amount: 1e400 })).toThrow(ValidationError);
+    expect(() => updatePayment(db, paymentId, { amount: '50' as any })).toThrow(ValidationError);
+    expect(() => updatePayment(db, paymentId, { date: 'yesterday' as any })).toThrow(ValidationError);
+    expect(() => updatePayment(db, 'no-such-payment', { amount: 5 })).toThrow(NotFoundError);
+    expect(getPayment(db, paymentId)).toMatchObject({ amount: 40, date: 1000 }); // nothing written
+  });
+
+  // Paid/Balance on the invoice PDF (and the pay app's) come from the amounts:
+  // an amount edit stamps the target like a record/delete does; a date, method
+  // or note fix leaves its PDF current.
+  it('updatePayment stamps the target invoice only when the amount changes', async () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    const before = invoiceUpdatedAt(invoiceId);
+    await new Promise(r => setTimeout(r, 2));
+    updatePayment(db, paymentId, { date: 9000, method: 'card', note: 'fixed typo', amount: 40.001 }); // same cents
+    expect(invoiceUpdatedAt(invoiceId)).toBe(before);
+    await new Promise(r => setTimeout(r, 2));
+    updatePayment(db, paymentId, { amount: 45 });
+    expect(invoiceUpdatedAt(invoiceId)).toBeGreaterThan(before);
+  });
+
+  it('updatePayment stamps a pay application target on an amount change', async () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt, updatedAt) VALUES ('app1', 'p1', 3, 'draft', 1, 1, 1)").run();
+    const { id } = recordPayment(db, 'payapp', 'app1', { amount: 500 });
+    db.prepare("UPDATE aia_pay_apps SET updatedAt = 1 WHERE id = 'app1'").run();
+    updatePayment(db, id, { amount: 750 });
+    expect((db.prepare("SELECT updatedAt FROM aia_pay_apps WHERE id = 'app1'").get() as any).updatedAt).toBeGreaterThan(1);
+    expect(paidCentsFor(db, 'payapp', 'app1')).toBe(75000);
+  });
+
+  it('deleting the payment, its invoice or its pay application removes its attachment rows', () => {
+    jpgFile('a');
+    const first = invoiceWithPayment();
+    addPaymentAttachment(db, first.paymentId, 'a');
+    deletePayment(db, first.paymentId);
+    expect(attachmentRows(first.paymentId)).toBe(0);
+
+    const second = invoiceWithPayment();
+    addPaymentAttachment(db, second.paymentId, 'a');
+    deleteInvoice(db, second.invoiceId);
+    expect(attachmentRows(second.paymentId)).toBe(0);
+
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 1, 'draft', 1, 1)").run();
+    const third = recordPayment(db, 'payapp', 'app1', { amount: 5 });
+    addPaymentAttachment(db, third.id, 'a');
+    deletePayApp(db, 'app1');
+    expect(attachmentRows(third.id)).toBe(0);
+    // The photo itself is still a document — only the links went.
+    expect(db.prepare('SELECT id FROM files WHERE id = ?').get('a')).toBeTruthy();
   });
 });
 
