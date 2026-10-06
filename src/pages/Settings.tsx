@@ -28,7 +28,7 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
-    version: '4.7.0',
+    version: '4.1.6',
     date: 'October 6, 2026',
     changes: [
       'New Reports page (admins only), in the sidebar and the command palette: billing reports across all your projects, filtered by customer and project. Archived projects are included — money owed on a closed-out job is still owed — and unticking "Include archived projects" leaves them out. Download Excel saves the report exactly as filtered; the spreadsheet\'s filter buttons sort it further.',
@@ -42,7 +42,7 @@ const CHANGELOG: ChangelogEntry[] = [
     ],
   },
   {
-    version: '4.6.0',
+    version: '4.1.5',
     date: 'October 6, 2026',
     changes: [
       'A length or area measurement can now count more than once — for example one floor plan that is the same for four floors. Select the measurement in the canvas sidebar and click Multiplier (next to Rename), then enter how many times it counts: a whole number from 1 to 999, where 1 counts it once. The row gets a ×4 badge next to its name.',
@@ -52,7 +52,7 @@ const CHANGELOG: ChangelogEntry[] = [
     ],
   },
   {
-    version: '4.5.0',
+    version: '4.1.4',
     date: 'October 6, 2026',
     changes: [
       'Daily reports now have crews. Each project\'s Daily Reports page has a tab for each crew — your own crew or a sub\'s — and every crew keeps its own full set of daily reports with its own calendar: one report per day per crew, each with its own date, start time, weather, man count, notes, issues, photos and PDFs.',
@@ -65,7 +65,7 @@ const CHANGELOG: ChangelogEntry[] = [
     ],
   },
   {
-    version: '4.4.0',
+    version: '4.1.3',
     date: 'October 6, 2026',
     changes: [
       'Daily reports now have a start time, next to the date (and on the PDF under the date). The weather covers the start time through 12 hours later — a 7:00 AM start shows 7 AM to 7 PM. A start after noon runs past midnight, and the next morning\'s hours are marked "+1", e.g. "2 AM +1".',
@@ -76,7 +76,7 @@ const CHANGELOG: ChangelogEntry[] = [
     ],
   },
   {
-    version: '4.3.0',
+    version: '4.1.2',
     date: 'October 6, 2026',
     changes: [
       'Payments can now have photos and PDFs attached — a photo of the check, a receipt, remittance advice or an ACH confirmation. Add them while recording a payment with Attach under the form (or drag them onto it; on a phone, Attach can take a photo), and they are saved with the payment when you click Record.',
@@ -87,7 +87,7 @@ const CHANGELOG: ChangelogEntry[] = [
     ],
   },
   {
-    version: '4.2.0',
+    version: '4.1.1',
     date: 'October 6, 2026',
     changes: [
       'Change orders, RFIs, issues and daily reports can now have PDF attachments, the same way invoices do: Add PDFs in the editor uploads a PDF or picks one already in the app (from any project), and the list can be reordered or trimmed. The attached PDFs\' pages are added to the end of the generated document — after its own pages and photos — in the order shown, so they go out with the email too.',
