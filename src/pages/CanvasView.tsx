@@ -19,6 +19,8 @@ import { CustomCostRow } from '../components/CustomCostRow';
 import { useMeasurementHistory } from '../hooks/useMeasurementHistory';
 import { computeRevisionModel, effectiveSheetId } from '../utils/planSets';
 import { summarizeSelection } from '../utils/segmentValue';
+import { measurementMultiplier, multiplierPatch, multipliersMatch } from '../utils/multiplier';
+import { MultiplierModal } from '../components/canvas/MultiplierModal';
 import { computeTakeoffTotals } from './project/proposal/proposalGenerator';
 import { CLIENT_SESSION_ID } from '../utils/clientSession';
 
@@ -214,6 +216,7 @@ const CanvasViewInner: React.FC = () => {
   const [aggregatedMeasurements, setAggregatedMeasurements] = useState<Measurement[]>([]);
 
   const [heightsModalMeasurementId, setHeightsModalMeasurementId] = useState<string | null>(null);
+  const [multiplierModalMeasurementId, setMultiplierModalMeasurementId] = useState<string | null>(null);
   const [toolDisabledMessage, setToolDisabledMessage] = useState<string | null>(null);
 
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
@@ -309,6 +312,13 @@ const CanvasViewInner: React.FC = () => {
 
     const target = sidebarM && sidebarM.type === measurementType ? sidebarM : selectedMs[0];
     const createNew = !sidebarM || sidebarM.type !== measurementType;
+
+    // A multiplier counts the whole measurement N times, so folding in a
+    // measurement that counts a different number of times would change it.
+    if (!multipliersMatch([target, ...selectedMs])) {
+      toast('These measurements have different multipliers, so they can\'t be merged. Give them the same multiplier first.', { type: 'warning' });
+      return;
+    }
 
     // Measurements whose segments will be folded into target
     const sources = createNew
@@ -605,6 +615,7 @@ const CanvasViewInner: React.FC = () => {
         if (showDeleteConfirm) { setShowDeleteConfirm(false); setMeasurementToDelete(null); return; }
         if (showTakeoffModal) { setShowTakeoffModal(false); return; }
         if (heightsModalMeasurementId) { setHeightsModalMeasurementId(null); return; }
+        if (multiplierModalMeasurementId) { setMultiplierModalMeasurementId(null); return; }
         if (editingTakeoff) { setEditingTakeoff(null); return; }
         if (toolDisabledMessage) { setToolDisabledMessage(null); return; }
         if (takeoffToDelete) { setTakeoffToDelete(null); return; }
@@ -693,7 +704,7 @@ const CanvasViewInner: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedMeasurementId, selectedSegmentIdx, page, project, history, redoStack, aggregatedMeasurements,
       showShortcutsHelp, showScaleModal, showDeleteConfirm, showTakeoffModal,
-      heightsModalMeasurementId, editingTakeoff, toolDisabledMessage, takeoffToDelete,
+      heightsModalMeasurementId, multiplierModalMeasurementId, editingTakeoff, toolDisabledMessage, takeoffToDelete,
       showPageJump, prevPageId, nextPageId, pageIds, newMeasurementModal, readOnly]);
 
   // When nothing is selected, drawing tools are disabled — reset to pan so the user isn't stuck.
@@ -1081,6 +1092,14 @@ const CanvasViewInner: React.FC = () => {
       .then(handleMeasurementOpResult);
   };
 
+  // The sidebar's Multiplier action. Like every measurement edit it saves
+  // through updateMeasurement (realtime op + undo/redo, a no-op when read-only);
+  // on a read-only page it explains why instead of opening an editor.
+  const openMultiplierModal = (id: string) => {
+    if (readOnly) { handlePhoneToolBlocked(); return; }
+    setMultiplierModalMeasurementId(id);
+  };
+
   const deleteMeasurement = (id: string, targetPageId?: string) => {
     // Frozen history / phone read-only: no deleting existing measurements.
     if (readOnly) return;
@@ -1364,7 +1383,7 @@ const CanvasViewInner: React.FC = () => {
           if (takeoff.type === 'count') {
             totalRealValue += realValue;
           } else {
-            totalRealValue += convertUnit(realValue, sourceUnit, targetUnit, takeoff.type as 'length' | 'area' | 'count');
+            totalRealValue += convertUnit(realValue, sourceUnit, targetUnit, takeoff.type as 'length' | 'area' | 'count') * measurementMultiplier(m);
           }
         }
       });
@@ -2363,6 +2382,7 @@ const CanvasViewInner: React.FC = () => {
         setShowTakeoffModal={setShowTakeoffModal}
         setTakeoffToDelete={setTakeoffToDelete}
         setHeightsModalMeasurementId={setHeightsModalMeasurementId}
+        onEditMultiplier={openMultiplierModal}
         selectMeasurement={selectMeasurement}
         updateMeasurement={updateMeasurement}
         deleteMeasurement={deleteMeasurement}
@@ -2711,6 +2731,22 @@ const CanvasViewInner: React.FC = () => {
           }}
         />
       )}
+      {/* Multiplier Modal */}
+      {multiplierModalMeasurementId && (() => {
+        const target = aggregatedMeasurements.find(m => m.id === multiplierModalMeasurementId);
+        if (!target) return null;
+        return (
+          <MultiplierModal
+            measurementName={target.name}
+            multiplier={measurementMultiplier(target)}
+            onClose={() => setMultiplierModalMeasurementId(null)}
+            onSave={(n) => {
+              if (n !== measurementMultiplier(target)) updateMeasurement(target.id, multiplierPatch(n));
+              setMultiplierModalMeasurementId(null);
+            }}
+          />
+        );
+      })()}
       {/* Keyboard Shortcuts Help Modal */}
       <KeyboardShortcutsModal open={showShortcutsHelp} onClose={() => setShowShortcutsHelp(false)} />
       {/* Tool Disabled Message Modal */}

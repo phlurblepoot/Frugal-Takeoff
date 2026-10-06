@@ -28,6 +28,16 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.6.0',
+    date: 'October 6, 2026',
+    changes: [
+      'A length or area measurement can now count more than once — for example one floor plan that is the same for four floors. Select the measurement in the canvas sidebar and click Multiplier (next to Rename), then enter how many times it counts: a whole number from 1 to 999, where 1 counts it once. The row gets a ×4 badge next to its name.',
+      'Everywhere one measurement\'s amount is shown, a multiplied measurement shows the math, e.g. "1250.00 sq ft × 4 = 5000.00 sq ft": its label on the canvas and on printed plans, its row in the canvas sidebar (cutouts too), the selected-measurement bar and segment label at the bottom of the canvas, and its row on the Takeoffs tab.',
+      'Every total uses the multiplied amount: the sidebar and Takeoffs tab totals, page totals, the legend on the canvas and on printouts, dollars, the Excel export, proposals and the Schedule of Values seeded from the estimate. In Excel a multiplied measurement\'s row also shows its Measured Qty and Multiplier in two extra columns.',
+      'Count markers don\'t have a multiplier. Merging measurements that have different multipliers isn\'t allowed — give them the same multiplier first. Like other edits, a multiplier can be undone, and it carries over to a new revision of the sheet; it can\'t be changed on an older (read-only) revision.',
+    ],
+  },
+  {
     version: '4.5.0',
     date: 'October 6, 2026',
     changes: [

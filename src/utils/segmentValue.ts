@@ -4,11 +4,14 @@
 // (arcs expanded, region-aware scale, the takeoff's unit), and its prorated
 // share of the takeoff's dollars, priced exactly like the Takeoffs tab prices
 // a page or measurement row (allocateSubsetCost) but in whole dollars, without
-// the round-up to $100. PdfCanvas (the selected-segment label) and CanvasView
-// (the selection info bar) only call these.
+// the round-up to $100. A multiplied measurement (× N) counts — and prices —
+// its whole and every segment N times, and says so: "420.00 sq ft × 4 =
+// 1680.00 sq ft · $5,880". PdfCanvas (the selected-segment label) and
+// CanvasView (the selection info bar) only call these.
 import { Measurement, MeasurementSegment, MeasurementTakeoff, MeasurementType, Point, ProjectPage, ScaleConfig } from '../types';
 import { TakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { allocateSubsetCost } from './costAllocation';
+import { formatMultiplied, measurementMultiplier } from './multiplier';
 import {
   calculatePolygonArea,
   calculatePolylineLength,
@@ -109,6 +112,8 @@ export interface QuantityContext {
   totals?: TakeoffTotals;
   /** The owning page's own scale unit — the totals' unit when the takeoff has none. */
   pageUnit?: string;
+  /** The measurement's multiplier (measurementMultiplier); absent = 1. */
+  multiplier?: number;
 }
 
 // A quantity in the unit the takeoff's totals are kept in (computeTakeoffTotals:
@@ -147,7 +152,8 @@ export const formatWholeDollars = (dollars: number): string => {
 };
 
 export interface QuantityValue {
-  /** Worded like the canvas label ("420.00 sq ft", `30' - 6"`, "1 each"); a cutout leads with "−". */
+  /** Worded like the canvas label ("420.00 sq ft", `30' - 6"`, "1 each"); a cutout leads with "−".
+   *  Multiplied, with its math: "420.00 sq ft × 4 = 1680.00 sq ft". */
   quantity: string;
   /** Surface area only: the run length, in the takeoff's linear unit. */
   length?: string;
@@ -159,15 +165,20 @@ export interface QuantityValue {
 const linearTakeoff = (takeoff: MeasurementTakeoff | undefined): MeasurementTakeoff | undefined =>
   takeoff?.unit ? { ...takeoff, unit: takeoff.unit.replace(/^sq\s*/, '') } : takeoff;
 
+// The run length of a surface area stays the length drawn; only the quantity
+// (and its dollars) is multiplied.
 export const describeQuantity = (q: PixelQuantity, ctx: QuantityContext): QuantityValue => {
-  const magnitude = formatMeasurement(Math.abs(q.pixelValue), q.type, ctx.scale, ctx.takeoff);
-  const value: QuantityValue = { quantity: q.pixelValue < 0 ? `−${magnitude}` : magnitude };
+  const multiplier = ctx.multiplier ?? 1;
+  const sign = q.pixelValue < 0 ? '−' : '';
+  const value: QuantityValue = {
+    quantity: formatMultiplied(Math.abs(q.pixelValue), multiplier, px => `${sign}${formatMeasurement(px, q.type, ctx.scale, ctx.takeoff)}`),
+  };
   if (q.lengthPixelValue !== undefined) {
     value.length = formatMeasurement(q.lengthPixelValue, 'length', ctx.scale, linearTakeoff(ctx.takeoff));
   }
   const inTakeoffUnits = quantityInTakeoffUnits(q, ctx);
   if (inTakeoffUnits !== null && ctx.totals?.type === q.type) {
-    const dollars = prorateQuantityCost(ctx.totals, inTakeoffUnits);
+    const dollars = prorateQuantityCost(ctx.totals, inTakeoffUnits * multiplier);
     if (dollars !== null) value.dollars = formatWholeDollars(dollars);
   }
   return value;
@@ -260,6 +271,7 @@ export const summarizeSelection = (
     takeoff,
     totals: costTotals.find(t => t.id === m.takeoffId),
     pageUnit: page.scaleConfig?.unit,
+    multiplier: measurementMultiplier(m),
   };
   // A single-shape measurement's only segment is the whole measurement, so
   // there is no separate segment row to show.

@@ -2,7 +2,9 @@ import React from 'react';
 import { QuantityValue, SelectionSummary } from '../../utils/segmentValue';
 
 // One labelled value: "SEGMENT / 420.00 sq ft · $1,470". The selected
-// segment's value wears the canvas selection amber, like its label there.
+// segment's value wears the canvas selection amber, like its label there. A
+// multiplied value carries its math ("420.00 sq ft × 4 = 1680.00 sq ft"), so
+// it may wrap on a phone-width bar rather than run off it.
 function Stat({ label, value, highlight, testId }: {
   label: string;
   value: QuantityValue;
@@ -12,7 +14,7 @@ function Stat({ label, value, highlight, testId }: {
   return (
     <div data-testid={testId} className="flex flex-col items-start leading-tight">
       <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">{label}</span>
-      <span className={`text-sm font-semibold whitespace-nowrap ${highlight ? 'px-1.5 rounded-md bg-amber-400 text-amber-950' : 'text-ink'}`}>
+      <span className={`text-sm font-semibold sm:whitespace-nowrap ${highlight ? 'px-1.5 rounded-md bg-amber-400 text-amber-950' : 'text-ink'}`}>
         {value.quantity}
         {value.dollars && (
           <span className={highlight ? undefined : 'text-emerald-600 dark:text-emerald-400'}> · {value.dollars}</span>

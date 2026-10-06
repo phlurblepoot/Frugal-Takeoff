@@ -208,6 +208,7 @@ describe('applyMeasurementOp', () => {
           arcMidIndices: [2],
           regionId: 'r1',
           planSetId: 'ps1',
+          multiplier: 4,
         },
       })
     );
@@ -227,6 +228,20 @@ describe('applyMeasurementOp', () => {
       arcMidIndices: [2],
       regionId: 'r1',
       planSetId: 'ps1',
+      multiplier: 4,
     });
+  });
+
+  it('an update without the multiplier (set back to ×1, or undone) clears it from the row', () => {
+    const m = { id: 'm1', type: 'area', name: 'Floor', points: [{ x: 0, y: 0 }], multiplier: 3 };
+    applyMeasurementOp(db, baseOp({ measurement: m }));
+    const read = () => {
+      const project = loadProject(db, 'pr1');
+      return project.pages.find((p: any) => p.id === 'pg1').measurements.find((x: any) => x.id === 'm1');
+    };
+    expect(read().multiplier).toBe(3);
+    // The client sends { ...m, multiplier: undefined }, which JSON drops.
+    applyMeasurementOp(db, baseOp({ action: 'update', measurement: JSON.parse(JSON.stringify({ ...m, multiplier: undefined })) }));
+    expect(read()).not.toHaveProperty('multiplier');
   });
 });

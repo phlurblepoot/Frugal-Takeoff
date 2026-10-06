@@ -3,7 +3,9 @@ import {
   resolveRetainageMode, AiaSovLine,
   saveBinaryFile, uploadProjectFile, persistGeneratedDocument,
   restoreSnapshot, RestoreRunningError,
+  computeSovSeedFromEstimate,
 } from './store';
+import type { Project } from '../types';
 
 const line = (retainagePercent: number | null): Pick<AiaSovLine, 'retainagePercent'> => ({ retainagePercent });
 
@@ -23,6 +25,27 @@ describe('resolveRetainageMode', () => {
 
   it('infers uniform when the mode is absent and there are no SOV lines at all', () => {
     expect(resolveRetainageMode(undefined, [])).toBe('uniform');
+  });
+});
+
+// The Schedule of Values seed prices each takeoff from computeTakeoffTotals,
+// so a multiplied measurement (× N) is priced N times there too.
+describe('computeSovSeedFromEstimate', () => {
+  it('prices a multiplied measurement at its multiplied quantity', () => {
+    const project = {
+      id: 'pr', name: 'Job', createdAt: 0, planSets: [],
+      takeoffs: [{ id: 't1', name: 'Base', color: '#000', type: 'length', unit: 'ft', costPerUnit: 2, pricePackage: 'Trim' }],
+      pages: [{
+        id: 'p1', name: 'A-1', imageId: '', imageWidth: 0, imageHeight: 0,
+        scaleConfig: { pixelDistance: 1, realWorldDistance: 1, unit: 'ft' },
+        measurements: [
+          // 100 ft × 3 + 50 ft = 350 ft at $2.
+          { id: 'm1', type: 'length', name: 'Base', color: '#000', takeoffId: 't1', multiplier: 3, points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+          { id: 'm2', type: 'length', name: 'Trim', color: '#000', takeoffId: 't1', points: [{ x: 0, y: 0 }, { x: 50, y: 0 }] },
+        ],
+      }],
+    } as unknown as Project;
+    expect(computeSovSeedFromEstimate(project)).toEqual([{ description: 'Trim', scheduledValueCents: 70000 }]);
   });
 });
 

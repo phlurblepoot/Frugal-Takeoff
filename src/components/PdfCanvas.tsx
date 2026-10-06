@@ -8,6 +8,7 @@ import type Konva from 'konva';
 import { Point, Measurement, MeasurementSegment, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
 import { calculateDistance, calculatePolylineLength, measurementAreaPx, measurementRings, formatMeasurement, generateArcPoints, expandArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
 import { segmentPixelQuantity, describeQuantity, segmentLabelText, labelAnchor, placeSegmentLabel, LABEL_FONT_SIZE, LABEL_PADDING } from '../utils/segmentValue';
+import { measurementMultiplier, formatMultiplied } from '../utils/multiplier';
 import type { TakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { createWorker } from 'tesseract.js';
 import { useToast } from './Toast';
@@ -1606,6 +1607,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       let text = '';
       const takeoff = takeoffs.find(t => t.id === m.takeoffId);
       const isSurfaceArea = takeoff?.type === 'area' && m.type === 'length';
+      // A multiplied measurement shows its math: "1250.00 sq ft × 4 = 5000.00 sq ft".
+      const multiplier = measurementMultiplier(m);
 
       if (m.type === 'count') {
         text = '1';
@@ -1613,17 +1616,17 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         const pxArea = allSegDisplayPoints.reduce((sum, pts) =>
           sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
         const pxLen = allSegDisplayPoints.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
-        const areaText = formatMeasurement(pxArea, 'area', currentScale, takeoff);
+        const areaText = formatMultiplied(pxArea, multiplier, v => formatMeasurement(v, 'area', currentScale, takeoff));
         const lenText = formatMeasurement(pxLen, 'length', currentScale, takeoff);
         text = `${areaText}\nLength: ${lenText}`;
       } else if (m.type === 'length') {
         const pxLen = allSegDisplayPoints.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
-        text = formatMeasurement(pxLen, 'length', currentScale, takeoff);
+        text = formatMultiplied(pxLen, multiplier, v => formatMeasurement(v, 'length', currentScale, takeoff));
       } else {
         // `points` (not displayPoints) — the helper expands arcs itself, and
         // this keeps the label live while a vertex is being dragged.
         const pxArea = measurementAreaPx({ points, arcMidIndices: m.arcMidIndices, segments: m.segments });
-        text = formatMeasurement(pxArea, 'area', currentScale, takeoff);
+        text = formatMultiplied(pxArea, multiplier, v => formatMeasurement(v, 'area', currentScale, takeoff));
       }
 
       const isSelected = selectedMeasurementId === m.id;
@@ -1647,7 +1650,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       if (selectedSeg && selectedSeg.points.length > 0) {
         const segText = segmentLabelText(describeQuantity(
           segmentPixelQuantity(m, selectedSeg, takeoff?.type, currentScale),
-          { scale: currentScale, takeoff, totals: takeoffCostTotals?.find(t => t.id === m.takeoffId), pageUnit: scaleConfig?.unit },
+          { scale: currentScale, takeoff, totals: takeoffCostTotals?.find(t => t.id === m.takeoffId), pageUnit: scaleConfig?.unit, multiplier },
         ));
         const pos = placeSegmentLabel({
           segmentAnchor: labelAnchor(m.type, expandArcPoints(selectedSeg.points, selectedSeg.arcMidIndices)),
@@ -2242,7 +2245,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             totalRealValue += realValue;
           } else {
             const cleanTargetUnit = targetUnit.replace('sq ', '');
-            totalRealValue += convertUnit(realValue, sourceUnit, cleanTargetUnit, takeoff.type as 'length' | 'area' | 'count');
+            totalRealValue += convertUnit(realValue, sourceUnit, cleanTargetUnit, takeoff.type as 'length' | 'area' | 'count') * measurementMultiplier(m);
           }
         }
       });

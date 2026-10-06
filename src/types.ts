@@ -23,6 +23,10 @@ export interface Measurement {
   planSetId?: string; // The plan set version this measurement was made/updated on
   arcMidIndices?: number[]; // indices of arc mid-control points; triples (i-1, i, i+1) are arcs
   segments?: MeasurementSegment[]; // additional segments (first segment lives in points/arcMidIndices)
+  /** Length/area only: the measurement counts this many times (e.g. 4 for one
+   *  floor plan standing in for four identical floors). A whole number; unset
+   *  means 1. Read it through measurementMultiplier() (src/utils/multiplier.ts). */
+  multiplier?: number;
 }
 
 export type CostType = 'flat' | 'yield' | 'unit' | 'amount_per_units';

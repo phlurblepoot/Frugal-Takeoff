@@ -54,6 +54,16 @@ describe('SelectionInfoBar', () => {
     expect(screen.getByText('12 each')).toBeInTheDocument();
   });
 
+  it('a multiplied measurement shows the math on its segment and its total', () => {
+    render(<SelectionInfoBar summary={{
+      ...wall,
+      segment: { label: 'Segment', value: { quantity: '420.00 sq ft × 4 = 1680.00 sq ft', dollars: '$5,880' } },
+      total: { quantity: '507.50 sq ft × 4 = 2030.00 sq ft', dollars: '$7,105' },
+    }} multiCount={0} />);
+    expect(screen.getByTestId('selection-info-segment')).toHaveTextContent('Segment420.00 sq ft × 4 = 1680.00 sq ft · $5,880');
+    expect(screen.getByTestId('selection-info-total')).toHaveTextContent('Measurement total507.50 sq ft × 4 = 2030.00 sq ft · $7,105');
+  });
+
   it('several multi-selected measurements show a count instead', () => {
     render(<SelectionInfoBar summary={wall} multiCount={3} />);
     expect(screen.getByTestId('selection-info-bar')).toHaveTextContent('3 selected');

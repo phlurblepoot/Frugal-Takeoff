@@ -276,6 +276,24 @@ describe('describeQuantity / formatQuantityValue / segmentLabelText', () => {
     expect(describeQuantity({ type: 'area', pixelValue: 16000, lengthPixelValue: 100 }, { scale }).length).toBe(`10' - 0"`);
   });
 
+  it('a multiplied measurement shows its math and prices the multiplied quantity', () => {
+    const v = describeQuantity({ type: 'area', pixelValue: 42000 }, { ...ctx, multiplier: 4 });
+    // 1680 sq ft × $3.50 = $5,880.
+    expect(v).toEqual({ quantity: '420.00 sq ft × 4 = 1680.00 sq ft', dollars: '$5,880' });
+    expect(formatQuantityValue(v)).toBe('420.00 sq ft × 4 = 1680.00 sq ft · $5,880');
+    // A cutout deducts four times too.
+    expect(formatQuantityValue(describeQuantity({ type: 'area', pixelValue: -1250 }, { ...ctx, multiplier: 4 })))
+      .toBe('−12.50 sq ft × 4 = −50.00 sq ft · −$175');
+    // × 1 is no multiplier.
+    expect(describeQuantity({ type: 'area', pixelValue: 42000 }, { ...ctx, multiplier: 1 })).toEqual({ quantity: '420.00 sq ft', dollars: '$1,470' });
+  });
+
+  it('a multiplied surface area multiplies the area; its length line stays the run drawn', () => {
+    const v = describeQuantity({ type: 'area', pixelValue: 16000, lengthPixelValue: 100 }, { ...ctx, multiplier: 2 });
+    expect(v).toEqual({ quantity: '160.00 sq ft × 2 = 320.00 sq ft', length: '10.00 ft', dollars: '$1,120' });
+    expect(segmentLabelText(v)).toBe('160.00 sq ft × 2 = 320.00 sq ft · $1,120\nLength: 10.00 ft');
+  });
+
   it('a count is "1 each" priced per marker', () => {
     const countTakeoff: MeasurementTakeoff = { id: 't-c', name: 'Outlets', color: '#22c55e', type: 'count', costPerUnit: 45 };
     expect(formatQuantityValue(describeQuantity({ type: 'count', pixelValue: 1 }, { scale: null, takeoff: countTakeoff, totals: totalsFor(countTakeoff, 12) })))
@@ -371,6 +389,51 @@ describe('summarizeSelection', () => {
     expect(s.takeoffName).toBeUndefined();
     expect(s.color).toBe('#123456');
     expect(s.total).toEqual({ quantity: '507.50 sq ft' });
+  });
+
+  it('a multiplied measurement: its total and the selected segment both show the math', () => {
+    const page = mkPage([{ ...wall(), multiplier: 4 }]);
+    // 507.5 × 4 = 2030 sq ft.
+    const totals = [totalsFor(areaTakeoff, 2030)];
+    const whole = summarizeSelection(page, page.measurements[0], null, [areaTakeoff], totals);
+    expect(whole.total).toEqual({ quantity: '507.50 sq ft × 4 = 2030.00 sq ft', dollars: '$7,105' });
+    expect(summarizeSelection(page, page.measurements[0], -1, [areaTakeoff], totals).segment)
+      .toEqual({ label: 'Segment', value: { quantity: '420.00 sq ft × 4 = 1680.00 sq ft', dollars: '$5,880' } });
+    expect(summarizeSelection(page, page.measurements[0], 1, [areaTakeoff], totals).segment)
+      .toEqual({ label: 'Cutout', value: { quantity: '−12.50 sq ft × 4 = −50.00 sq ft', dollars: '−$175' } });
+  });
+
+  it('a count marker never shows a multiplier', () => {
+    const outlets: MeasurementTakeoff = { id: 't-c', name: 'Outlets', color: '#22c55e', type: 'count', costPerUnit: 45 };
+    const page = mkPage([{ id: 'c1', type: 'count', name: 'c1', color: '#000', takeoffId: 't-c', points: [{ x: 1, y: 1 }], multiplier: 3 }]);
+    expect(summarizeSelection(page, page.measurements[0], null, [outlets], [totalsFor(outlets, 1)]).total)
+      .toEqual({ quantity: '1 each', dollars: '$45' });
+  });
+
+  it("a multiplied measurement's $ agrees with its computeTakeoffTotals row, and its segments' $ add up to it", () => {
+    const priced: MeasurementTakeoff = {
+      ...areaTakeoff, costPerUnit: undefined, isAdvancedCost: true,
+      customCosts: [
+        { id: 'c1', name: 'Mobilization', type: 'flat', cost: 900 },
+        { id: 'c2', name: 'Plaster', type: 'unit', costPerUnit: 3.5 },
+      ],
+    };
+    const other: Measurement = { id: 'm-2', type: 'area', name: 'South wall', color: '#000', takeoffId: 't-area', points: rect(0, 0, 100, 100) };
+    const page = mkPage([{ ...wall(), multiplier: 3 }, other]);
+    const project = { id: 'pr', name: 'Job', createdAt: 0, pages: [page], takeoffs: [priced] } as unknown as Project;
+    const totals = computeTakeoffTotals(project, new Set(['p1']));
+    const row = totals[0].pageBreakdown[0].measurements.find(r => r.id === 'm-wall')!;
+    expect(row.realValue).toBeCloseTo(507.5 * 3);
+
+    const s = summarizeSelection(page, page.measurements[0], null, [priced], totals);
+    expect(s.total.dollars).toBe(formatWholeDollars(allocateSubsetCost(totals[0], row.realValue)));
+
+    const m = page.measurements[0];
+    const segDollars = [-1, 0, 1].map(i => {
+      const q = segmentPixelQuantity(m, measurementSegmentAt(m, i)!, 'area', scale);
+      return prorateQuantityCost(totals[0], quantityInTakeoffUnits(q, { scale, takeoff: priced })! * 3)!;
+    });
+    expect(segDollars.reduce((a, b) => a + b, 0)).toBeCloseTo(allocateSubsetCost(totals[0], row.realValue), 6);
   });
 
   it("agrees with the Takeoffs tab: the measurement's $ is its computeTakeoffTotals row prorated", () => {

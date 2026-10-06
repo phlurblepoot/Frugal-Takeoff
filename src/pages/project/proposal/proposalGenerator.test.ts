@@ -197,3 +197,69 @@ describe('computeTakeoffTotals nets subtract segments out of area totals', () =>
     expect(t1.totalRealValue).toBeCloseTo(96);
   });
 });
+
+// ── computeTakeoffTotals: a measurement's multiplier ────────────────────────
+// A length or area measurement with a multiplier (× N) counts N times in every
+// total; its row keeps the measured baseValue and the multiplier so the
+// Takeoffs tab, Excel and the rest can show the math. Count markers never
+// multiply. Each measurement's own maths is unchanged — only its result is
+// multiplied.
+describe('computeTakeoffTotals multiplies a measurement by its multiplier', () => {
+  const mkPage = (o: Partial<ProjectPage>): ProjectPage => ({
+    id: 'p', name: '', pageNumber: '', description: '', imageId: '', thumbnailId: '',
+    imageWidth: 0, imageHeight: 0, measurements: [], scaleConfig: null, ...o,
+  } as ProjectPage);
+  const mkProj = (pages: ProjectPage[], takeoffs: any[]): Project => ({
+    id: 'pr', name: 'x', createdAt: 0, pages, takeoffs, planSets: [],
+  } as Project);
+  // 1 px = 1 ft, so px reads as ft and px² as sq ft.
+  const scaleConfig = { pixelDistance: 1, realWorldDistance: 1, unit: 'ft' } as any;
+  const line = (id: string, len: number, o: any = {}) => ({
+    id, type: 'length', name: id, color: '#000', takeoffId: 't-len',
+    points: [{ x: 0, y: 0 }, { x: len, y: 0 }], ...o,
+  } as any);
+
+  it('length: totals, the page breakdown and each row count the multiplied value', () => {
+    const p1 = mkPage({ id: 'p1', name: 'A-1', scaleConfig, measurements: [line('m1', 100, { multiplier: 4 }), line('m2', 50)] });
+    const p2 = mkPage({ id: 'p2', name: 'A-2', scaleConfig, measurements: [line('m3', 30, { multiplier: 2 })] });
+    const project = mkProj([p1, p2], [{ id: 't-len', name: 'Base', color: '#000', type: 'length', unit: 'ft' }]);
+
+    const [t] = computeTakeoffTotals(project, new Set(['p1', 'p2']));
+    expect(t.totalRealValue).toBeCloseTo(100 * 4 + 50 + 30 * 2); // 510
+    expect(t.pageBreakdown.map(pb => pb.realValue)).toEqual([450, 60]);
+    expect(t.pageBreakdown[0].measurements).toEqual([
+      { id: 'm1', name: 'm1', realValue: 400, unit: 'ft', baseValue: 100, multiplier: 4 },
+      { id: 'm2', name: 'm2', realValue: 50, unit: 'ft', baseValue: 50, multiplier: 1 },
+    ]);
+    expect(t.pageBreakdown[1].measurements[0]).toMatchObject({ realValue: 60, baseValue: 30, multiplier: 2 });
+  });
+
+  it('area (net of its cutout) and a length priced as wall surface area both multiply', () => {
+    const slab = {
+      id: 'a1', type: 'area', name: 'Floor', color: '#000', takeoffId: 't-area', multiplier: 3,
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }], // 100 sq ft
+      segments: [{ points: [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }, { x: 1, y: 3 }], subtract: true }], // −4
+    } as any;
+    // 20 ft run × 10 ft high = 200 sq ft of wall, × 2.
+    const wall = { ...line('w1', 20, { multiplier: 2 }), takeoffId: 't-area', heights: [10, 10] };
+    const page = mkPage({ id: 'p1', scaleConfig, measurements: [slab, wall] });
+    const project = mkProj([page], [{ id: 't-area', name: 'Plaster', color: '#000', type: 'area', unit: 'sq ft' }]);
+
+    const [t] = computeTakeoffTotals(project, new Set(['p1']));
+    expect(t.totalRealValue).toBeCloseTo(96 * 3 + 200 * 2); // 688
+    const [a, w] = t.pageBreakdown[0].measurements;
+    expect(a).toMatchObject({ baseValue: 96, multiplier: 3 });
+    expect(a.realValue).toBeCloseTo(288);
+    expect(w).toMatchObject({ baseValue: 200, multiplier: 2, realValue: 400 });
+  });
+
+  it('a count marker counts once, even carrying a stray multiplier', () => {
+    const marker = (id: string, o: any = {}) => ({ id, type: 'count', name: id, color: '#000', takeoffId: 't-c', points: [{ x: 1, y: 1 }], ...o } as any);
+    const page = mkPage({ id: 'p1', scaleConfig, measurements: [marker('c1', { multiplier: 5 }), marker('c2')] });
+    const project = mkProj([page], [{ id: 't-c', name: 'Outlets', color: '#000', type: 'count' }]);
+
+    const [t] = computeTakeoffTotals(project, new Set(['p1']));
+    expect(t.totalRealValue).toBe(2);
+    expect(t.pageBreakdown[0].measurements[0]).toMatchObject({ realValue: 1, baseValue: 1, multiplier: 1 });
+  });
+});

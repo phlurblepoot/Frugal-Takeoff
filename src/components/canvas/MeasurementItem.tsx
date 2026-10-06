@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Edit2, Trash2 } from 'lucide-react';
+import { Edit2, Trash2, Layers } from 'lucide-react';
 import { Measurement, ScaleConfig, MeasurementTakeoff } from '../../types';
 import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateSurfaceAreaPx, expandArcPoints, measurementAreaPx } from '../../utils/math';
+import { measurementMultiplier, multipliedText, formatMultiplied } from '../../utils/multiplier';
 
 export function MeasurementItem({
   measurement,
@@ -14,6 +15,7 @@ export function MeasurementItem({
   onSelect,
   onRename,
   onEditHeights,
+  onEditMultiplier,
   pageName,
   pageId,
   projectId,
@@ -30,6 +32,8 @@ export function MeasurementItem({
   onSelect: () => void;
   onRename: (name: string) => void;
   onEditHeights?: () => void;
+  /** Opens the multiplier editor. Never offered for a count marker. */
+  onEditMultiplier?: () => void;
   pageName?: string;
   pageId?: string;
   projectId?: string;
@@ -46,6 +50,28 @@ export function MeasurementItem({
       rowRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
   }, [selected]);
+
+  // A multiplied length/area shows what it counts for in the usual place, and
+  // its math on a line of its own under the row: "1250.00 sq ft × 4 =
+  // 5000.00 sq ft". Count markers never multiply.
+  const multiplier = measurementMultiplier(measurement);
+  const value = (() => {
+    if (measurement.type === 'count') return { total: formatMeasurement(1, 'count', scaleConfig, takeoff) };
+    const allPts = [
+      expandArcPoints(measurement.points, measurement.arcMidIndices),
+      ...(measurement.segments ?? []).map(s => expandArcPoints(s.points, s.arcMidIndices)),
+    ];
+    if (measurement.type === 'length') {
+      return takeoffType === 'area'
+        ? multipliedText(
+            allPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, measurement.heights || [], measurement.isTwoSided || false, scaleConfig), 0),
+            multiplier, v => formatMeasurement(v, 'area', scaleConfig, takeoff))
+        : multipliedText(
+            allPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0),
+            multiplier, v => formatMeasurement(v, 'length', scaleConfig, takeoff));
+    }
+    return multipliedText(measurementAreaPx(measurement), multiplier, v => formatMeasurement(v, 'area', scaleConfig, takeoff));
+  })();
 
   const handleSaveName = () => {
     if (editName.trim()) {
@@ -108,6 +134,15 @@ export function MeasurementItem({
                 title="Double-click to rename"
               >
                 {measurement.name}
+                {multiplier > 1 && (
+                  <span
+                    data-testid="measurement-multiplier-badge"
+                    className="ml-1.5 inline-flex items-center px-1.5 py-px rounded-md bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 text-[11px] font-bold align-middle"
+                    title={`Counts ${multiplier} times`}
+                  >
+                    ×{multiplier}
+                  </span>
+                )}
               </span>
             )}
             {pageName && pageId && projectId && (
@@ -134,24 +169,7 @@ export function MeasurementItem({
         </div>
         <div className="flex items-center gap-3 shrink-0 ml-2">
           <span data-testid="measurement-value" className="text-sm font-semibold text-ink whitespace-pre-line text-right">
-            {measurement.type === 'count'
-              ? formatMeasurement(1, 'count', scaleConfig, takeoff)
-              : (() => {
-                  const allPts = [
-                    expandArcPoints(measurement.points, measurement.arcMidIndices),
-                    ...(measurement.segments ?? []).map(s => expandArcPoints(s.points, s.arcMidIndices)),
-                  ];
-                  return measurement.type === 'length'
-                    ? (takeoffType === 'area'
-                        ? formatMeasurement(
-                            allPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, measurement.heights || [], measurement.isTwoSided || false, scaleConfig), 0),
-                            'area', scaleConfig, takeoff)
-                        : formatMeasurement(
-                            allPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0),
-                            'length', scaleConfig, takeoff))
-                    : formatMeasurement(measurementAreaPx(measurement), 'area', scaleConfig, takeoff);
-                })()
-            }
+            {value.total}
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -178,15 +196,22 @@ export function MeasurementItem({
         </div>
       </div>
 
+      {value.math && (
+        <div data-testid="measurement-multiplier-math" className="text-xs font-medium text-ink-soft text-right pl-1">
+          {value.math} {value.total}
+        </div>
+      )}
+
       {measurement.type === 'area' && (measurement.segments ?? []).some(s => s.subtract) && (
         <div className="flex flex-col gap-0.5 pl-1">
           {(measurement.segments ?? [])
             .filter(s => s.subtract)
             .map((s, i) => (
-              <div key={i} className="flex items-center justify-between text-xs text-ink-faint">
-                <span>Cutout {i + 1}</span>
-                <span className="font-medium">
-                  −{formatMeasurement(calculatePolygonArea(expandArcPoints(s.points, s.arcMidIndices)), 'area', scaleConfig, takeoff)}
+              <div key={i} className="flex items-center justify-between gap-2 text-xs text-ink-faint">
+                <span className="shrink-0">Cutout {i + 1}</span>
+                <span data-testid="cutout-value" className="font-medium text-right">
+                  {formatMultiplied(calculatePolygonArea(expandArcPoints(s.points, s.arcMidIndices)), multiplier,
+                    v => `−${formatMeasurement(v, 'area', scaleConfig, takeoff)}`)}
                 </span>
               </div>
             ))}
@@ -204,6 +229,16 @@ export function MeasurementItem({
                 className="text-xs text-accent-600 hover:text-accent-800 flex items-center gap-1"
               >
                 <Edit2 size={10} /> Edit Heights
+              </button>
+            )}
+            {measurement.type !== 'count' && onEditMultiplier && (
+              <button
+                data-testid="btn-edit-multiplier"
+                onClick={(e) => { e.stopPropagation(); onEditMultiplier(); }}
+                className="text-xs text-accent-600 hover:text-accent-800 flex items-center gap-1"
+                title="Count this measurement more than once"
+              >
+                <Layers size={10} /> Multiplier
               </button>
             )}
             <button

@@ -182,6 +182,21 @@ describe('saveProject', () => {
     expect(reloaded.pages[0].measurements).toHaveLength(3);
   });
 
+  it('round-trips a measurement multiplier through the attrs JSON (and clears it)', () => {
+    const p = loadProject(db, 'proj1')!;
+    p.pages[0].measurements[0].multiplier = 4;
+    saveProject(db, 'proj1', p);
+    const row = db.prepare('SELECT attrs FROM measurements WHERE id = ?').get('m1') as { attrs: string };
+    expect(JSON.parse(row.attrs).multiplier).toBe(4);
+    const reloaded = loadProject(db, 'proj1')!;
+    expect(reloaded.pages[0].measurements[0].multiplier).toBe(4);
+
+    // Back to ×1: the client drops the field, and so does the stored row.
+    delete reloaded.pages[0].measurements[0].multiplier;
+    saveProject(db, 'proj1', reloaded);
+    expect(loadProject(db, 'proj1')!.pages[0].measurements[0]).not.toHaveProperty('multiplier');
+  });
+
   it('rejects a stale version with ConflictError', () => {
     const stale = loadProject(db, 'proj1')!;
     const fresh = loadProject(db, 'proj1')!;

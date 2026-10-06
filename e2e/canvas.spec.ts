@@ -1,5 +1,6 @@
 import {
-  test, expect, seedProjectWithPage, seedProjectWithAreaTakeoffLength, seedProjectWithSupersededRevision, login,
+  test, expect, seedProjectWithPage, seedProjectWithAreaTakeoffLength, seedProjectWithSupersededRevision,
+  seedProjectWithTakeoffMeasurement, login,
 } from './fixtures/test';
 import type { Page } from '@playwright/test';
 
@@ -761,5 +762,115 @@ test.describe('CanvasView selected segment value', () => {
     // Escape deselects; the bar goes away with the selection.
     await authedPage.keyboard.press('Escape');
     await expect(bar).toBeHidden();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CanvasView — a measurement's multiplier (× N).
+//
+// A selected length/area row's action strip has Multiplier, which opens a
+// small editor. The measurement then counts N times: its row shows 60 ft with
+// the math under it ("30.00 ft × 2 = 60.00 ft") and a ×N badge, and every
+// total doubles — the sidebar's takeoff total, the selection bar, and the
+// Takeoffs tab (whose measurement row shows the math too). The seed is one
+// 30 ft measurement on a $5/ft length takeoff (300 px at 100 px = 10 ft).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('CanvasView measurement multiplier', () => {
+  test('×2 shows the math and doubles the sidebar and Takeoffs tab totals', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const { projectId, pageId } = await seedProjectWithTakeoffMeasurement(request, token);
+    await gotoCanvas(authedPage, projectId, pageId);
+
+    const sidebar = authedPage.getByTestId('measurement-sidebar');
+    const row = authedPage.getByTestId('measurement-row').first();
+    await expect(row.getByTestId('measurement-value')).toHaveText('30.00 ft');
+    await expect(sidebar.getByTestId('takeoff-total')).toHaveText('30.00 ft');
+
+    await row.click();
+    await authedPage.getByTestId('btn-edit-multiplier').click();
+    await authedPage.getByTestId('multiplier-input').fill('2');
+    await authedPage.getByTestId('btn-save-multiplier').click();
+    await expect(authedPage.getByTestId('multiplier-modal')).toHaveCount(0);
+
+    await expect(row.getByTestId('measurement-multiplier-badge')).toHaveText('×2');
+    await expect(row.getByTestId('measurement-value')).toHaveText('60.00 ft');
+    await expect(row.getByTestId('measurement-multiplier-math')).toHaveText('30.00 ft × 2 = 60.00 ft');
+    await expect(sidebar.getByTestId('takeoff-total')).toHaveText('60.00 ft');
+    await expect(authedPage.getByTestId('selection-info-total')).toHaveText('Measurement total30.00 ft × 2 = 60.00 ft · $300');
+    // Visual proof of the canvas label, sidebar row and selection bar.
+    await authedPage.screenshot({ path: 'test-results/measurement-multiplier.png' });
+
+    // It was saved: a reload keeps it.
+    await gotoCanvas(authedPage, projectId, pageId);
+    await expect(authedPage.getByTestId('measurement-row').first().getByTestId('measurement-multiplier-badge')).toHaveText('×2');
+
+    // Takeoffs tab: the total doubles, and the measurement row shows the math.
+    await authedPage.goto(`/project/${projectId}/takeoff?tab=takeoffs`);
+    const table = authedPage.getByTestId('takeoffs-table');
+    const takeoffRow = table.getByTestId('takeoff-row').first();
+    await expect(takeoffRow).toContainText('60.00 ft');
+    await expect(takeoffRow).toContainText('$300');
+    await takeoffRow.getByText(/Wall Length/).click();
+    await table.getByTitle('Show measurements').first().click();
+    await expect(table.getByTestId('takeoff-measurement-qty').first()).toHaveText('30.00 ft × 2 = 60.00 ft');
+  });
+
+  test('a superseded revision cannot change a multiplier', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const seed = await seedProjectWithSupersededRevision(request, token);
+    await gotoCanvas(authedPage, seed.projectId, seed.supersededPageId);
+    await expect(authedPage.getByTestId('canvas-superseded-banner')).toBeVisible();
+
+    await authedPage.getByTestId('measurement-row').first().click();
+    await authedPage.getByTestId('btn-edit-multiplier').click();
+    // The read-only explanation instead of the editor.
+    await expect(authedPage.getByText('Tool Restricted')).toBeVisible();
+    await expect(authedPage.locator('p', { hasText: /read-only history/i })).toBeVisible();
+    await expect(authedPage.getByTestId('multiplier-modal')).toHaveCount(0);
+  });
+
+  test('measurements with different multipliers are not merged', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const { projectId, pageId } = await seedProjectWithPage(request, token, { withScale: false });
+    await gotoCanvas(authedPage, projectId, pageId);
+    const box = await surfaceBox(authedPage);
+
+    const cy = box.height / 2;
+    const x1 = box.width / 2 - 200;
+    await calibrate(authedPage, box, [x1, cy], [box.width / 2 + 200, cy], '10');
+
+    // Two separate lines (Escape between them, as in the merge test above).
+    await createTakeoff(authedPage, 'Linear', 'length');
+    await authedPage.getByTestId('tool-length').click();
+    await clickCanvas(authedPage, box, x1, cy - 60);
+    await clickCanvas(authedPage, box, x1 + 200, cy - 60);
+    await authedPage.keyboard.press('Enter');
+    await authedPage.keyboard.press('Escape');
+    await authedPage.getByTestId('tool-length').click();
+    await clickCanvas(authedPage, box, x1, cy + 60);
+    await clickCanvas(authedPage, box, x1 + 200, cy + 60);
+    await authedPage.keyboard.press('Enter');
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(2);
+
+    // The second (still selected) line counts twice.
+    await authedPage.getByTestId('btn-edit-multiplier').click();
+    await authedPage.getByTestId('multiplier-input').fill('2');
+    await authedPage.getByTestId('btn-save-multiplier').click();
+    await expect(authedPage.getByTestId('measurement-multiplier-badge')).toHaveCount(1);
+
+    await authedPage.getByTestId('tool-pan').click();
+    await authedPage.getByTestId('btn-multi-select-toggle').click();
+    await clickCanvas(authedPage, box, x1 + 100, cy - 60);
+    await clickCanvas(authedPage, box, x1 + 100, cy + 60);
+
+    const sidebar = authedPage.getByTestId('measurement-sidebar');
+    await expect(sidebar.getByText('2 selected')).toBeVisible();
+    await expect(sidebar.getByText('Different multipliers — cannot merge')).toBeVisible();
+
+    await authedPage.getByTestId('btn-merge').click();
+    await expect(authedPage.getByText('These measurements have different multipliers', { exact: false })).toBeVisible();
+    await expect(authedPage.getByTestId('btn-confirm-delete')).toHaveCount(0);
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(2);
   });
 });
