@@ -28,6 +28,16 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.2.0',
+    date: 'October 6, 2026',
+    changes: [
+      'Change orders, RFIs, issues and daily reports can now have PDF attachments, the same way invoices do: Add PDFs in the editor uploads a PDF or picks one already in the app (from any project), and the list can be reordered or trimmed. The attached PDFs\' pages are added to the end of the generated document — after its own pages and photos — in the order shown, so they go out with the email too.',
+      'Adding, removing or reordering an attachment marks that document out of date, so the next Generate or Send includes the change.',
+      'On an RFI these are separate from the GC\'s answer, which stays under Response.',
+      'Note for self-hosters: this update adds four new database tables for the attachments (migration 42, additive — existing data untouched).',
+    ],
+  },
+  {
     version: '4.1.0',
     date: 'October 6, 2026',
     changes: [

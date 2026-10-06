@@ -338,13 +338,19 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     db.prepare("DELETE FROM payments WHERE (targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)) OR (targetType = 'payapp' AND targetId IN (SELECT id FROM aia_pay_apps WHERE projectId = ?))").run(id, id);
     db.prepare('DELETE FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM invoices WHERE projectId = ?').run(id);
+    // A record's PDF attachments (migration 42) go before the record itself.
+    db.prepare('DELETE FROM change_order_attachments WHERE changeOrderId IN (SELECT id FROM change_orders WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM change_orders WHERE projectId = ?').run(id);
-    // Issue rows (Phase 4b) — photos link to issues, delete photos first.
+    // Issue rows (Phase 4b) — photos and attachments link to issues, delete them first.
     db.prepare('DELETE FROM issue_photos WHERE issueId IN (SELECT id FROM issues WHERE projectId = ?)').run(id);
+    db.prepare('DELETE FROM issue_attachments WHERE issueId IN (SELECT id FROM issues WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM issues WHERE projectId = ?').run(id);
-    // RFI rows — photos link to rfis, delete photos first.
+    // RFI rows — photos and attachments link to rfis, delete them first.
     db.prepare('DELETE FROM rfi_photos WHERE rfiId IN (SELECT id FROM rfis WHERE projectId = ?)').run(id);
+    db.prepare('DELETE FROM rfi_attachments WHERE rfiId IN (SELECT id FROM rfis WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM rfis WHERE projectId = ?').run(id);
+    // Daily reports' PDF attachments (migration 42).
+    db.prepare('DELETE FROM daily_report_attachments WHERE dailyReportId IN (SELECT id FROM daily_reports WHERE projectId = ?)').run(id);
     // Punch rows (Phase 4c) — photos link to punch items, delete photos first.
     db.prepare('DELETE FROM punch_photos WHERE punchItemId IN (SELECT id FROM punch_items WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM punch_items WHERE projectId = ?').run(id);

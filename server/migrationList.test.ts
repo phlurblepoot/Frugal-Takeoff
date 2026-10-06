@@ -1161,3 +1161,45 @@ describe('migration 38: onlyoffice-history', () => {
     db.close();
   });
 });
+
+describe('migration 42: pdf-attachments', () => {
+  // [table, owner column (the same one that record's photo table uses), index]
+  const TABLES = [
+    ['change_order_attachments', 'changeOrderId', 'idx_change_order_attachments_change_order'],
+    ['rfi_attachments', 'rfiId', 'idx_rfi_attachments_rfi'],
+    ['issue_attachments', 'issueId', 'idx_issue_attachments_issue'],
+    ['daily_report_attachments', 'dailyReportId', 'idx_daily_report_attachments_report'],
+  ] as const;
+
+  it('adds the four tables to a v41 database, shaped like invoice_attachments, and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 41));
+    for (const [t] of TABLES) expect(tableNames(db)).not.toContain(t);
+
+    runMigrations(db, dir, migrations);
+    for (const [t, owner] of TABLES) {
+      expect(columnNames(db, t), t).toEqual(['id', owner, 'fileId', 'sortOrder', 'createdAt']);
+      const ins = db.prepare(`INSERT INTO ${t} (id, ${owner}, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)`);
+      ins.run(`${t}-1`, 'r1', 'f1', 0, 1);
+      expect(() => ins.run(`${t}-2`, 'r1', 'f1', 1, 1), t).toThrow(/UNIQUE/);
+      ins.run(`${t}-3`, 'r2', 'f1', 0, 1); // the same PDF on another record is fine
+    }
+
+    // Idempotent: replaying up() must not throw or touch the rows.
+    const m42 = migrations.find(m => m.version === 42)!;
+    expect(() => m42.up({ db, dataDir: dir })).not.toThrow();
+    for (const [t] of TABLES) expect(db.prepare(`SELECT COUNT(*) c FROM ${t}`).get(), t).toEqual({ c: 2 });
+    db.close();
+  });
+
+  it('indexes each table on its owner column', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    for (const [, owner, idx] of TABLES) {
+      const cols = (db.prepare(`PRAGMA index_info(${idx})`).all() as { name: string }[]).map(r => r.name);
+      expect(cols, idx).toEqual([owner]);
+    }
+    db.close();
+  });
+});

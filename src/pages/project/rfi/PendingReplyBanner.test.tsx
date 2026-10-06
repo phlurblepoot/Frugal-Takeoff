@@ -71,7 +71,7 @@ const rfi = (over: Partial<Rfi> = {}): Rfi => ({
   question: 'Which detail governs?', specRef: null, drawingRef: null,
   attention: null, responseNeededBy: null, responseText: null, responseFileId: null,
   status: 'sent', version: 2, sentAt: 5, answeredAt: null,
-  createdAt: 1, updatedAt: 10, photos: [], pendingReply: pending(),
+  createdAt: 1, updatedAt: 10, photos: [], attachments: [], pendingReply: pending(),
   ...over,
 });
 

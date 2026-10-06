@@ -7,18 +7,21 @@ import type Database from 'better-sqlite3';
 import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
+import { putBuffer } from './files';
 import {
   RFI_STATUSES, getRfi, listRfis, createRfi, saveRfi, setRfiStatus,
-  deleteRfi, addPhoto, removePhoto, markRfiSent, setRfiResponse,
+  deleteRfi, addPhoto, removePhoto, addAttachment, updateAttachment, removeAttachment, markRfiSent, setRfiResponse,
   setPendingReply, acceptPendingReply, dismissPendingReply,
   ValidationError, ConflictError, NotFoundError, NoPendingReplyError,
 } from './rfiStore';
 
 let db: Database.Database;
+let dir: string;
 
 beforeEach(() => {
   db = openDb(':memory:');
-  runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-rfi-')), migrations);
+  dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-rfi-'));
+  runMigrations(db, dir, migrations);
   db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Proj', 1);
   db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p2', 'Proj2', 1);
 });
@@ -153,6 +156,74 @@ describe('rfiStore', () => {
     addPhoto(db, id, 'f2');
     removePhoto(db, id, 'f1');
     expect(getRfi(db, id)!.photos.map((p: any) => p.fileId)).toEqual(['f2']);
+  });
+
+  // PDF attachments: same contract as the invoice's, but with this RFI's photo
+  // freshness rule — updatedAt moves, version does not.
+  describe('attachments', () => {
+    const pdfFile = (id: string) => putBuffer(db, dir, id, Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'document', name: `${id}.pdf` });
+    const stale = (id: string) => db.prepare('UPDATE rfis SET updatedAt = 1 WHERE id = ?').run(id);
+
+    it('only an existing PDF can be attached, to an existing RFI', () => {
+      const { id } = createRfi(db, 'p1', { title: 'A' });
+      putBuffer(db, dir, 'img', Buffer.from('x'), 'image/jpeg', { projectId: 'p1', kind: 'rfi-photo', name: 'img.jpg' });
+      expect(() => addAttachment(db, id, 'img')).toThrow(ValidationError);
+      expect(() => addAttachment(db, id, 'missing')).toThrow(NotFoundError);
+      expect(() => addAttachment(db, id, '')).toThrow(ValidationError);
+      pdfFile('a1');
+      expect(() => addAttachment(db, 'nope', 'a1')).toThrow(NotFoundError);
+      expect(getRfi(db, id)!.attachments).toEqual([]);
+    });
+
+    it('adds idempotently in order, reorders, removes — stamping updatedAt but never version', () => {
+      const { id } = createRfi(db, 'p1', { title: 'A' });
+      pdfFile('a1'); pdfFile('a2');
+      stale(id);
+      addAttachment(db, id, 'a1');
+      addAttachment(db, id, 'a1'); // idempotent
+      addAttachment(db, id, 'a2');
+      let rfi = getRfi(db, id)!;
+      expect(rfi.attachments).toEqual([
+        expect.objectContaining({ fileId: 'a1', sortOrder: 0, name: 'a1.pdf', mime: 'application/pdf' }),
+        expect.objectContaining({ fileId: 'a2', sortOrder: 1, name: 'a2.pdf', mime: 'application/pdf' }),
+      ]);
+      expect(rfi.updatedAt).toBeGreaterThan(1);
+      expect(rfi.version).toBe(1);
+
+      stale(id);
+      updateAttachment(db, id, 'a1', { sortOrder: 5 });
+      rfi = getRfi(db, id)!;
+      expect(rfi.attachments.map((a: any) => a.fileId)).toEqual(['a2', 'a1']);
+      expect(rfi.updatedAt).toBeGreaterThan(1);
+      expect(rfi.version).toBe(1);
+      expect(() => updateAttachment(db, id, 'nope', { sortOrder: 0 })).toThrow(NotFoundError);
+      expect(() => updateAttachment(db, id, 'a1', { sortOrder: 'x' as any })).toThrow(ValidationError);
+
+      stale(id);
+      removeAttachment(db, id, 'a1');
+      rfi = getRfi(db, id)!;
+      expect(rfi.attachments.map((a: any) => a.fileId)).toEqual(['a2']);
+      expect(rfi.updatedAt).toBeGreaterThan(1);
+      expect(rfi.version).toBe(1);
+    });
+
+    it('is separate from the response file', () => {
+      const { id } = createRfi(db, 'p1', { title: 'A' });
+      pdfFile('a1'); pdfFile('resp');
+      addAttachment(db, id, 'a1');
+      setRfiResponse(db, id, { fileId: 'resp' });
+      const rfi = getRfi(db, id)!;
+      expect(rfi.responseFileId).toBe('resp');
+      expect(rfi.attachments.map((a: any) => a.fileId)).toEqual(['a1']);
+    });
+
+    it('delete cascades attachment links', () => {
+      const { id } = createRfi(db, 'p1', { title: 'A' });
+      pdfFile('a1');
+      addAttachment(db, id, 'a1');
+      deleteRfi(db, id);
+      expect((db.prepare('SELECT COUNT(*) c FROM rfi_attachments').get() as any).c).toBe(0);
+    });
   });
 
   it('markRfiSent sets status sent + sentAt', () => {

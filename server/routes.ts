@@ -15,17 +15,20 @@ import {
   addInvoicePhoto, removeInvoicePhoto, addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus, deleteChangeOrder,
   addChangeOrderPhoto, removeChangeOrderPhoto,
+  addChangeOrderAttachment, updateChangeOrderAttachment, removeChangeOrderAttachment,
   billingSummary,
   ValidationError as BillingValidationError, ConflictError as BillingConflictError, NotFoundError as BillingNotFoundError,
 } from './billingStore';
 import {
   listIssues, getIssue, createIssue, saveIssue, setIssueStatus, deleteIssue,
   addPhoto, removePhoto,
+  addAttachment as addIssueAttachment, updateAttachment as updateIssueAttachment, removeAttachment as removeIssueAttachment,
   ValidationError as IssueValidationError, ConflictError as IssueConflictError, NotFoundError as IssueNotFoundError,
 } from './issueStore';
 import {
   listRfis, getRfi, createRfi, saveRfi, setRfiStatus, deleteRfi,
   addPhoto as addRfiPhoto, removePhoto as removeRfiPhoto, setRfiResponse,
+  addAttachment as addRfiAttachment, updateAttachment as updateRfiAttachment, removeAttachment as removeRfiAttachment,
   acceptPendingReply, dismissPendingReply,
   ValidationError as RfiValidationError, ConflictError as RfiConflictError, NotFoundError as RfiNotFoundError,
   NoPendingReplyError as RfiNoPendingReplyError,
@@ -33,6 +36,7 @@ import {
 import {
   getDailyReport, listDailyReports, createDailyReport, saveDailyReport, deleteDailyReport,
   addPhoto as addDailyPhoto, removePhoto as removeDailyPhoto,
+  addAttachment as addDailyAttachment, updateAttachment as updateDailyAttachment, removeAttachment as removeDailyAttachment,
   ValidationError as DailyValidationError, ConflictError as DailyConflictError,
   NotFoundError as DailyNotFoundError, DateTakenError as DailyDateTakenError,
 } from './dailyReportStore';
@@ -451,6 +455,31 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json({ success: true });
     } catch (e) { billingErr(e, res); }
   });
+  app.post('/api/change-orders/:id/attachments', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addChangeOrderAttachment(db, req.params.id, req.body.fileId);
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.patch('/api/change-orders/:id/attachments/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      updateChangeOrderAttachment(db, req.params.id, req.params.fileId, req.body ?? {});
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/change-orders/:id/attachments/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      removeChangeOrderAttachment(db, req.params.id, req.params.fileId);
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
 
   app.get('/api/projects/:id/billing-summary', authenticateToken, requireAdmin, (req, res) => {
     try { res.json(billingSummary(db, req.params.id)); } catch (e) { billingErr(e, res); }
@@ -728,6 +757,33 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json({ success: true });
     } catch (e) { issueErr(e, res); }
   });
+  // PDF attachments: like the photos, they move updatedAt but not version, so
+  // the broadcast carries no version either.
+  app.post('/api/issues/:id/attachments', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addIssueAttachment(db, req.params.id, req.body.fileId);
+      const row = getIssue(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { issueErr(e, res); }
+  });
+  app.patch('/api/issues/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      updateIssueAttachment(db, req.params.id, req.params.fileId, req.body ?? {});
+      const row = getIssue(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { issueErr(e, res); }
+  });
+  app.delete('/api/issues/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      removeIssueAttachment(db, req.params.id, req.params.fileId);
+      const row = getIssue(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { issueErr(e, res); }
+  });
 
   // ── RFIs (any authenticated user — field-created, like issues) ─────────────
   const rfiErr = (e: unknown, res: express.Response) => {
@@ -826,6 +882,33 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const row = getRfi(db, req.params.id);
       // addPhoto/removePhoto don't bump the RFI's version — attaching the
       // unchanged version would let a client's version-dedupe skip this event.
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { rfiErr(e, res); }
+  });
+  // PDF attachments (not the GC's response file — that is /response): like the
+  // photos, they move updatedAt but not version, so no version is broadcast.
+  app.post('/api/rfis/:id/attachments', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addRfiAttachment(db, req.params.id, req.body.fileId);
+      const row = getRfi(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { rfiErr(e, res); }
+  });
+  app.patch('/api/rfis/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      updateRfiAttachment(db, req.params.id, req.params.fileId, req.body ?? {});
+      const row = getRfi(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { rfiErr(e, res); }
+  });
+  app.delete('/api/rfis/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      removeRfiAttachment(db, req.params.id, req.params.fileId);
+      const row = getRfi(db, req.params.id);
       if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { rfiErr(e, res); }
@@ -939,6 +1022,34 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.delete('/api/daily-reports/:id/photos/:fileId', authenticateToken, (req, res) => {
     try {
       removeDailyPhoto(db, req.params.id, req.params.fileId);
+      const row = getDailyReport(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  // PDF attachments: same as the photos above — they stamp updatedAt (so the
+  // generated PDF reads out of date) without bumping version, and broadcast
+  // without one.
+  app.post('/api/daily-reports/:id/attachments', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addDailyAttachment(db, req.params.id, req.body.fileId);
+      const row = getDailyReport(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.patch('/api/daily-reports/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      updateDailyAttachment(db, req.params.id, req.params.fileId, req.body ?? {});
+      const row = getDailyReport(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.delete('/api/daily-reports/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      removeDailyAttachment(db, req.params.id, req.params.fileId);
       const row = getDailyReport(db, req.params.id);
       if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
@@ -1534,6 +1645,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       ['issue_photos', 'fileId'], ['punch_photos', 'fileId'], ['task_photos', 'fileId'],
       ['change_order_photos', 'fileId'], ['rfi_photos', 'fileId'], ['daily_report_photos', 'fileId'],
       ['invoice_photos', 'fileId'], ['invoice_attachments', 'fileId'],
+      ['change_order_attachments', 'fileId'], ['rfi_attachments', 'fileId'],
+      ['issue_attachments', 'fileId'], ['daily_report_attachments', 'fileId'],
       ['proposal_photos', 'fileId'], ['proposal_attachments', 'fileId'],
       ['proposals', 'fileId'], ['proposals', 'signedFileId'], ['rfis', 'responseFileId'],
     ];

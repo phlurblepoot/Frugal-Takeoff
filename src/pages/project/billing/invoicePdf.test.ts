@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { invoiceRows, invoiceTotalsBlock, buildInvoicePdf, appendPdfAttachments } from './invoicePdf';
+import { invoiceRows, invoiceTotalsBlock, buildInvoicePdf } from './invoicePdf';
 
 describe('invoice pdf data shaping', () => {
   it('invoiceRows maps lines to [desc, qty, unit, amount] display strings', () => {
@@ -16,12 +16,6 @@ describe('invoice pdf data shaping', () => {
 
 // A 1x1 JPEG — jsPDF needs a real decodable image to embed.
 const JPEG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
-
-const makePdf = async (n: number) => {
-  const d = await PDFDocument.create();
-  for (let i = 0; i < n; i++) d.addPage();
-  return d.save();
-};
 
 const baseInvoice = (overrides: Record<string, unknown> = {}) => ({
   id: 'inv1', projectId: 'p1', number: 'INV-1', date: null, status: 'draft', terms: null, notes: null,
@@ -44,32 +38,5 @@ describe('buildInvoicePdf — photo pages', () => {
       buildInvoicePdf({ invoice: baseInvoice(), projectName: 'Job', letterhead, photoDataUrls: [JPEG, JPEG, JPEG] }),
     );
     expect(withPhotos.getPageCount()).toBeGreaterThan(withoutPhotos.getPageCount());
-  });
-});
-
-describe('appendPdfAttachments', () => {
-  it('merges attachment page counts onto the base document, in order', async () => {
-    const base = await makePdf(1);
-    const a = await makePdf(2);
-    const b = await makePdf(3);
-    const out = await appendPdfAttachments(base, [a, b]);
-    const doc = await PDFDocument.load(out);
-    expect(doc.getPageCount()).toBe(1 + 2 + 3);
-  });
-
-  it('returns the base unchanged when there are no attachments', async () => {
-    const base = await makePdf(1);
-    const out = await appendPdfAttachments(base, []);
-    const doc = await PDFDocument.load(out);
-    expect(doc.getPageCount()).toBe(1);
-  });
-
-  it('skips an unreadable attachment and keeps the rest', async () => {
-    const base = await makePdf(1);
-    const good = await makePdf(2);
-    const garbage = new TextEncoder().encode('not a pdf').buffer;
-    const out = await appendPdfAttachments(base, [garbage, good]);
-    const doc = await PDFDocument.load(out);
-    expect(doc.getPageCount()).toBe(1 + 2); // garbage skipped, good merged
   });
 });

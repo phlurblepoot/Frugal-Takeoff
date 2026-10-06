@@ -1,6 +1,9 @@
 // server/issueStore.ts
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
+import {
+  type PdfAttachmentTable, listPdfAttachments, addPdfAttachment, updatePdfAttachment, removePdfAttachment,
+} from './pdfAttachments';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -22,7 +25,8 @@ export function getIssue(db: Database.Database, id: string): any | null {
   const row = db.prepare('SELECT * FROM issues WHERE id = ?').get(id) as any;
   if (!row) return null;
   const photos = db.prepare('SELECT id, fileId, sortOrder FROM issue_photos WHERE issueId = ? ORDER BY sortOrder, createdAt').all(id);
-  return { ...row, photos };
+  const attachments = listPdfAttachments(db, ISSUE_ATTACHMENTS, id);
+  return { ...row, photos, attachments };
 }
 
 export function listIssues(db: Database.Database, projectId: string): any[] {
@@ -76,6 +80,7 @@ export function setIssueStatus(db: Database.Database, id: string, status: string
 export function deleteIssue(db: Database.Database, id: string): void {
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM issue_photos WHERE issueId = ?').run(id);
+    db.prepare('DELETE FROM issue_attachments WHERE issueId = ?').run(id);
     db.prepare('DELETE FROM issues WHERE id = ?').run(id);
   });
   tx();
@@ -102,6 +107,28 @@ export function removePhoto(db: Database.Database, issueId: string, fileId: stri
     if (r.changes > 0) db.prepare('UPDATE issues SET updatedAt = ? WHERE id = ?').run(Date.now(), issueId);
   });
   tx();
+}
+
+// PDF attachments, appended to the generated issue report after its photos.
+// Same freshness rule as the photos above: updatedAt moves (so the stored PDF
+// reads out of date) but version does not — see the photo routes in routes.ts.
+const ISSUE_ATTACHMENTS: PdfAttachmentTable = {
+  table: 'issue_attachments', ownerColumn: 'issueId', ownerTable: 'issues',
+  notFoundMessage: 'Issue not found', noun: 'issue',
+  NotFoundError, ValidationError,
+  touch: (db, issueId) => { db.prepare('UPDATE issues SET updatedAt = ? WHERE id = ?').run(Date.now(), issueId); },
+};
+
+export function addAttachment(db: Database.Database, issueId: string, fileId: string): void {
+  addPdfAttachment(db, ISSUE_ATTACHMENTS, issueId, fileId);
+}
+
+export function updateAttachment(db: Database.Database, issueId: string, fileId: string, patch: { sortOrder: number }): void {
+  updatePdfAttachment(db, ISSUE_ATTACHMENTS, issueId, fileId, patch);
+}
+
+export function removeAttachment(db: Database.Database, issueId: string, fileId: string): void {
+  removePdfAttachment(db, ISSUE_ATTACHMENTS, issueId, fileId);
 }
 
 // sentAt is always refreshed; the status/version/updatedAt write happens only

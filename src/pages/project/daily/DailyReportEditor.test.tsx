@@ -21,6 +21,9 @@ const h = vi.hoisted(() => ({
   persistGeneratedDocument: vi.fn(),
   getDocumentBySource: vi.fn(),
   buildDailyReportPdf: vi.fn(),
+  addDailyReportAttachment: vi.fn(),
+  removeDailyReportAttachment: vi.fn(),
+  appendAttachedPdfs: vi.fn(),
 }));
 
 vi.mock('../../../context/CollaborationContext', () => ({
@@ -33,6 +36,8 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   saveDailyReport: h.saveDailyReport,
   sendDailyReport: h.sendDailyReport,
   addDailyReportPhoto: h.addDailyReportPhoto,
+  addDailyReportAttachment: h.addDailyReportAttachment,
+  removeDailyReportAttachment: h.removeDailyReportAttachment,
   uploadProjectFile: h.uploadProjectFile,
   persistGeneratedDocument: h.persistGeneratedDocument,
   getDocumentBySource: h.getDocumentBySource,
@@ -65,6 +70,7 @@ vi.mock('./dailyReportPdf', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./dailyReportPdf')>()),
   buildDailyReportPdf: h.buildDailyReportPdf,
 }));
+vi.mock('../../../utils/pdfAttachments', () => ({ appendAttachedPdfs: h.appendAttachedPdfs }));
 
 vi.mock('../../../pages/documents/DocumentViewerModal', () => ({
   DocumentViewerModal: () => <div data-testid="viewer" />,
@@ -111,13 +117,17 @@ const report = (over: Partial<DailyReport> = {}): DailyReport => ({
   weatherHourly: [{ hour: '9am', tempF: 78, condition: 'Sunny' }],
   manCounts: [{ type: 'Plasterer', count: 3 }], fieldNotes: 'All quiet', issues: '',
   // version 2 (not 1) so the mount effect doesn't auto-fetch weather.
-  createdBy: null, createdAt: 1, updatedAt: 10, version: 2, photos: [],
+  createdBy: null, createdAt: 1, updatedAt: 10, version: 2, photos: [], attachments: [],
   ...over,
 });
 
 // What the server hands back after the save — deliberately different from the
 // prop so "built from saved state" is falsifiable.
 const SAVED = report({ jobName: 'SERVER JOB', version: 3, updatedAt: 20, photos: [{ id: 'ph-1', fileId: 'f-photo', sortOrder: 0 }] });
+
+// A PDF attached to the record, and what the merge helper hands back.
+const ATTACHMENT = { id: 'at-1', fileId: 'a-1', sortOrder: 0, name: 'Spec sheet.pdf', mime: 'application/pdf', size: 2048 };
+const MERGED = new Uint8Array([9, 9, 9]);
 
 const onSaved = vi.fn();
 
@@ -149,6 +159,9 @@ beforeEach(() => {
   h.persistGeneratedDocument.mockResolvedValue({ fileId: 'file-9', versioned: true });
   h.getDocumentBySource.mockResolvedValue(null);
   h.buildDailyReportPdf.mockReturnValue(new Uint8Array([1, 2, 3]).buffer);
+  h.addDailyReportAttachment.mockResolvedValue(undefined);
+  h.removeDailyReportAttachment.mockResolvedValue(undefined);
+  h.appendAttachedPdfs.mockResolvedValue(MERGED);
 });
 
 describe('DailyReportEditor — document actions', () => {
@@ -295,5 +308,69 @@ describe('photo card', () => {
     });
     await screen.findByText('Save your changes first');
     expect(h.uploadProjectFile).not.toHaveBeenCalled();
+  });
+});
+
+// PDF attachments (spec docs/superpowers/specs/2026-10-06-pdf-attachments-design.md):
+// the shared card the invoice uses, and the attached PDFs' pages appended to
+// the generated document after its own pages and photos.
+describe('DailyReportEditor — PDF attachments', () => {
+  it('adds a picked PDF through the shared picker and reloads', async () => {
+    mount();
+    expect(await screen.findByText('No attachments.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Add PDFs/i }));
+    fireEvent.click(await screen.findByTestId('picker-pick'));
+
+    await waitFor(() => expect(h.addDailyReportAttachment).toHaveBeenCalledWith('dr-1', 'up-1'));
+    expect(onSaved).toHaveBeenCalled();
+    // Global, like the invoice's: an attachment is often filed elsewhere.
+    expect(h.pickerProps.last).toMatchObject({
+      accept: 'pdf', defaultTab: 'upload', initialProjectIds: [],
+      upload: { kind: 'document', projectId: 'p1' },
+    });
+  });
+
+  it('lists an existing attachment and removes it through the API', async () => {
+    mount(report({ attachments: [ATTACHMENT] }));
+    expect(await screen.findByText('Spec sheet.pdf')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove attachment' }));
+    await waitFor(() => expect(h.removeDailyReportAttachment).toHaveBeenCalledWith('dr-1', 'a-1'));
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  // Same save-first gate as the photo card above.
+  it('refuses a PDF while the form is dirty, and says why', async () => {
+    mount();
+    fireEvent.change(await screen.findByLabelText('Job name'), { target: { value: 'Typed job' } });
+    const add = screen.getByRole('button', { name: /Add PDFs/i });
+    expect(add).toBeDisabled();
+    expect(add).toHaveAttribute('title', 'Save your changes first');
+  });
+
+  it('appends the saved report\'s attachments to the bytes it built, and stores the result', async () => {
+    h.getDailyReport.mockResolvedValue({ ...SAVED, attachments: [ATTACHMENT] });
+    mount();
+    fireEvent.click(await screen.findByTestId('doc-generate'));
+
+    await waitFor(() => expect(h.appendAttachedPdfs).toHaveBeenCalledTimes(1));
+    expect(h.appendAttachedPdfs.mock.calls[0][0]).toBe(h.buildDailyReportPdf.mock.results[0].value);
+    expect(h.appendAttachedPdfs.mock.calls[0][1]).toEqual([ATTACHMENT]);
+    await waitFor(() => expect(h.persistGeneratedDocument).toHaveBeenCalledTimes(1));
+    const stored = h.persistGeneratedDocument.mock.calls[0][0] as Blob;
+    expect(new Uint8Array(await stored.arrayBuffer())).toEqual(MERGED);
+  });
+
+  it('emails that same merged file', async () => {
+    h.getDailyReport.mockResolvedValue({ ...SAVED, attachments: [ATTACHMENT] });
+    mount();
+    fireEvent.click(await screen.findByTestId('doc-send'));
+    fireEvent.click(await screen.findByTestId('composer-send'));
+
+    await waitFor(() => expect(h.sendDailyReport).toHaveBeenCalledTimes(1));
+    expect(h.appendAttachedPdfs).toHaveBeenCalledTimes(1);
+    const stored = h.persistGeneratedDocument.mock.calls[0][0] as Blob;
+    expect(new Uint8Array(await stored.arrayBuffer())).toEqual(MERGED);
+    expect(h.sendDailyReport.mock.calls[0][1]).toMatchObject({ fileId: 'file-9' });
   });
 });

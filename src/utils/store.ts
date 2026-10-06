@@ -1401,7 +1401,11 @@ export interface InvoicePhoto {
   fileId: string;
   sortOrder: number;
 }
-export interface InvoiceAttachment { id: string; fileId: string; sortOrder: number; name: string | null; mime: string | null; size: number | null }
+// A stored PDF appended to the end of a record's generated PDF, after its
+// photos, in sortOrder — invoices (migration 34); change orders, RFIs, issues
+// and daily reports (migration 42). name/mime/size are the file's own, so a
+// file deleted since reads as nulls.
+export interface PdfAttachment { id: string; fileId: string; sortOrder: number; name: string | null; mime: string | null; size: number | null }
 export interface Invoice {
   id: string;
   projectId: string;
@@ -1424,7 +1428,7 @@ export interface Invoice {
   // Appended to the generated invoice PDF (migration 34): photos as pages,
   // then attached PDFs, in sortOrder.
   photos: InvoicePhoto[];
-  attachments: InvoiceAttachment[];
+  attachments: PdfAttachment[];
   totalCents: number;
   paidCents: number;
   balanceCents: number;
@@ -1461,7 +1465,10 @@ export interface ChangeOrder {
   updatedAt: number;
   amount: number; // canonical rolled-up dollar total (= (Σ line cents + lump-sum cents)/100)
   lines: ChangeOrderLine[];
+  // Appended to the generated change order PDF: photos as pages, then the
+  // attached PDFs (migration 42), in sortOrder.
   photos: COPhoto[];
+  attachments: PdfAttachment[];
   totalCents: number;
   lumpSumCents: number;
 }
@@ -1613,6 +1620,15 @@ export const addCOPhoto = async (coId: string, fileId: string): Promise<void> =>
 export const removeCOPhoto = async (coId: string, fileId: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/change-orders/${coId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
+export const addCOAttachment = async (coId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('POST', `/api/change-orders/${coId}/attachments`, { fileId }); await handleResponse(res);
+};
+export const updateCOAttachment = async (coId: string, fileId: string, patch: { sortOrder: number }): Promise<void> => {
+  const res = await billingJson('PATCH', `/api/change-orders/${coId}/attachments/${encodeURIComponent(fileId)}`, patch); await handleResponse(res);
+};
+export const removeCOAttachment = async (coId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/change-orders/${coId}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
 export const sendChangeOrder = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res); return res.json();
 };
@@ -1658,6 +1674,7 @@ export interface Issue {
   createdAt: number;
   updatedAt: number;
   photos: IssuePhoto[];
+  attachments: PdfAttachment[];        // appended to the issue report after the photos (migration 42)
 }
 export interface IssueListItem {
   id: string; projectId: string; number: number; title: string | null;
@@ -1700,6 +1717,15 @@ export const addIssuePhoto = async (issueId: string, fileId: string): Promise<vo
 };
 export const removeIssuePhoto = async (issueId: string, fileId: string): Promise<void> => {
   const res = await issueJson('DELETE', `/api/issues/${issueId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const addIssueAttachment = async (issueId: string, fileId: string): Promise<void> => {
+  const res = await issueJson('POST', `/api/issues/${issueId}/attachments`, { fileId }); await handleResponse(res);
+};
+export const updateIssueAttachment = async (issueId: string, fileId: string, patch: { sortOrder: number }): Promise<void> => {
+  const res = await issueJson('PATCH', `/api/issues/${issueId}/attachments/${encodeURIComponent(fileId)}`, patch); await handleResponse(res);
+};
+export const removeIssueAttachment = async (issueId: string, fileId: string): Promise<void> => {
+  const res = await issueJson('DELETE', `/api/issues/${issueId}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
 export const sendIssue = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res); return res.json();
@@ -1749,6 +1775,7 @@ export interface Rfi {
   createdAt: number;
   updatedAt: number;
   photos: RfiPhoto[];
+  attachments: PdfAttachment[];              // appended to the RFI PDF after the photos (migration 42)
   pendingReply?: RfiPendingReply | null;
   responseSource?: string | null;            // 'email' once an emailed reply was accepted
   responseMessageIdHeader?: string | null;
@@ -1802,6 +1829,15 @@ export const addRfiPhoto = async (rfiId: string, fileId: string): Promise<void> 
 };
 export const removeRfiPhoto = async (rfiId: string, fileId: string): Promise<void> => {
   const res = await rfiJson('DELETE', `/api/rfis/${rfiId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const addRfiAttachment = async (rfiId: string, fileId: string): Promise<void> => {
+  const res = await rfiJson('POST', `/api/rfis/${rfiId}/attachments`, { fileId }); await handleResponse(res);
+};
+export const updateRfiAttachment = async (rfiId: string, fileId: string, patch: { sortOrder: number }): Promise<void> => {
+  const res = await rfiJson('PATCH', `/api/rfis/${rfiId}/attachments/${encodeURIComponent(fileId)}`, patch); await handleResponse(res);
+};
+export const removeRfiAttachment = async (rfiId: string, fileId: string): Promise<void> => {
+  const res = await rfiJson('DELETE', `/api/rfis/${rfiId}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
 export const setRfiResponse = async (id: string, input: { fileId?: string; text?: string }): Promise<void> => {
   const res = await rfiJson('POST', `/api/rfis/${id}/response`, input); await handleResponse(res);
@@ -1857,6 +1893,7 @@ export interface DailyReport {
   manCounts: ManCountLine[]; fieldNotes: string; issues: string;
   createdBy: string | null; createdAt: number; updatedAt: number; version: number;
   photos: DailyReportPhoto[];
+  attachments: PdfAttachment[]; // appended to the daily report PDF after the photos (migration 42)
 }
 export interface DailyReportListItem {
   id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
@@ -1906,6 +1943,15 @@ export const addDailyReportPhoto = async (id: string, fileId: string): Promise<v
 };
 export const removeDailyReportPhoto = async (id: string, fileId: string): Promise<void> => {
   const res = await dailyJson('DELETE', `/api/daily-reports/${id}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const addDailyReportAttachment = async (id: string, fileId: string): Promise<void> => {
+  const res = await dailyJson('POST', `/api/daily-reports/${id}/attachments`, { fileId }); await handleResponse(res);
+};
+export const updateDailyReportAttachment = async (id: string, fileId: string, patch: { sortOrder: number }): Promise<void> => {
+  const res = await dailyJson('PATCH', `/api/daily-reports/${id}/attachments/${encodeURIComponent(fileId)}`, patch); await handleResponse(res);
+};
+export const removeDailyReportAttachment = async (id: string, fileId: string): Promise<void> => {
+  const res = await dailyJson('DELETE', `/api/daily-reports/${id}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
 export const sendDailyReport = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res); return res.json();

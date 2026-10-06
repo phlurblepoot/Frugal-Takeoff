@@ -1,12 +1,16 @@
 // src/pages/project/rfi/RfiEditor.tsx
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, acceptRfiPendingReply, sendRfi, getSettings, fetchFileBlob, getAssignableUsers, type AssignableUser } from '../../../utils/store';
+import {
+  Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, acceptRfiPendingReply, sendRfi, getSettings, fetchFileBlob, getAssignableUsers, type AssignableUser,
+  addRfiAttachment, updateRfiAttachment, removeRfiAttachment,
+} from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Select, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
+import { PdfAttachmentsCard } from '../../../components/documents/PdfAttachmentsCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
@@ -16,6 +20,7 @@ import { PendingReplyBanner } from './PendingReplyBanner';
 import { useMailAccounts } from '../../mail/useMailAccounts';
 import { useItemThreadLinks } from '../../../hooks/useItemThreadLinks';
 import { buildRfiPdf } from './rfiPdf';
+import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
 export const RfiEditor: React.FC<{
@@ -168,7 +173,7 @@ export const RfiEditor: React.FC<{
   // re-read throws on purpose — the bar then reports the failure and keeps the
   // existing document, rather than quietly storing pre-save bytes and marking
   // them current.
-  const buildRfiBytes = async (headerEmail?: string): Promise<Uint8Array> => {
+  const buildRfiBytes = async (headerEmail?: string): Promise<Uint8Array | ArrayBuffer> => {
     const saved = await getRfi(rfi.id);
     if (!saved) throw new Error('RFI not found');
     const settings = await getSettings();
@@ -188,7 +193,7 @@ export const RfiEditor: React.FC<{
         photoDataUrls.push(await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); }));
       } catch { /* skip */ }
     }
-    return buildRfiPdf({
+    const bytes = buildRfiPdf({
       rfi: saved,
       projectName: projectName,
       contractor: contractor,
@@ -205,6 +210,8 @@ export const RfiEditor: React.FC<{
       },
       headerEmail: headerEmail || undefined,
     });
+    // Attached PDFs go last, after the photo pages, in attachment order.
+    return appendAttachedPdfs(bytes, saved.attachments);
   };
 
   const handleSave = async (opts?: { keepMounted?: boolean }) => {
@@ -359,6 +366,20 @@ export const RfiEditor: React.FC<{
         link={fileId => addRfiPhoto(rfi.id, fileId)}
         onRemove={dropPhoto}
         onDone={onSaved}
+        disabled={dirty}
+        disabledMessage="Save your changes first"
+      />
+      {/* PDFs appended to the RFI document — not the GC's answer, which is
+          the Response below. Same save-first gate as the photos. */}
+      <PdfAttachmentsCard
+        attachments={rfi.attachments}
+        projectId={projectId}
+        documentName="RFI"
+        testId="rfi"
+        link={fileId => addRfiAttachment(rfi.id, fileId)}
+        update={(fileId, patch) => updateRfiAttachment(rfi.id, fileId, patch)}
+        remove={fileId => removeRfiAttachment(rfi.id, fileId)}
+        onChanged={onSaved}
         disabled={dirty}
         disabledMessage="Save your changes first"
       />

@@ -312,6 +312,55 @@ describe('route mutations broadcast entity-changed', () => {
     c.close();
   });
 
+  // PDF attachments (migration 42) follow the same rule as each record's photos.
+  const uploadPdf = (id: string) => request(app).post(`/api/files/${id}?kind=document&name=${id}.pdf`)
+    .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4')).expect(200);
+
+  it('POST /api/issues/:id/attachments broadcasts issue updated WITHOUT a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p19', name: 'P19', pages: [], takeoffs: [] }).expect(200);
+    const iss = await request(app).post('/api/projects/p19/issues').send({ title: 'crack' }).expect(200);
+    await uploadPdf('f19');
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/issues/${iss.body.id}/attachments`).send({ fileId: 'f19' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'issue', id: iss.body.id, projectId: 'p19', action: 'updated' });
+    expect(e.version).toBeUndefined();
+    c.close();
+  });
+
+  it('POST /api/rfis/:id/attachments broadcasts rfi updated WITHOUT a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p20', name: 'P20', pages: [], takeoffs: [] }).expect(200);
+    const rfi = await request(app).post('/api/projects/p20/rfis').send({ title: 'question' }).expect(200);
+    await uploadPdf('f20');
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/rfis/${rfi.body.id}/attachments`).send({ fileId: 'f20' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'rfi', id: rfi.body.id, projectId: 'p20', action: 'updated' });
+    expect(e.version).toBeUndefined();
+    c.close();
+  });
+
+  it('POST/DELETE /api/change-orders/:id/attachments broadcast a version (its store DOES bump it)', async () => {
+    await request(app).post('/api/projects').send({ id: 'p21', name: 'P21', pages: [], takeoffs: [] }).expect(200);
+    const co = await request(app).post('/api/projects/p21/change-orders').send({ number: 'CO-3' }).expect(200);
+    await uploadPdf('f21');
+    const c = await connectedClient();
+    let evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/change-orders/${co.body.id}/attachments`).send({ fileId: 'f21' }).expect(200);
+    let e = await evt;
+    expect(e).toMatchObject({ type: 'changeOrder', id: co.body.id, projectId: 'p21', action: 'updated' });
+    expect(typeof e.version).toBe('number');
+
+    evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).delete(`/api/change-orders/${co.body.id}/attachments/f21`).expect(200);
+    e = await evt;
+    expect(e).toMatchObject({ type: 'changeOrder', id: co.body.id, projectId: 'p21', action: 'updated' });
+    expect(typeof e.version).toBe('number');
+    c.close();
+  });
+
   it('POST /api/tasks broadcasts task created (projectId omitted when unscoped)', async () => {
     const c = await connectedClient();
     const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);

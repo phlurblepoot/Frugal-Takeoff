@@ -1816,4 +1816,58 @@ export const migrations: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_shares_resourceId ON shares (resourceId);`);
     },
   },
+  {
+    version: 42,
+    name: 'pdf-attachments',
+    // ADDITIVE: PDF attachments for change orders, RFIs, issues and daily
+    // reports — four join tables, each the same shape as invoice_attachments
+    // (migration 34), keyed by the same owner column as that record's photo
+    // table. Attached PDFs are appended to the end of the record's generated
+    // PDF, after its photos (spec
+    // docs/superpowers/specs/2026-10-06-pdf-attachments-design.md). Existing
+    // records simply have none. IF NOT EXISTS makes replaying up() a no-op.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS change_order_attachments (
+          id TEXT PRIMARY KEY,
+          changeOrderId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(changeOrderId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_change_order_attachments_change_order ON change_order_attachments (changeOrderId);
+
+        CREATE TABLE IF NOT EXISTS rfi_attachments (
+          id TEXT PRIMARY KEY,
+          rfiId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(rfiId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rfi_attachments_rfi ON rfi_attachments (rfiId);
+
+        CREATE TABLE IF NOT EXISTS issue_attachments (
+          id TEXT PRIMARY KEY,
+          issueId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(issueId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue ON issue_attachments (issueId);
+
+        CREATE TABLE IF NOT EXISTS daily_report_attachments (
+          id TEXT PRIMARY KEY,
+          dailyReportId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(dailyReportId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_report_attachments_report ON daily_report_attachments (dailyReportId);
+      `);
+    },
+  },
 ];

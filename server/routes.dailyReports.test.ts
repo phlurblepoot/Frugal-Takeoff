@@ -160,6 +160,47 @@ describe('daily reports routes', () => {
   });
 });
 
+describe('daily report PDF attachment routes', () => {
+  // Same freshness rule as the photos above: updatedAt moves so the generated
+  // PDF reads out of date, version does not, so no version is broadcast.
+  it('add/reorder/remove broadcast updated with no version field; GET lists them in order', async () => {
+    const created = await request(app).post('/api/projects/p1/daily-reports')
+      .send({ reportDate: '2026-08-20', jobName: 'Job A', contractorName: 'GC Co' });
+    for (const id of ['spec1', 'spec2']) {
+      await request(app).post(`/api/files/${id}?projectId=p1&kind=document&name=${id}.pdf`)
+        .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
+    }
+    db.prepare('UPDATE daily_reports SET updatedAt = 1 WHERE id = ?').run(created.body.id);
+    broadcasts.length = 0;
+
+    await request(app).post(`/api/daily-reports/${created.body.id}/attachments`).send({ fileId: 'spec1' }).expect(200);
+    await request(app).post(`/api/daily-reports/${created.body.id}/attachments`).send({ fileId: 'spec2' }).expect(200);
+    await request(app).patch(`/api/daily-reports/${created.body.id}/attachments/spec2`).send({ sortOrder: -1 }).expect(200);
+    let get = await request(app).get(`/api/daily-reports/${created.body.id}`);
+    expect(get.body.attachments.map((a: any) => a.fileId)).toEqual(['spec2', 'spec1']);
+    expect(get.body.version).toBe(1);
+    expect(get.body.updatedAt).toBeGreaterThan(1);
+
+    await request(app).delete(`/api/daily-reports/${created.body.id}/attachments/spec2`).expect(200);
+    get = await request(app).get(`/api/daily-reports/${created.body.id}`);
+    expect(get.body.attachments.map((a: any) => a.fileId)).toEqual(['spec1']);
+
+    expect(broadcasts).toHaveLength(4);
+    for (const b of broadcasts) {
+      expect(b).toEqual(expect.objectContaining({ type: 'dailyReport', id: created.body.id, projectId: 'p1', action: 'updated' }));
+      expect(b).not.toHaveProperty('version');
+    }
+  });
+
+  it('refuses a non-PDF with 400 and a missing report with 404', async () => {
+    const created = await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' });
+    await request(app).post('/api/files/img1?projectId=p1&kind=photo&name=p.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
+    expect((await request(app).post(`/api/daily-reports/${created.body.id}/attachments`).send({ fileId: 'img1' })).status).toBe(400);
+    expect((await request(app).post('/api/daily-reports/nope/attachments').send({ fileId: 'img1' })).status).toBe(404);
+  });
+});
+
 describe('GET /api/projects/:id/daily-weather', () => {
   it('returns 400 no_address when the project has no address', async () => {
     const res = await request(app).get('/api/projects/p1/daily-weather').query({ date: '2026-08-20' });

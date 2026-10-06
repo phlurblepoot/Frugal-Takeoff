@@ -1,6 +1,9 @@
 // server/rfiStore.ts
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
+import {
+  type PdfAttachmentTable, listPdfAttachments, addPdfAttachment, updatePdfAttachment, removePdfAttachment,
+} from './pdfAttachments';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -49,7 +52,8 @@ export function getRfi(db: Database.Database, id: string): any | null {
   const row = db.prepare('SELECT * FROM rfis WHERE id = ?').get(id) as any;
   if (!row) return null;
   const photos = db.prepare('SELECT id, fileId, sortOrder FROM rfi_photos WHERE rfiId = ? ORDER BY sortOrder, createdAt').all(id);
-  return { ...withPendingReply(row), photos };
+  const attachments = listPdfAttachments(db, RFI_ATTACHMENTS, id);
+  return { ...withPendingReply(row), photos, attachments };
 }
 
 export function listRfis(db: Database.Database, projectId: string): any[] {
@@ -117,6 +121,7 @@ export function setRfiStatus(db: Database.Database, id: string, status: string):
 export function deleteRfi(db: Database.Database, id: string): void {
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM rfi_photos WHERE rfiId = ?').run(id);
+    db.prepare('DELETE FROM rfi_attachments WHERE rfiId = ?').run(id);
     db.prepare('DELETE FROM rfis WHERE id = ?').run(id);
   });
   tx();
@@ -143,6 +148,29 @@ export function removePhoto(db: Database.Database, rfiId: string, fileId: string
     if (r.changes > 0) db.prepare('UPDATE rfis SET updatedAt = ? WHERE id = ?').run(Date.now(), rfiId);
   });
   tx();
+}
+
+// PDF attachments, appended to the generated RFI after its photos. Not the
+// GC's answer — that stays responseFileId. Same freshness rule as the photos
+// above: updatedAt moves (so the stored PDF reads out of date) but version
+// does not — see the photo routes in routes.ts.
+const RFI_ATTACHMENTS: PdfAttachmentTable = {
+  table: 'rfi_attachments', ownerColumn: 'rfiId', ownerTable: 'rfis',
+  notFoundMessage: 'RFI not found', noun: 'RFI',
+  NotFoundError, ValidationError,
+  touch: (db, rfiId) => { db.prepare('UPDATE rfis SET updatedAt = ? WHERE id = ?').run(Date.now(), rfiId); },
+};
+
+export function addAttachment(db: Database.Database, rfiId: string, fileId: string): void {
+  addPdfAttachment(db, RFI_ATTACHMENTS, rfiId, fileId);
+}
+
+export function updateAttachment(db: Database.Database, rfiId: string, fileId: string, patch: { sortOrder: number }): void {
+  updatePdfAttachment(db, RFI_ATTACHMENTS, rfiId, fileId, patch);
+}
+
+export function removeAttachment(db: Database.Database, rfiId: string, fileId: string): void {
+  removePdfAttachment(db, RFI_ATTACHMENTS, rfiId, fileId);
 }
 
 // Advances status to 'sent' only from 'open'; answered/closed are never demoted

@@ -15,6 +15,7 @@ import {
   addInvoicePhoto, removeInvoicePhoto, addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus,
   deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
+  addChangeOrderAttachment, updateChangeOrderAttachment, removeChangeOrderAttachment,
   listBilledDocuments,
 } from './billingStore';
 import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp, lockSov, SovLockedError } from './aiaStore';
@@ -497,9 +498,61 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
     expect(co.version).toBe(4);
   });
 
-  it('deleteChangeOrder cascades lines, photos, and the synced SOV line', () => {
+  // Same contract as the invoice's attachments (and this CO's photos): PDFs
+  // only, idempotent, appended in add order, and every change bumps version +
+  // updatedAt so the generated change order reads out of date.
+  it('attachments must be PDFs and existing files; sortOrder assigns in add order; each change bumps version', () => {
+    const { id } = createChangeOrder(db, 'p1', {});
+    jpgFile('notpdf');
+    expect(() => addChangeOrderAttachment(db, id, 'notpdf')).toThrow(ValidationError);
+    expect(() => addChangeOrderAttachment(db, id, 'missing')).toThrow(NotFoundError);
+    expect(() => addChangeOrderAttachment(db, id, '')).toThrow(ValidationError);
+    pdfFile('a1'); pdfFile('a2');
+    expect(() => addChangeOrderAttachment(db, 'nope', 'a1')).toThrow(NotFoundError);
+    expect(getChangeOrder(db, id)!.attachments).toEqual([]);
+    addChangeOrderAttachment(db, id, 'a1');
+    addChangeOrderAttachment(db, id, 'a1'); // idempotent
+    addChangeOrderAttachment(db, id, 'a2');
+    let co = getChangeOrder(db, id)!;
+    expect(co.attachments).toEqual([
+      expect.objectContaining({ fileId: 'a1', sortOrder: 0, name: 'a1.pdf', mime: 'application/pdf' }),
+      expect.objectContaining({ fileId: 'a2', sortOrder: 1, name: 'a2.pdf', mime: 'application/pdf' }),
+    ]);
+    expect(co.version).toBe(3); // 1 -> +1 (a1) -> +1 (a2); the a1 repeat is a no-op
+
+    updateChangeOrderAttachment(db, id, 'a1', { sortOrder: 5 });
+    co = getChangeOrder(db, id)!;
+    expect(co.attachments.map((a: any) => a.fileId)).toEqual(['a2', 'a1']);
+    expect(co.version).toBe(4);
+    expect(() => updateChangeOrderAttachment(db, id, 'nope', { sortOrder: 0 })).toThrow(NotFoundError);
+    expect(() => updateChangeOrderAttachment(db, id, 'a1', { sortOrder: 1.5 })).toThrow(ValidationError);
+
+    removeChangeOrderAttachment(db, id, 'a1');
+    removeChangeOrderAttachment(db, id, 'a1'); // already gone: no bump
+    co = getChangeOrder(db, id)!;
+    expect(co.attachments.map((a: any) => a.fileId)).toEqual(['a2']);
+    expect(co.version).toBe(5);
+  });
+
+  it('attachment changes move updatedAt (freshness contract)', () => {
+    const { id } = createChangeOrder(db, 'p1', {});
+    pdfFile('a1');
+    db.prepare('UPDATE change_orders SET updatedAt = 1 WHERE id = ?').run(id);
+    addChangeOrderAttachment(db, id, 'a1');
+    expect(getChangeOrder(db, id)!.updatedAt).toBeGreaterThan(1);
+    db.prepare('UPDATE change_orders SET updatedAt = 1 WHERE id = ?').run(id);
+    updateChangeOrderAttachment(db, id, 'a1', { sortOrder: 3 });
+    expect(getChangeOrder(db, id)!.updatedAt).toBeGreaterThan(1);
+    db.prepare('UPDATE change_orders SET updatedAt = 1 WHERE id = ?').run(id);
+    removeChangeOrderAttachment(db, id, 'a1');
+    expect(getChangeOrder(db, id)!.updatedAt).toBeGreaterThan(1);
+  });
+
+  it('deleteChangeOrder cascades lines, photos, attachments, and the synced SOV line', () => {
     const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0, lines: [{ description: 'A', qty: 1, unitPrice: 10 }] });
     addChangeOrderPhoto(db, id, 'file-1');
+    pdfFile('a1');
+    addChangeOrderAttachment(db, id, 'a1');
     // Simulate a synced AIA SOV line keyed on this CO.
     db.prepare(
       'INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, isChangeOrder, changeOrderId, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, 1, ?, 0, 1, 1)'
@@ -508,6 +561,7 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
     expect(getChangeOrder(db, id)).toBeNull();
     expect((db.prepare('SELECT COUNT(*) c FROM change_order_lines WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
     expect((db.prepare('SELECT COUNT(*) c FROM change_order_photos WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM change_order_attachments WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
     expect((db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
   });
 

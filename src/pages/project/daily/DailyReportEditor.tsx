@@ -5,17 +5,20 @@ import {
   DailyReport, ManCountLine, DateTakenError,
   saveDailyReport, getDailyReport, addDailyReportPhoto, removeDailyReportPhoto, getDailyWeather,
   getSettings, fetchFileBlob, sendDailyReport,
+  addDailyReportAttachment, updateDailyReportAttachment, removeDailyReportAttachment,
 } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
+import { PdfAttachmentsCard } from '../../../components/documents/PdfAttachmentsCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { formatReportDate, manCountTotal, normalizeManCounts } from './dailyReportForm';
 import { buildDailyReportPdf, dailyReportFileName } from './dailyReportPdf';
+import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
 export const DailyReportEditor: React.FC<{
@@ -115,7 +118,7 @@ export const DailyReportEditor: React.FC<{
   // not on the prop). A failed re-read throws on purpose — the bar then
   // reports the failure and keeps the existing document, rather than quietly
   // storing pre-save bytes and marking them current.
-  const buildDailyReportBytes = async (headerEmail?: string): Promise<ArrayBuffer> => {
+  const buildDailyReportBytes = async (headerEmail?: string): Promise<Uint8Array | ArrayBuffer> => {
     const saved = await getDailyReport(report.id);
     if (!saved) throw new Error('Daily report not found');
     const settings = await getSettings();
@@ -135,7 +138,7 @@ export const DailyReportEditor: React.FC<{
         photoDataUrls.push(await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); }));
       } catch { /* skip */ }
     }
-    return buildDailyReportPdf({
+    const bytes = buildDailyReportPdf({
       report: saved,
       photoDataUrls,
       letterhead: {
@@ -150,6 +153,8 @@ export const DailyReportEditor: React.FC<{
       },
       headerEmail: headerEmail || undefined,
     });
+    // Attached PDFs go last, after the photo pages, in attachment order.
+    return appendAttachedPdfs(bytes, saved.attachments);
   };
 
   const handleSave = async (opts?: { keepMounted?: boolean }) => {
@@ -316,6 +321,18 @@ export const DailyReportEditor: React.FC<{
         link={fileId => addDailyReportPhoto(report.id, fileId)}
         onRemove={dropPhoto}
         onDone={onSaved}
+        disabled={dirty}
+        disabledMessage="Save your changes first"
+      />
+      <PdfAttachmentsCard
+        attachments={report.attachments}
+        projectId={projectId}
+        documentName="daily report"
+        testId="daily"
+        link={fileId => addDailyReportAttachment(report.id, fileId)}
+        update={(fileId, patch) => updateDailyReportAttachment(report.id, fileId, patch)}
+        remove={fileId => removeDailyReportAttachment(report.id, fileId)}
+        onChanged={onSaved}
         disabled={dirty}
         disabledMessage="Save your changes first"
       />

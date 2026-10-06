@@ -2,6 +2,9 @@
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
 import { listPayAppRows, computeG702, assertSovEditable } from './aiaStore';
+import {
+  type PdfAttachmentTable, listPdfAttachments, addPdfAttachment, updatePdfAttachment, removePdfAttachment,
+} from './pdfAttachments';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -94,8 +97,7 @@ export function getInvoice(db: Database.Database, id: string): any | null {
   const paidCents = paidCentsFor(db, 'invoice', id);
   const payments = db.prepare("SELECT id, date, amount, method, note FROM payments WHERE targetType = 'invoice' AND targetId = ? ORDER BY date").all(id);
   const photos = db.prepare('SELECT id, fileId, sortOrder FROM invoice_photos WHERE invoiceId = ? ORDER BY sortOrder, createdAt').all(id);
-  const attachments = db.prepare(`SELECT a.id, a.fileId, a.sortOrder, f.name, f.mime, f.size
-    FROM invoice_attachments a LEFT JOIN files f ON f.id = a.fileId WHERE a.invoiceId = ? ORDER BY a.sortOrder, a.createdAt`).all(id);
+  const attachments = listPdfAttachments(db, INVOICE_ATTACHMENTS, id);
   return { ...row, lines, payments, photos, attachments, totalCents, paidCents, balanceCents: totalCents - paidCents };
 }
 
@@ -209,16 +211,16 @@ export function saveInvoice(db: Database.Database, id: string, input: InvoiceInp
 // contract: adding/removing/reordering either one changes what the generated
 // invoice PDF would contain (photos are appended as pages, attachments after
 // them), so DocumentActionsBar's "up to date" chip must go stale.
-const requireInvoiceFile = (db: Database.Database, fileId: unknown): { id: string; mime: string } => {
-  if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
-  const f = db.prepare('SELECT id, mime FROM files WHERE id = ?').get(fileId) as { id: string; mime: string } | undefined;
-  if (!f) throw new NotFoundError('File not found');
-  return f;
-};
-
 function touchInvoice(db: Database.Database, invoiceId: string, now: number): void {
   db.prepare('UPDATE invoices SET version = version + 1, updatedAt = ? WHERE id = ?').run(now, invoiceId);
 }
+
+const INVOICE_ATTACHMENTS: PdfAttachmentTable = {
+  table: 'invoice_attachments', ownerColumn: 'invoiceId', ownerTable: 'invoices',
+  notFoundMessage: 'Invoice not found', noun: 'invoice',
+  NotFoundError, ValidationError,
+  touch: (db, invoiceId) => touchInvoice(db, invoiceId, Date.now()),
+};
 
 export function addInvoicePhoto(db: Database.Database, invoiceId: string, fileId: string): void {
   const row = db.prepare('SELECT id FROM invoices WHERE id = ?').get(invoiceId) as { id: string } | undefined;
@@ -244,36 +246,15 @@ export function removeInvoicePhoto(db: Database.Database, invoiceId: string, fil
 }
 
 export function addInvoiceAttachment(db: Database.Database, invoiceId: string, fileId: string): void {
-  const row = db.prepare('SELECT id FROM invoices WHERE id = ?').get(invoiceId) as { id: string } | undefined;
-  if (!row) throw new NotFoundError('Invoice not found');
-  const f = requireInvoiceFile(db, fileId);
-  if (f.mime !== 'application/pdf') throw new ValidationError('Only PDF files can be attached');
-  if (db.prepare('SELECT 1 FROM invoice_attachments WHERE invoiceId = ? AND fileId = ?').get(invoiceId, fileId)) return;
-  const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM invoice_attachments WHERE invoiceId = ?').get(invoiceId) as any).m;
-  const tx = db.transaction(() => {
-    db.prepare('INSERT INTO invoice_attachments (id, invoiceId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
-      .run(crypto.randomUUID(), invoiceId, fileId, max + 1, Date.now());
-    touchInvoice(db, invoiceId, Date.now());
-  });
-  tx();
+  addPdfAttachment(db, INVOICE_ATTACHMENTS, invoiceId, fileId);
 }
 
 export function updateInvoiceAttachment(db: Database.Database, invoiceId: string, fileId: string, patch: { sortOrder: number }): void {
-  if (!Number.isInteger(patch.sortOrder)) throw new ValidationError('sortOrder must be an integer');
-  const tx = db.transaction(() => {
-    const r = db.prepare('UPDATE invoice_attachments SET sortOrder = ? WHERE invoiceId = ? AND fileId = ?').run(patch.sortOrder, invoiceId, fileId);
-    if (r.changes === 0) throw new NotFoundError('Attachment not on this invoice');
-    touchInvoice(db, invoiceId, Date.now());
-  });
-  tx();
+  updatePdfAttachment(db, INVOICE_ATTACHMENTS, invoiceId, fileId, patch);
 }
 
 export function removeInvoiceAttachment(db: Database.Database, invoiceId: string, fileId: string): void {
-  const tx = db.transaction(() => {
-    const r = db.prepare('DELETE FROM invoice_attachments WHERE invoiceId = ? AND fileId = ?').run(invoiceId, fileId);
-    if (r.changes > 0) touchInvoice(db, invoiceId, Date.now());
-  });
-  tx();
+  removePdfAttachment(db, INVOICE_ATTACHMENTS, invoiceId, fileId);
 }
 
 export function deleteInvoice(db: Database.Database, id: string): void {
@@ -424,9 +405,10 @@ export function getChangeOrder(db: Database.Database, id: string): any | null {
   if (!row) return null;
   const lines = db.prepare('SELECT id, description, qty, unitPrice, sortOrder FROM change_order_lines WHERE changeOrderId = ? ORDER BY sortOrder').all(id);
   const photos = db.prepare('SELECT id, fileId, sortOrder FROM change_order_photos WHERE changeOrderId = ? ORDER BY sortOrder, createdAt').all(id);
+  const attachments = listPdfAttachments(db, CHANGE_ORDER_ATTACHMENTS, id);
   const lumpSumCents = toCents(row.lumpSumAmount);
   const totalCents = coLineTotalsCents(db, id) + lumpSumCents;
-  return { ...row, lines, photos, totalCents, lumpSumCents };
+  return { ...row, lines, photos, attachments, totalCents, lumpSumCents };
 }
 
 export function listChangeOrders(db: Database.Database, projectId: string): any[] {
@@ -530,6 +512,30 @@ export function removeChangeOrderPhoto(db: Database.Database, changeOrderId: str
   tx();
 }
 
+// PDF attachments, appended to the generated change order after its photos.
+// Same freshness rule as the photos above (and the invoice's attachments):
+// version + updatedAt move, so the stored PDF reads out of date.
+const CHANGE_ORDER_ATTACHMENTS: PdfAttachmentTable = {
+  table: 'change_order_attachments', ownerColumn: 'changeOrderId', ownerTable: 'change_orders',
+  notFoundMessage: 'Change order not found', noun: 'change order',
+  NotFoundError, ValidationError,
+  touch: (db, changeOrderId) => {
+    db.prepare('UPDATE change_orders SET version = version + 1, updatedAt = ? WHERE id = ?').run(Date.now(), changeOrderId);
+  },
+};
+
+export function addChangeOrderAttachment(db: Database.Database, changeOrderId: string, fileId: string): void {
+  addPdfAttachment(db, CHANGE_ORDER_ATTACHMENTS, changeOrderId, fileId);
+}
+
+export function updateChangeOrderAttachment(db: Database.Database, changeOrderId: string, fileId: string, patch: { sortOrder: number }): void {
+  updatePdfAttachment(db, CHANGE_ORDER_ATTACHMENTS, changeOrderId, fileId, patch);
+}
+
+export function removeChangeOrderAttachment(db: Database.Database, changeOrderId: string, fileId: string): void {
+  removePdfAttachment(db, CHANGE_ORDER_ATTACHMENTS, changeOrderId, fileId);
+}
+
 export function deleteChangeOrder(db: Database.Database, id: string): void {
   const tx = db.transaction(() => {
     // A synced SOV line is a row a finalized pay app has already computed
@@ -544,6 +550,7 @@ export function deleteChangeOrder(db: Database.Database, id: string): void {
     }
     db.prepare('DELETE FROM change_order_lines WHERE changeOrderId = ?').run(id);
     db.prepare('DELETE FROM change_order_photos WHERE changeOrderId = ?').run(id);
+    db.prepare('DELETE FROM change_order_attachments WHERE changeOrderId = ?').run(id);
     // Remove the synced AIA SOV line for this CO so deleting a CO never leaves an
     // orphan schedule-of-values line (correctness fix over the prior behavior).
     db.prepare('DELETE FROM aia_sov_lines WHERE changeOrderId = ?').run(id);

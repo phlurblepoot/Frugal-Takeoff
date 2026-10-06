@@ -4,15 +4,19 @@ import type Database from 'better-sqlite3';
 import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
+import { putBuffer } from './files';
 import {
   getDailyReport, listDailyReports, createDailyReport, saveDailyReport, deleteDailyReport,
-  addPhoto, removePhoto, ValidationError, ConflictError, NotFoundError, DateTakenError,
+  addPhoto, removePhoto, addAttachment, updateAttachment, removeAttachment,
+  ValidationError, ConflictError, NotFoundError, DateTakenError,
 } from './dailyReportStore';
 
 let db: Database.Database;
+let dir: string;
 beforeEach(() => {
   db = openDb(':memory:');
-  runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-daily-')), migrations);
+  dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-daily-'));
+  runMigrations(db, dir, migrations);
   db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Proj', 1);
   db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p2', 'Proj2', 1);
 });
@@ -26,6 +30,7 @@ describe('createDailyReport', () => {
     expect(row.version).toBe(1);
     expect(row.createdBy).toBe('nathan');
     expect(row.photos).toEqual([]);
+    expect(row.attachments).toEqual([]);
     expect(row.manCounts).toEqual([]);
     expect(row.weatherHourly).toEqual([]);
   });
@@ -131,13 +136,65 @@ describe('photos', () => {
   });
 });
 
+// PDF attachments: same contract as the invoice's; like this report's photos
+// they stamp updatedAt — the clock the generated-PDF chip compares against —
+// so the stored PDF reads out of date, and leave version alone.
+describe('attachments', () => {
+  const pdfFile = (id: string) => putBuffer(db, dir, id, Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'document', name: `${id}.pdf` });
+  const stale = (id: string) => db.prepare('UPDATE daily_reports SET updatedAt = 1 WHERE id = ?').run(id);
+
+  it('only an existing PDF can be attached, to an existing report', () => {
+    const { id } = createDailyReport(db, 'p1', { reportDate: '2026-08-26' });
+    putBuffer(db, dir, 'img', Buffer.from('x'), 'image/jpeg', { projectId: 'p1', kind: 'daily-report-photo', name: 'img.jpg' });
+    expect(() => addAttachment(db, id, 'img')).toThrow(ValidationError);
+    expect(() => addAttachment(db, id, 'missing')).toThrow(NotFoundError);
+    expect(() => addAttachment(db, id, '')).toThrow(ValidationError);
+    pdfFile('a1');
+    expect(() => addAttachment(db, 'nope', 'a1')).toThrow(NotFoundError);
+  });
+
+  it('adds idempotently in order, reorders, removes — stamping updatedAt but never version', () => {
+    const { id } = createDailyReport(db, 'p1', { reportDate: '2026-08-26' });
+    pdfFile('a1'); pdfFile('a2');
+    stale(id);
+    addAttachment(db, id, 'a1');
+    addAttachment(db, id, 'a1'); // idempotent
+    addAttachment(db, id, 'a2');
+    let row = getDailyReport(db, id);
+    expect(row.attachments).toEqual([
+      expect.objectContaining({ fileId: 'a1', sortOrder: 0, name: 'a1.pdf', mime: 'application/pdf' }),
+      expect.objectContaining({ fileId: 'a2', sortOrder: 1, name: 'a2.pdf', mime: 'application/pdf' }),
+    ]);
+    expect(row.updatedAt).toBeGreaterThan(1);
+    expect(row.version).toBe(1);
+
+    stale(id);
+    updateAttachment(db, id, 'a1', { sortOrder: 5 });
+    row = getDailyReport(db, id);
+    expect(row.attachments.map((a: any) => a.fileId)).toEqual(['a2', 'a1']);
+    expect(row.updatedAt).toBeGreaterThan(1);
+    expect(row.version).toBe(1);
+    expect(() => updateAttachment(db, id, 'nope', { sortOrder: 0 })).toThrow(NotFoundError);
+
+    stale(id);
+    removeAttachment(db, id, 'a1');
+    row = getDailyReport(db, id);
+    expect(row.attachments.map((a: any) => a.fileId)).toEqual(['a2']);
+    expect(row.updatedAt).toBeGreaterThan(1);
+    expect(row.version).toBe(1);
+  });
+});
+
 describe('deleteDailyReport', () => {
-  it('deletes the row and its photo joins, and frees the date', () => {
+  it('deletes the row and its photo and attachment joins, and frees the date', () => {
     const { id } = createDailyReport(db, 'p1', { reportDate: '2026-08-26' });
     addPhoto(db, id, 'f1');
+    putBuffer(db, dir, 'a1', Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'document', name: 'a1.pdf' });
+    addAttachment(db, id, 'a1');
     deleteDailyReport(db, id);
     expect(getDailyReport(db, id)).toBeNull();
     expect(db.prepare('SELECT COUNT(*) c FROM daily_report_photos WHERE dailyReportId = ?').get(id)).toEqual({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) c FROM daily_report_attachments WHERE dailyReportId = ?').get(id)).toEqual({ c: 0 });
     createDailyReport(db, 'p1', { reportDate: '2026-08-26' }); // date reusable
   });
   it('throws NotFoundError for a missing id', () => {

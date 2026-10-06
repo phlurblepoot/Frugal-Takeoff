@@ -1,6 +1,9 @@
 // server/dailyReportStore.ts
 import type Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  type PdfAttachmentTable, listPdfAttachments, addPdfAttachment, updatePdfAttachment, removePdfAttachment,
+} from './pdfAttachments';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -41,7 +44,8 @@ export function getDailyReport(db: Database.Database, id: string): any | null {
   if (!row) return null;
   const photos = db.prepare('SELECT id, fileId, sortOrder FROM daily_report_photos WHERE dailyReportId = ? ORDER BY sortOrder')
     .all(id) as any[];
-  return { ...row, weatherHourly: parseArr(row.weatherHourly), manCounts: parseArr(row.manCounts), photos };
+  const attachments = listPdfAttachments(db, DAILY_REPORT_ATTACHMENTS, id);
+  return { ...row, weatherHourly: parseArr(row.weatherHourly), manCounts: parseArr(row.manCounts), photos, attachments };
 }
 
 export function listDailyReports(db: Database.Database, projectId: string): any[] {
@@ -107,6 +111,7 @@ export function deleteDailyReport(db: Database.Database, id: string): void {
   if (!row) throw new NotFoundError('Daily report not found');
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM daily_report_photos WHERE dailyReportId = ?').run(id);
+    db.prepare('DELETE FROM daily_report_attachments WHERE dailyReportId = ?').run(id);
     db.prepare('DELETE FROM daily_reports WHERE id = ?').run(id);
   });
   tx();
@@ -132,4 +137,27 @@ export function removePhoto(db: Database.Database, dailyReportId: string, fileId
   if (!db.prepare('SELECT id FROM daily_reports WHERE id = ?').get(dailyReportId)) throw new NotFoundError('Daily report not found');
   db.prepare('DELETE FROM daily_report_photos WHERE dailyReportId = ? AND fileId = ?').run(dailyReportId, fileId);
   db.prepare('UPDATE daily_reports SET updatedAt = ? WHERE id = ?').run(Date.now(), dailyReportId);
+}
+
+// PDF attachments, appended to the generated daily report after its photos.
+// Same freshness rule as the photos above: updatedAt moves — the clock the
+// document-actions chip and Send's reuse check compare the stored PDF against
+// — and version is left alone.
+const DAILY_REPORT_ATTACHMENTS: PdfAttachmentTable = {
+  table: 'daily_report_attachments', ownerColumn: 'dailyReportId', ownerTable: 'daily_reports',
+  notFoundMessage: 'Daily report not found', noun: 'daily report',
+  NotFoundError, ValidationError,
+  touch: (db, dailyReportId) => { db.prepare('UPDATE daily_reports SET updatedAt = ? WHERE id = ?').run(Date.now(), dailyReportId); },
+};
+
+export function addAttachment(db: Database.Database, dailyReportId: string, fileId: string): void {
+  addPdfAttachment(db, DAILY_REPORT_ATTACHMENTS, dailyReportId, fileId);
+}
+
+export function updateAttachment(db: Database.Database, dailyReportId: string, fileId: string, patch: { sortOrder: number }): void {
+  updatePdfAttachment(db, DAILY_REPORT_ATTACHMENTS, dailyReportId, fileId, patch);
+}
+
+export function removeAttachment(db: Database.Database, dailyReportId: string, fileId: string): void {
+  removePdfAttachment(db, DAILY_REPORT_ATTACHMENTS, dailyReportId, fileId);
 }

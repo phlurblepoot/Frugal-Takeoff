@@ -242,7 +242,8 @@ describe('storage + search + orphans', () => {
   it('orphan cleanup spares files only an attachment or photo table names', async () => {
     // Unnamed and project-less, so hidden from Documents: only the join rows
     // vouch for them.
-    for (const id of ['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'loose-img']) {
+    const linked = ['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'co-att', 'rfi-att', 'iss-att', 'dr-att'];
+    for (const id of [...linked, 'loose-img']) {
       await request(app).post('/api/images').send({ id, data: PNG });
     }
     const link = (table: string, owner: string, fileId: string) =>
@@ -251,10 +252,15 @@ describe('storage + search + orphans', () => {
     link('invoice_photos', 'invoiceId', 'inv-photo');
     link('proposal_attachments', 'proposalId', 'prop-att');
     link('proposal_photos', 'proposalId', 'prop-photo');
+    // Migration 42: an attached PDF is often filed under another project (or
+    // none), so these join rows must vouch for it as well.
+    link('change_order_attachments', 'changeOrderId', 'co-att');
+    link('rfi_attachments', 'rfiId', 'rfi-att');
+    link('issue_attachments', 'issueId', 'iss-att');
+    link('daily_report_attachments', 'dailyReportId', 'dr-att');
 
     expect((await request(app).get('/api/storage/orphans')).body.count).toBe(1);
-    expect(await survivors(['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'loose-img']))
-      .toEqual(['inv-att', 'inv-photo', 'prop-att', 'prop-photo']);
+    expect(await survivors([...linked, 'loose-img'])).toEqual(linked);
   });
 
   it('search finds projects, pages, and takeoffs from normalized tables', async () => {
@@ -569,6 +575,30 @@ describe('deleteProject billing cascade', () => {
     }
     expect((db.prepare("SELECT COUNT(*) c FROM payments WHERE targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)").get('p1') as any).c).toBe(0);
     expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').get('p1') as any).c).toBe(0);
+  });
+});
+
+describe('deleteProject attachments cascade', () => {
+  it('removes the PDF attachment rows of its change orders, issues, RFIs and daily reports', async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+    await request(app).post('/api/files/spec1?projectId=p1&kind=document&name=Spec.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
+    const co = (await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1' })).body.id;
+    const iss = (await request(app).post('/api/projects/p1/issues').send({ title: 'Crack' })).body.id;
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Which finish?' })).body.id;
+    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' })).body.id;
+    await request(app).post(`/api/change-orders/${co}/attachments`).send({ fileId: 'spec1' }).expect(200);
+    await request(app).post(`/api/issues/${iss}/attachments`).send({ fileId: 'spec1' }).expect(200);
+    await request(app).post(`/api/rfis/${rfi}/attachments`).send({ fileId: 'spec1' }).expect(200);
+    await request(app).post(`/api/daily-reports/${dr}/attachments`).send({ fileId: 'spec1' }).expect(200);
+
+    await request(app).delete('/api/projects/p1').expect(200);
+    for (const [table, owner, id] of [
+      ['change_order_attachments', 'changeOrderId', co], ['issue_attachments', 'issueId', iss],
+      ['rfi_attachments', 'rfiId', rfi], ['daily_report_attachments', 'dailyReportId', dr],
+    ]) {
+      expect(db.prepare(`SELECT COUNT(*) c FROM ${table} WHERE ${owner} = ?`).get(id), table).toEqual({ c: 0 });
+    }
   });
 });
 
@@ -1258,6 +1288,121 @@ describe('rfi pending-reply routes', () => {
     const id = await stageReply();
     await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({}).expect(200);
     expect((await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({})).status).toBe(409);
+  });
+});
+
+// PDF attachments on change orders, RFIs, issues and daily reports (migration
+// 42). Each set of routes sits behind the same gate as that record's photo
+// routes: change orders are admin-only, the field records are not.
+describe('PDF attachment routes', () => {
+  let broadcasts: EntityChangedEvent[];
+  let memberApp: express.Express;
+
+  beforeEach(async () => {
+    broadcasts = [];
+    memberApp = express();
+    memberApp.use(express.json({ limit: '50mb' }));
+    registerDataRoutes(memberApp, {
+      db,
+      dataDir: dir,
+      dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
+      requireAdmin: (_req: any, res: any) => res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+      broadcastChange: ev => { broadcasts.push(ev); },
+    });
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+    for (const id of ['spec1', 'spec2']) {
+      await request(app).post(`/api/files/${id}?projectId=p1&kind=document&name=${id}.pdf`)
+        .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
+    }
+    await request(app).post('/api/files/img1?projectId=p1&kind=photo&name=p.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
+  });
+
+  const FIELD_RECORDS = [
+    { label: 'issues', base: '/api/issues', type: 'issue', create: async () => (await request(app).post('/api/projects/p1/issues').send({ title: 'Crack' })).body.id },
+    { label: 'RFIs', base: '/api/rfis', type: 'rfi', create: async () => (await request(app).post('/api/projects/p1/rfis').send({ title: 'Which finish?' })).body.id },
+    { label: 'daily reports', base: '/api/daily-reports', type: 'dailyReport', create: async () => (await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' })).body.id },
+  ] as const;
+
+  for (const rec of FIELD_RECORDS) {
+    it(`${rec.label}: a member can add, reorder and remove; each change broadcasts without a version`, async () => {
+      const id = await rec.create();
+      const before = (await request(app).get(`${rec.base}/${id}`)).body;
+
+      await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'spec1' }).expect(200);
+      await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'spec2' }).expect(200);
+      let got = (await request(app).get(`${rec.base}/${id}`)).body;
+      expect(got.attachments).toEqual([
+        expect.objectContaining({ fileId: 'spec1', sortOrder: 0, name: 'spec1.pdf', mime: 'application/pdf' }),
+        expect.objectContaining({ fileId: 'spec2', sortOrder: 1, name: 'spec2.pdf' }),
+      ]);
+      // Like the photos: updatedAt moved (the generated PDF is now out of
+      // date), version did not (a dirty editor elsewhere can still save).
+      expect(got.version).toBe(before.version);
+      expect(got.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
+
+      await request(memberApp).patch(`${rec.base}/${id}/attachments/spec1`).send({ sortOrder: 5 }).expect(200);
+      got = (await request(app).get(`${rec.base}/${id}`)).body;
+      expect(got.attachments.map((a: any) => a.fileId)).toEqual(['spec2', 'spec1']);
+
+      await request(memberApp).delete(`${rec.base}/${id}/attachments/spec2`).expect(200);
+      got = (await request(app).get(`${rec.base}/${id}`)).body;
+      expect(got.attachments.map((a: any) => a.fileId)).toEqual(['spec1']);
+      expect(got.version).toBe(before.version);
+
+      expect(broadcasts).toHaveLength(4);
+      for (const ev of broadcasts) {
+        expect(ev).toMatchObject({ type: rec.type, id, projectId: 'p1', action: 'updated', byUserId: 'm1' });
+        expect(ev).not.toHaveProperty('version');
+      }
+    });
+
+    it(`${rec.label}: refuses a non-PDF (400), an unknown file or record (404), a missing fileId or bad sortOrder (400)`, async () => {
+      const id = await rec.create();
+      expect((await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'img1' })).status).toBe(400);
+      expect((await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'nope' })).status).toBe(404);
+      expect((await request(memberApp).post(`${rec.base}/${id}/attachments`).send({})).status).toBe(400);
+      expect((await request(memberApp).post(`${rec.base}/nope/attachments`).send({ fileId: 'spec1' })).status).toBe(404);
+      expect((await request(memberApp).patch(`${rec.base}/${id}/attachments/spec1`).send({ sortOrder: 0 })).status).toBe(404);
+      await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'spec1' }).expect(200);
+      expect((await request(memberApp).patch(`${rec.base}/${id}/attachments/spec1`).send({ sortOrder: 'first' })).status).toBe(400);
+      expect((await request(app).get(`${rec.base}/${id}`)).body.attachments).toHaveLength(1);
+    });
+  }
+
+  it('change orders: admin-gated like their photos, and each change broadcasts the bumped version', async () => {
+    const id = (await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1' })).body.id;
+    expect((await request(memberApp).post(`/api/change-orders/${id}/attachments`).send({ fileId: 'spec1' })).status).toBe(403);
+    expect((await request(memberApp).patch(`/api/change-orders/${id}/attachments/spec1`).send({ sortOrder: 0 })).status).toBe(403);
+    expect((await request(memberApp).delete(`/api/change-orders/${id}/attachments/spec1`)).status).toBe(403);
+
+    const events: EntityChangedEvent[] = [];
+    const adminApp = express();
+    adminApp.use(express.json());
+    registerDataRoutes(adminApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'a1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: ev => { events.push(ev); },
+    });
+    const before = (await request(adminApp).get(`/api/change-orders/${id}`)).body.version;
+    expect((await request(adminApp).post(`/api/change-orders/${id}/attachments`).send({ fileId: 'img1' })).status).toBe(400);
+    expect((await request(adminApp).post(`/api/change-orders/${id}/attachments`).send({})).status).toBe(400);
+    await request(adminApp).post(`/api/change-orders/${id}/attachments`).send({ fileId: 'spec1' }).expect(200);
+    await request(adminApp).post(`/api/change-orders/${id}/attachments`).send({ fileId: 'spec2' }).expect(200);
+    await request(adminApp).patch(`/api/change-orders/${id}/attachments/spec2`).send({ sortOrder: -1 }).expect(200);
+    let got = (await request(adminApp).get(`/api/change-orders/${id}`)).body;
+    expect(got.attachments.map((a: any) => a.fileId)).toEqual(['spec2', 'spec1']);
+    expect(got.version).toBe(before + 3);
+    await request(adminApp).delete(`/api/change-orders/${id}/attachments/spec1`).expect(200);
+    got = (await request(adminApp).get(`/api/change-orders/${id}`)).body;
+    expect(got.attachments.map((a: any) => a.fileId)).toEqual(['spec2']);
+    expect(got.version).toBe(before + 4);
+    expect(events.map(e => e.version)).toEqual([before + 1, before + 2, before + 3, before + 4]);
+    for (const ev of events) expect(ev).toMatchObject({ type: 'changeOrder', id, projectId: 'p1', action: 'updated' });
   });
 });
 
