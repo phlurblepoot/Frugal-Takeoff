@@ -28,6 +28,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.1.7',
+    date: 'October 6, 2026',
+    changes: [
+      'Fix: older change orders — made before change orders had line items — no longer show $0. Their amount showed as $0 on the Change Orders tab, in the editor, on the PDF and on the project dashboard\'s Change orders card, and clicking Save in the editor changed the amount to $0, which took an approved one out of the contract total. They now show their real amount as the lump sum, and saving one keeps it. A PDF already made for one of them (which printed $0) now shows as out of date — regenerate it.',
+      'Note for self-hosters: this update includes a small data-transforming migration (47) that copies the amount of each change order with no line items and no lump sum into its lump sum (the amount itself is unchanged) — back up before pulling this update.',
+    ],
+  },
+  {
     version: '4.1.6',
     date: 'October 6, 2026',
     changes: [

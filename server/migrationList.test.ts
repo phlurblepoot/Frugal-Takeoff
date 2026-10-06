@@ -1445,8 +1445,94 @@ describe('migration 46: invoices-auto-paid', () => {
     db.close();
 
     const fresh = openDb(':memory:');
-    expect(() => runMigrations(fresh, tmpDir(), migrations)).not.toThrow();
+    expect(() => runMigrations(fresh, tmpDir(), migrations.filter(m => m.version <= 46))).not.toThrow();
     expect(fresh.prepare('SELECT MAX(version) v FROM schema_version').get()).toEqual({ v: 46 });
+    fresh.close();
+  });
+});
+
+describe('migration 47: change-order-legacy-lump-sum', () => {
+  // Change orders written before migration 14 (value only in amount, no lines;
+  // 14 gives them lumpSumAmount 0), carried up to v46, next to change orders
+  // the store wrote since.
+  const seedV46 = () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 13));
+    const legacy = db.prepare(`INSERT INTO change_orders (id, projectId, number, description, amount, status, createdAt) VALUES (?, 'p1', ?, 'Extra', ?, ?, 5)`);
+    legacy.run('legacy', '1', 1234.56, 'approved');
+    legacy.run('credit', '2', -250, 'pending'); // a deduction moves the same way
+    legacy.run('legacy-zero', '3', 0, 'pending'); // worth $0 → nothing to move
+    runMigrations(db, dir, migrations.filter(m => m.version <= 46));
+    const co = db.prepare(`INSERT INTO change_orders (id, projectId, number, description, amount, status, version, lumpSumAmount, createdAt, updatedAt)
+      VALUES (?, 'p1', ?, 'x', ?, 'approved', 3, ?, 5, 6)`);
+    const line = db.prepare(`INSERT INTO change_order_lines (id, changeOrderId, description, qty, unitPrice, sortOrder) VALUES (?, ?, 'x', ?, ?, 0)`);
+    // Lines and no lump sum → untouched. Three 0.1 lines = 30¢ exactly.
+    co.run('lined', '4', 0.3, 0);
+    ['a', 'b', 'c'].forEach(l => line.run(`lined-${l}`, 'lined', 1, 0.1));
+    co.run('lump', '5', 75, 75); // a lump sum already → untouched
+    co.run('both', '6', 175, 75); line.run('both-a', 'both', 2, 50); // lines + lump sum → untouched
+    co.run('zero', '7', 0, 0); // $0 throughout → untouched
+    return { db, dir };
+  };
+  const lumpSums = (db: any) => Object.fromEntries(
+    (db.prepare('SELECT id, lumpSumAmount FROM change_orders ORDER BY id').all() as { id: string; lumpSumAmount: number }[])
+      .map(r => [r.id, r.lumpSumAmount]));
+
+  it('gives a change order with no lines, no lump sum and a non-zero amount that amount as its lump sum, and nothing else', () => {
+    const { db, dir } = seedV46();
+    expect(lumpSums(db)).toEqual({ legacy: 0, credit: 0, 'legacy-zero': 0, lined: 0, lump: 75, both: 75, zero: 0 });
+    runMigrations(db, dir, migrations);
+    expect(lumpSums(db)).toEqual({ legacy: 1234.56, credit: -250, 'legacy-zero': 0, lined: 0, lump: 75, both: 75, zero: 0 });
+    db.close();
+  });
+
+  it('makes Σ line cents + lump-sum cents equal amount for every change order', () => {
+    const { db, dir } = seedV46();
+    runMigrations(db, dir, migrations);
+    const cents = (d: number) => Math.round(d * 100);
+    const lineCents = (id: string) => (db.prepare('SELECT qty, unitPrice FROM change_order_lines WHERE changeOrderId = ?').all(id) as any[])
+      .reduce((a, l) => a + cents(l.qty * l.unitPrice), 0);
+    for (const r of db.prepare('SELECT id, amount, lumpSumAmount FROM change_orders').all() as any[]) {
+      expect(lineCents(r.id) + cents(r.lumpSumAmount), r.id).toBe(cents(r.amount));
+    }
+    db.close();
+  });
+
+  it('changes only lumpSumAmount (and a fixed row\'s updatedAt): amount, status, version and lines are as they were', () => {
+    const { db, dir } = seedV46();
+    const others = (d: any) => ({
+      changeOrders: d.prepare('SELECT id, number, amount, status, version, createdAt FROM change_orders ORDER BY id').all(),
+      lines: d.prepare('SELECT * FROM change_order_lines ORDER BY id').all(),
+    });
+    const stamps = (d: any) => Object.fromEntries(
+      (d.prepare('SELECT id, updatedAt FROM change_orders ORDER BY id').all() as { id: string; updatedAt: number | null }[])
+        .map(r => [r.id, r.updatedAt]));
+    const before = others(db);
+    const stampsBefore = stamps(db);
+    const t0 = Date.now();
+    runMigrations(db, dir, migrations);
+    expect(others(db)).toEqual(before);
+    // A fixed row's stored PDF (which printed $0) now reads out of date; the
+    // rest keep their stamp.
+    const after = stamps(db);
+    for (const id of ['legacy', 'credit']) expect(after[id]).toBeGreaterThanOrEqual(t0);
+    for (const id of ['legacy-zero', 'lined', 'lump', 'both', 'zero']) expect(after[id]).toBe(stampsBefore[id]);
+    db.close();
+  });
+
+  it('replaying up() is a no-op, and a fresh install runs it cleanly', () => {
+    const { db, dir } = seedV46();
+    runMigrations(db, dir, migrations);
+    const after = db.prepare('SELECT * FROM change_orders ORDER BY id').all();
+    const m47 = migrations.find(m => m.version === 47)!;
+    expect(() => m47.up({ db, dataDir: dir })).not.toThrow();
+    expect(db.prepare('SELECT * FROM change_orders ORDER BY id').all()).toEqual(after);
+    db.close();
+
+    const fresh = openDb(':memory:');
+    expect(() => runMigrations(fresh, tmpDir(), migrations)).not.toThrow();
+    expect(fresh.prepare('SELECT name FROM schema_version WHERE version = 47').get()).toEqual({ name: 'change-order-legacy-lump-sum' });
     fresh.close();
   });
 });

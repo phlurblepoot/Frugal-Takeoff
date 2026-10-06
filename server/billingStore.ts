@@ -565,9 +565,22 @@ function normalizeTitle(title: unknown): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
-function coLineTotalsCents(db: Database.Database, changeOrderId: string): number {
-  const lines = db.prepare('SELECT qty, unitPrice FROM change_order_lines WHERE changeOrderId = ?').all(changeOrderId) as any[];
-  return sumCents(lines);
+// A change_orders row as it is read for display and editing, plus its
+// totalCents (Σ line cents + lump-sum cents). A change order made before
+// migration 14 keeps its value only in `amount`: it has no line rows and the
+// $0 lumpSumAmount that migration's new column defaulted to. Summed as stored
+// it reads as $0, and the editor (which fills its Lump sum field from
+// lumpSumAmount) would save it back as $0 — dropping it from the contract
+// total. So such a row is read as a lump sum of its amount: it shows its real
+// value, and saving it unchanged writes the same amount back. Migration 47
+// moved the existing rows' value into lumpSumAmount; this keeps any row still
+// in that shape from ever reading as $0. Every other change order (lines, a
+// lump sum, or $0 throughout) reads exactly as stored.
+function readChangeOrderRow(db: Database.Database, row: any): any {
+  const lines = db.prepare('SELECT qty, unitPrice FROM change_order_lines WHERE changeOrderId = ?').all(row.id) as any[];
+  const amountOnly = lines.length === 0 && toCents(row.lumpSumAmount) === 0 && toCents(row.amount) !== 0;
+  const lumpSumAmount = amountOnly ? row.amount : row.lumpSumAmount;
+  return { ...row, lumpSumAmount, totalCents: sumCents(lines) + toCents(lumpSumAmount) };
 }
 
 function writeChangeOrderLines(db: Database.Database, changeOrderId: string, lines: LineInput[]): void {
@@ -579,20 +592,16 @@ function writeChangeOrderLines(db: Database.Database, changeOrderId: string, lin
 export function getChangeOrder(db: Database.Database, id: string): any | null {
   const row = db.prepare('SELECT * FROM change_orders WHERE id = ?').get(id) as any;
   if (!row) return null;
+  const co = readChangeOrderRow(db, row);
   const lines = db.prepare('SELECT id, description, qty, unitPrice, sortOrder FROM change_order_lines WHERE changeOrderId = ? ORDER BY sortOrder').all(id);
   const photos = db.prepare('SELECT id, fileId, sortOrder FROM change_order_photos WHERE changeOrderId = ? ORDER BY sortOrder, createdAt').all(id);
   const attachments = listPdfAttachments(db, CHANGE_ORDER_ATTACHMENTS, id);
-  const lumpSumCents = toCents(row.lumpSumAmount);
-  const totalCents = coLineTotalsCents(db, id) + lumpSumCents;
-  return { ...row, lines, photos, attachments, totalCents, lumpSumCents };
+  return { ...co, lines, photos, attachments, lumpSumCents: toCents(co.lumpSumAmount) };
 }
 
 export function listChangeOrders(db: Database.Database, projectId: string): any[] {
   const rows = db.prepare('SELECT * FROM change_orders WHERE projectId = ? ORDER BY createdAt DESC, rowid DESC').all(projectId) as any[];
-  return rows.map(r => {
-    const totalCents = coLineTotalsCents(db, r.id) + toCents(r.lumpSumAmount);
-    return { ...r, totalCents };
-  });
+  return rows.map(r => readChangeOrderRow(db, r));
 }
 
 // Next per-project CO number: parse integers out of existing numbers, take the

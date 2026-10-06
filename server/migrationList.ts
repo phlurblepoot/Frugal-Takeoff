@@ -2049,4 +2049,44 @@ export const migrations: Migration[] = [
       console.log(`[migrations] 46: ${marked} fully paid invoice(s) marked paid`);
     },
   },
+  {
+    version: 47,
+    name: 'change-order-legacy-lump-sum',
+    // DATA-TRANSFORMING (supervised). A change order made before migration 14
+    // keeps its value only in change_orders.amount: it has no
+    // change_order_lines rows, and its lumpSumAmount is the 0 that migration
+    // 14's new column defaulted to (14 deliberately rewrote no data). The
+    // Change Orders tab, the editor and the PDF show Σ line cents + lump-sum
+    // cents, so such a change order showed $0 there — and saving it from the
+    // editor rewrote its amount to $0, dropping it from the contract total —
+    // while billingSummary, the AIA SOV sync and Reports, which read amount,
+    // still counted it. This moves the value into the lump sum: every change
+    // order with no lines, a $0 lump sum and a non-zero amount gets
+    // lumpSumAmount = amount, so Σ lines + lump sum equals amount again.
+    // Cents compare with the store's rounding (toCents), inlined so a later
+    // store change can't alter what this migration did.
+    // amount — and so the contract total and any synced SOV line — is what it
+    // was, and version stays as it is (no open editor is sent a conflict). A
+    // fixed row's updatedAt moves to now, though: a PDF generated for it since
+    // migration 14 printed a $0 total, and the fresh stamp makes its "up to
+    // date" chip say it needs regenerating. Change orders with lines, with a
+    // lump sum, or worth $0 are untouched.
+    // billingStore.readChangeOrderRow reads any row still in this shape the
+    // same way. Replay-safe: a second run finds nothing left to fix.
+    up({ db }) {
+      const cents = (dollars: unknown): number => Math.round((Number(dollars) || 0) * 100);
+      const lineless = db.prepare(`SELECT id, amount, lumpSumAmount FROM change_orders c
+        WHERE NOT EXISTS (SELECT 1 FROM change_order_lines l WHERE l.changeOrderId = c.id)`).all() as
+        { id: string; amount: number; lumpSumAmount: number }[];
+      const toLumpSum = db.prepare('UPDATE change_orders SET lumpSumAmount = amount, updatedAt = ? WHERE id = ?');
+      const now = Date.now();
+      let fixed = 0;
+      for (const co of lineless) {
+        if (cents(co.lumpSumAmount) !== 0 || cents(co.amount) === 0) continue;
+        toLumpSum.run(now, co.id);
+        fixed++;
+      }
+      console.log(`[migrations] 47: ${fixed} change order(s) from before line items given their amount as a lump sum`);
+    },
+  },
 ];

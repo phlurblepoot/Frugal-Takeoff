@@ -891,6 +891,58 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
   });
 });
 
+// A change order from before migration 14 still in its old shape (migration 47
+// moves the ones that exist when it runs): no line rows, lumpSumAmount at the
+// column's default 0, its value only in amount.
+describe('change orders from before line items — value only in amount', () => {
+  beforeEach(() => {
+    db.prepare('UPDATE projects SET contractValue = ? WHERE id = ?').run(10000, 'p1'); // $10k base
+    db.prepare(`INSERT INTO change_orders (id, projectId, number, description, amount, status, createdAt)
+                VALUES ('legacy', 'p1', '001', 'Extra electrical', 1234.56, 'approved', 1)`).run();
+  });
+
+  it('reads as a lump sum of its amount: the list, the editor record and the PDF totals show its value', () => {
+    expect(listChangeOrders(db, 'p1')).toMatchObject([{ id: 'legacy', amount: 1234.56, lumpSumAmount: 1234.56, totalCents: 123456 }]);
+    expect(getChangeOrder(db, 'legacy')).toMatchObject({ amount: 1234.56, lumpSumAmount: 1234.56, lumpSumCents: 123456, totalCents: 123456, lines: [] });
+    expect(billingSummary(db, 'p1').approvedChangeCents).toBe(123456);
+    // Reading writes nothing.
+    expect(db.prepare('SELECT lumpSumAmount, version FROM change_orders WHERE id = ?').get('legacy')).toEqual({ lumpSumAmount: 0, version: 1 });
+  });
+
+  it('saving it unchanged, as the editor does, keeps its amount and the contract total', () => {
+    const before = billingSummary(db, 'p1').contractTotalCents;
+    expect(before).toBe(1000000 + 123456);
+    // The editor posts the record back with its Lump sum field, filled from lumpSumAmount.
+    const co = getChangeOrder(db, 'legacy')!;
+    saveChangeOrder(db, 'legacy', { ...co, lumpSumAmount: co.lumpSumAmount, lines: co.lines });
+    expect(db.prepare('SELECT amount, lumpSumAmount, version FROM change_orders WHERE id = ?').get('legacy'))
+      .toEqual({ amount: 1234.56, lumpSumAmount: 1234.56, version: 2 });
+    expect(listChangeOrders(db, 'p1')[0].totalCents).toBe(123456);
+    expect(billingSummary(db, 'p1').contractTotalCents).toBe(before);
+  });
+
+  it('an edit to it saves like any change order: new lines and lump sum, or cleared to $0', () => {
+    let co = getChangeOrder(db, 'legacy')!;
+    saveChangeOrder(db, 'legacy', { version: co.version, lumpSumAmount: 1000, lines: [{ description: 'A', qty: 2, unitPrice: 50 }] });
+    expect(getChangeOrder(db, 'legacy')).toMatchObject({ amount: 1100, lumpSumAmount: 1000, totalCents: 110000 });
+    co = getChangeOrder(db, 'legacy')!;
+    saveChangeOrder(db, 'legacy', { version: co.version, lumpSumAmount: 0, lines: [] });
+    expect(getChangeOrder(db, 'legacy')).toMatchObject({ amount: 0, lumpSumAmount: 0, totalCents: 0 });
+    expect(billingSummary(db, 'p1').approvedChangeCents).toBe(0);
+  });
+
+  it('change orders with lines, a lump sum, or $0 throughout read exactly as stored', () => {
+    const lined = createChangeOrder(db, 'p1', { lines: [{ description: 'A', qty: 2, unitPrice: 50 }] });
+    const lump = createChangeOrder(db, 'p1', { lumpSumAmount: 75 });
+    const zero = createChangeOrder(db, 'p1', {});
+    expect(getChangeOrder(db, lined.id)).toMatchObject({ amount: 100, lumpSumAmount: 0, lumpSumCents: 0, totalCents: 10000 });
+    expect(getChangeOrder(db, lump.id)).toMatchObject({ amount: 75, lumpSumAmount: 75, lumpSumCents: 7500, totalCents: 7500 });
+    expect(getChangeOrder(db, zero.id)).toMatchObject({ amount: 0, lumpSumAmount: 0, lumpSumCents: 0, totalCents: 0 });
+    expect(listChangeOrders(db, 'p1').filter(c => c.id !== 'legacy').map(c => [c.lumpSumAmount, c.totalCents]))
+      .toEqual([[0, 0], [75, 7500], [0, 10000]]);
+  });
+});
+
 describe('billingSummary — SOV-derived contract total', () => {
   const insSov = (id: string, valueCents: number, isCO = 0) =>
     db.prepare(
