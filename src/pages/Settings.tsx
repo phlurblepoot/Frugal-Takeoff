@@ -28,6 +28,15 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.1.0',
+    date: 'October 6, 2026',
+    changes: [
+      'Canvas: clicking one segment of a measurement now shows what that segment alone is worth — its quantity and dollars — in a highlighted label on the segment, e.g. "420.00 sq ft · $1,470". A cutout shows as a deduction, e.g. "−12.50 sq ft · −$44". The measurement\'s own total label stays where it was.',
+      'Canvas: a bar at the bottom of the canvas shows what is selected — the measurement\'s name, its takeoff and colour, the measurement total, and the clicked segment\'s amount when one is clicked. For a count marker it shows its price and how many of that takeoff are on the page; with several picked in multi-select it shows how many.',
+      'These dollars are the measurement\'s (or segment\'s) share of the takeoff\'s price, split the same way the Takeoffs tab splits it, in whole dollars (not rounded up to the next $100). A takeoff with no pricing shows the quantity only.',
+    ],
+  },
+  {
     version: '4.0.0',
     date: 'September 27, 2026',
     changes: [

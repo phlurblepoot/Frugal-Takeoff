@@ -671,3 +671,95 @@ test.describe('CanvasView subtract tool is read-only-gated', () => {
     await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CanvasView — the selected measurement / segment value (label + info bar).
+//
+// Selecting a whole measurement shows its total in the fixed info bar at the
+// bottom of the canvas; clicking one segment (here a cutout's edge, in Pan)
+// adds that segment's own quantity and $ — a cutout as a negative deduction.
+// The takeoff is priced at $2 / sq ft, so dollars are 2 × the square feet.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** "−12.50 sq ft · −$25" → { sqft: -12.5, dollars: -25 } */
+function parseStat(text: string): { sqft: number; dollars: number } {
+  const m = text.match(/(−?)([\d,.]+)\s*sq ft\s*·\s*(−?)\$([\d,]+)/);
+  if (!m) throw new Error(`no "<qty> sq ft · $<n>" in: ${text}`);
+  const sign = (s: string) => (s === '−' ? -1 : 1);
+  return {
+    sqft: sign(m[1]) * parseFloat(m[2].replace(/,/g, '')),
+    dollars: sign(m[3]) * parseInt(m[4].replace(/,/g, ''), 10),
+  };
+}
+
+test.describe('CanvasView selected segment value', () => {
+  test('info bar shows the measurement total, then a clicked cutout\'s own value', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const { projectId, pageId } = await seedProjectWithPage(request, token, { withScale: false });
+    await gotoCanvas(authedPage, projectId, pageId);
+    const box = await surfaceBox(authedPage);
+
+    const cy = box.height / 2;
+    const left = box.width / 2 - 200;
+    const right = box.width / 2 + 200; // 400px span = 10 ft
+    await calibrate(authedPage, box, [left, cy], [right, cy], '10');
+
+    // A priced area takeoff (createTakeoff above leaves the cost blank).
+    await authedPage.getByRole('button', { name: 'New', exact: true }).click();
+    await authedPage.getByTestId('takeoff-name-input').fill('Surface');
+    await authedPage.locator('select').filter({ has: authedPage.locator('option[value="count"]') }).first().selectOption('area');
+    await authedPage.getByPlaceholder('0.00 or =95*40%').fill('2');
+    await authedPage.getByTestId('btn-create-takeoff').click();
+    await expect(authedPage.getByTestId('takeoff-name-input')).toBeHidden();
+
+    // 400px x 200px -> 50 sq ft, auto-selected as a whole measurement.
+    const top = cy - 100;
+    const bot = cy + 100;
+    await authedPage.getByTestId('tool-area').click();
+    await clickCanvas(authedPage, box, left, top);
+    await clickCanvas(authedPage, box, right, top);
+    await clickCanvas(authedPage, box, right, bot);
+    await clickCanvas(authedPage, box, left, bot);
+    await authedPage.keyboard.press('Enter');
+
+    const bar = authedPage.getByTestId('selection-info-bar');
+    await expect(bar).toBeVisible();
+    await expect(authedPage.getByTestId('selection-info-segment')).toHaveCount(0);
+    let total = parseStat(await authedPage.getByTestId('selection-info-total').innerText());
+    expect(total.sqft).toBeGreaterThan(45);
+    expect(total.sqft).toBeLessThan(55);
+    expect(Math.abs(total.dollars - 2 * total.sqft)).toBeLessThanOrEqual(1);
+
+    // 200px x 100px cutout -> 12.5 sq ft; net 37.5 sq ft.
+    await authedPage.getByTestId('tool-subtract').click();
+    const cutLeft = box.width / 2 - 100;
+    const cutRight = box.width / 2 + 100;
+    await clickCanvas(authedPage, box, cutLeft, cy - 50);
+    await clickCanvas(authedPage, box, cutRight, cy - 50);
+    await clickCanvas(authedPage, box, cutRight, cy + 50);
+    await clickCanvas(authedPage, box, cutLeft, cy + 50);
+    await authedPage.keyboard.press('Enter');
+
+    // Pan, then click the cutout's left edge to select just that segment.
+    await authedPage.getByTestId('tool-pan').click();
+    await clickCanvas(authedPage, box, cutLeft, cy);
+
+    const segment = authedPage.getByTestId('selection-info-segment');
+    await expect(segment).toBeVisible();
+    await expect(segment).toContainText(/cutout/i);
+    const cut = parseStat(await segment.innerText());
+    expect(cut.sqft).toBeLessThan(-10);
+    expect(cut.sqft).toBeGreaterThan(-15);
+    expect(Math.abs(cut.dollars - 2 * cut.sqft)).toBeLessThanOrEqual(1);
+    total = parseStat(await authedPage.getByTestId('selection-info-total').innerText());
+    expect(total.sqft).toBeGreaterThan(32.5);
+    expect(total.sqft).toBeLessThan(42.5);
+
+    // Visual proof of the amber segment label next to the total label.
+    await authedPage.screenshot({ path: 'test-results/selected-segment-value.png' });
+
+    // Escape deselects; the bar goes away with the selection.
+    await authedPage.keyboard.press('Escape');
+    await expect(bar).toBeHidden();
+  });
+});

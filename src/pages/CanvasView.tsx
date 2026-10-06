@@ -9,6 +9,7 @@ import { ScaleCalibrationModal } from '../components/canvas/ScaleCalibrationModa
 import { KeyboardShortcutsModal } from '../components/canvas/KeyboardShortcutsModal';
 import { ToolDisabledModal } from '../components/canvas/ToolDisabledModal';
 import { MeasurementSidebar } from '../components/canvas/MeasurementSidebar';
+import { SelectionInfoBar } from '../components/canvas/SelectionInfoBar';
 import { Measurement, MeasurementSegment, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
 import { calculatePolylineLength, measurementAreaPx, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates, noteProjectVersion } from '../utils/store';
@@ -17,6 +18,8 @@ import { useNotes } from '../context/NotesContext';
 import { CustomCostRow } from '../components/CustomCostRow';
 import { useMeasurementHistory } from '../hooks/useMeasurementHistory';
 import { computeRevisionModel, effectiveSheetId } from '../utils/planSets';
+import { summarizeSelection } from '../utils/segmentValue';
+import { computeTakeoffTotals } from './project/proposal/proposalGenerator';
 import { CLIENT_SESSION_ID } from '../utils/clientSession';
 
 const STANDARD_SCALES = [
@@ -880,6 +883,15 @@ const CanvasViewInner: React.FC = () => {
     return ids;
   }, [project, page]);
 
+  // What a selected measurement's or segment's dollars are prorated against:
+  // the Takeoffs tab's own per-takeoff totals (computeTakeoffTotals), over the
+  // same default page set — identical to the tab's whenever the viewed page is
+  // the current revision. Independent of the "Current page only" filter.
+  const costTotals = useMemo(
+    () => (project ? computeTakeoffTotals(project, listPageIds) : []),
+    [project, listPageIds]
+  );
+
   // The pages backing the DEFAULT sidebar list (current revision per sheet,
   // viewed revision for the viewed sheet).
   const listPages = useMemo(
@@ -1377,6 +1389,16 @@ const CanvasViewInner: React.FC = () => {
   // THIS page's canvas and PdfCanvas only ever sees this page's measurements —
   // so a cross-page selection would silently swallow the polygon.
   const selectedIsOnThisPage = !!selectedMeasurementId && page.measurements.some(m => m.id === selectedMeasurementId);
+  // The info bar reads the measurement from the page it lives on (this page's
+  // live state when it is here — what PdfCanvas draws — else, for a sidebar
+  // pick on another sheet, that sheet) so its scale and region apply.
+  const selectionPage = selectedIsOnThisPage
+    ? page
+    : project.pages.find(p => p.measurements.some(m => m.id === selectedMeasurementId));
+  const selectionMeasurement = selectionPage?.measurements.find(m => m.id === selectedMeasurementId);
+  const selectionSummary = selectionPage && selectionMeasurement
+    ? summarizeSelection(selectionPage, selectionMeasurement, selectedSegmentIdx, project.takeoffs, costTotals)
+    : null;
 
   return (
     <div className="flex h-screen w-full bg-sunken overflow-hidden font-sans relative">
@@ -2190,6 +2212,7 @@ const CanvasViewInner: React.FC = () => {
             measurements={page.measurements}
             pageMeasurements={page.measurements}
             takeoffs={project.takeoffs}
+            takeoffCostTotals={costTotals}
             onAddMeasurement={addMeasurement}
             onUpdateMeasurement={updateMeasurement}
             onDeleteMeasurement={deleteMeasurement}
@@ -2310,6 +2333,9 @@ const CanvasViewInner: React.FC = () => {
               {currentTool === 'region' && `Click points to define a scale region. ${finishHint}`}
             </div>
           )}
+
+          {/* Selection Info Bar: the selected measurement's (or segment's) quantity and $ */}
+          <SelectionInfoBar summary={selectionSummary} multiCount={multiSelectedIds.size} />
         </div>
       </div>
 

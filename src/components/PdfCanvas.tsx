@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Rect, Shape } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Rect, Shape, Label, Tag } from 'react-konva';
 import { Html } from 'react-konva-utils';
 import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from 'lucide-react';
 import useImage from 'use-image';
@@ -7,6 +7,8 @@ import { v4 as uuidv4 } from 'uuid';
 import type Konva from 'konva';
 import { Point, Measurement, MeasurementSegment, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
 import { calculateDistance, calculatePolylineLength, measurementAreaPx, measurementRings, formatMeasurement, generateArcPoints, expandArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
+import { segmentPixelQuantity, describeQuantity, segmentLabelText, labelAnchor, placeSegmentLabel, LABEL_FONT_SIZE, LABEL_PADDING } from '../utils/segmentValue';
+import type { TakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { createWorker } from 'tesseract.js';
 import { useToast } from './Toast';
 import { useTheme } from '../context/ThemeContext';
@@ -176,6 +178,12 @@ interface PdfCanvasProps {
   measurements: Measurement[];
   pageMeasurements?: Measurement[];
   takeoffs: MeasurementTakeoff[];
+  /**
+   * computeTakeoffTotals rows for `takeoffs`: what a selected segment's dollars
+   * are prorated against (the Takeoffs tab's rule). Without a row the segment
+   * label shows its quantity only.
+   */
+  takeoffCostTotals?: TakeoffTotals[];
   onAddMeasurement: (measurement: Measurement) => void;
   onUpdateMeasurement: (id: string, measurement: Partial<Measurement>) => void;
   onDeleteMeasurement: (id: string) => void;
@@ -266,6 +274,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   measurements,
   pageMeasurements,
   takeoffs,
+  takeoffCostTotals,
   onAddMeasurement,
   onUpdateMeasurement,
   onDeleteMeasurement,
@@ -1625,6 +1634,54 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       const isMultiSelected = multiSelectedIds?.has(m.id) ?? false;
       const isDrawingTool = currentTool === 'length' || isAreaLikeTool || currentTool === 'count';
 
+      // While ONE segment of a multi-segment measurement is selected, that
+      // segment also gets its own value label (quantity · $), built from the
+      // same drag-adjusted geometry the Lines draw so it stays live during a
+      // vertex drag. It sits on the segment, or just below the total label
+      // when it would collide with it. A single-shape measurement's segment IS
+      // the measurement, so its total label already says it.
+      const selectedSeg = !isSelected || selectedSegmentIdx === null || m.type === 'count' || !m.segments?.length ? undefined
+        : selectedSegmentIdx === -1 ? { points, arcMidIndices: m.arcMidIndices }
+        : adjustedSegments[selectedSegmentIdx];
+      let segmentLabel: { text: string; x: number; y: number } | null = null;
+      if (selectedSeg && selectedSeg.points.length > 0) {
+        const segText = segmentLabelText(describeQuantity(
+          segmentPixelQuantity(m, selectedSeg, takeoff?.type, currentScale),
+          { scale: currentScale, takeoff, totals: takeoffCostTotals?.find(t => t.id === m.takeoffId), pageUnit: scaleConfig?.unit },
+        ));
+        const pos = placeSegmentLabel({
+          segmentAnchor: labelAnchor(m.type, expandArcPoints(selectedSeg.points, selectedSeg.arcMidIndices)),
+          segmentText: segText,
+          totalAnchor: { x: centerX, y: centerY },
+          totalText: text,
+          isPrimary: selectedSegmentIdx === -1,
+          stageScale,
+        });
+        segmentLabel = { text: segText, ...pos };
+      }
+      // Selection-highlight amber behind dark text, scaled like the total label.
+      const renderSegmentLabel = () => segmentLabel && (
+        <Label x={segmentLabel.x} y={segmentLabel.y} listening={false} name="segment-value-label">
+          <Tag
+            fill="#fbbf24"
+            stroke="#b45309"
+            strokeWidth={1 / stageScale}
+            cornerRadius={4 / stageScale}
+            shadowColor="black"
+            shadowBlur={6 / stageScale}
+            shadowOpacity={0.35}
+          />
+          <Text
+            text={segmentLabel.text}
+            fontSize={LABEL_FONT_SIZE / stageScale}
+            fontStyle="bold"
+            fill="#000"
+            padding={LABEL_PADDING / stageScale}
+            align="center"
+          />
+        </Label>
+      );
+
       // Per-segment click — falls through to whole-measurement select if no handler is wired.
       const handleSegmentClick = (e: any, segIdx: number) => {
         e.cancelBubble = true;
@@ -1931,6 +1988,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                   />
                 </Group>
               )}
+              {selectedSegmentIdx === -1 && renderSegmentLabel()}
             </Group>
           )}
           {(m.segments ?? []).map((seg, segIdx) => {
@@ -2056,6 +2114,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                     hitStrokeWidth={10 / stageScale}
                   />
                 ))}
+                {/* Inside the segment's subgroup so it follows a segment drag. */}
+                {selectedSegmentIdx === segIdx && renderSegmentLabel()}
               </Group>
             );
           })}
