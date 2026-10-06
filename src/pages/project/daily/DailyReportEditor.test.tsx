@@ -7,7 +7,7 @@
 // typed-in draft.
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { DailyReport } from '../../../utils/store';
 
@@ -24,7 +24,11 @@ const h = vi.hoisted(() => ({
   addDailyReportAttachment: vi.fn(),
   removeDailyReportAttachment: vi.fn(),
   appendAttachedPdfs: vi.fn(),
+  getDailyWeather: vi.fn(),
+  confirm: vi.fn(),
 }));
+
+vi.mock('../../../components/ConfirmDialog', () => ({ useConfirm: () => h.confirm }));
 
 vi.mock('../../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: null, sessions: [], mySessionId: 'me' }),
@@ -38,6 +42,7 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   addDailyReportPhoto: h.addDailyReportPhoto,
   addDailyReportAttachment: h.addDailyReportAttachment,
   removeDailyReportAttachment: h.removeDailyReportAttachment,
+  getDailyWeather: h.getDailyWeather,
   uploadProjectFile: h.uploadProjectFile,
   persistGeneratedDocument: h.persistGeneratedDocument,
   getDocumentBySource: h.getDocumentBySource,
@@ -112,7 +117,7 @@ import { ToastProvider } from '../../../components/Toast';
 import { DailyReportEditor } from './DailyReportEditor';
 
 const report = (over: Partial<DailyReport> = {}): DailyReport => ({
-  id: 'dr-1', projectId: 'p1', reportDate: '2026-08-26', jobName: 'Big Job',
+  id: 'dr-1', projectId: 'p1', reportDate: '2026-08-26', startTime: '06:00', jobName: 'Big Job',
   contractorName: 'GC Inc', weatherSummary: 'Sunny', temperature: '78F',
   weatherHourly: [{ hour: '9am', tempF: 78, condition: 'Sunny' }],
   manCounts: [{ type: 'Plasterer', count: 3 }], fieldNotes: 'All quiet', issues: '',
@@ -128,6 +133,9 @@ const SAVED = report({ jobName: 'SERVER JOB', version: 3, updatedAt: 20, photos:
 // A PDF attached to the record, and what the merge helper hands back.
 const ATTACHMENT = { id: 'at-1', fileId: 'a-1', sortOrder: 0, name: 'Spec sheet.pdf', mime: 'application/pdf', size: 2048 };
 const MERGED = new Uint8Array([9, 9, 9]);
+
+// What the weather endpoint hands back — distinguishable from the fixture's.
+const FETCHED = { hourly: [{ hour: '8 AM', tempF: 70, condition: 'Clear' }], summary: 'Clear', temperature: '70–82°F' };
 
 const onSaved = vi.fn();
 
@@ -162,6 +170,8 @@ beforeEach(() => {
   h.addDailyReportAttachment.mockResolvedValue(undefined);
   h.removeDailyReportAttachment.mockResolvedValue(undefined);
   h.appendAttachedPdfs.mockResolvedValue(MERGED);
+  h.getDailyWeather.mockResolvedValue(FETCHED);
+  h.confirm.mockResolvedValue(true);
 });
 
 describe('DailyReportEditor — document actions', () => {
@@ -372,5 +382,117 @@ describe('DailyReportEditor — PDF attachments', () => {
     const stored = h.persistGeneratedDocument.mock.calls[0][0] as Blob;
     expect(new Uint8Array(await stored.arrayBuffer())).toEqual(MERGED);
     expect(h.sendDailyReport.mock.calls[0][1]).toMatchObject({ fileId: 'file-9' });
+  });
+});
+
+// Start time (spec docs/superpowers/specs/2026-10-06-daily-report-start-time-design.md):
+// the weather covers the start time through 12 hours later; changing the
+// start on a report that has weather asks before replacing it.
+describe('DailyReportEditor — start time', () => {
+  const startField = () => screen.getByLabelText('Start time') as HTMLInputElement;
+  const setStart = (value: string) => {
+    fireEvent.change(startField(), { target: { value } });
+    fireEvent.blur(startField());
+  };
+
+  it('shows the start time next to the date and saves a change', async () => {
+    mount(report({ startTime: '07:00' }));
+    expect(await screen.findByLabelText('Date')).toHaveValue('2026-08-26');
+    expect(startField()).toHaveAttribute('type', 'time');
+    expect(startField().value).toBe('07:00');
+
+    fireEvent.change(startField(), { target: { value: '07:15' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(h.saveDailyReport).toHaveBeenCalledTimes(1));
+    expect(h.saveDailyReport.mock.calls[0][1]).toMatchObject({ startTime: '07:15' });
+  });
+
+  it('a report from before start times shows an empty field and saves none', async () => {
+    mount(report({ startTime: null }));
+    expect(startField().value).toBe('');
+    fireEvent.change(screen.getByLabelText('Job name'), { target: { value: 'Typed job' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(h.saveDailyReport).toHaveBeenCalledTimes(1));
+    expect(h.saveDailyReport.mock.calls[0][1]).toMatchObject({ startTime: null });
+  });
+
+  it('auto-fetches a new report\'s weather for its start time', async () => {
+    mount(report({ version: 1, weatherHourly: [], startTime: '07:00' }));
+    await waitFor(() => expect(h.getDailyWeather).toHaveBeenCalledWith('p1', '2026-08-26', '07:00'));
+    expect(await screen.findByText('8 AM')).toBeInTheDocument();
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it('Refresh weather fetches for the start time in the field', async () => {
+    mount(report({ startTime: '06:00' }));
+    fireEvent.change(startField(), { target: { value: '09:00' } });
+    fireEvent.click(screen.getByRole('button', { name: /Refresh weather/ }));
+    await waitFor(() => expect(h.getDailyWeather).toHaveBeenCalledWith('p1', '2026-08-26', '09:00'));
+  });
+
+  it('asks before replacing the weather when the start time changes, and refetches for it on yes', async () => {
+    mount(report({ startTime: '06:00' }));
+    setStart('08:00');
+
+    await waitFor(() => expect(h.confirm).toHaveBeenCalledTimes(1));
+    expect(h.confirm.mock.calls[0][0]).toMatchObject({
+      title: 'Update the weather?',
+      message: expect.stringContaining('Update the weather to match the new start time (8:00 AM)?'),
+    });
+    await waitFor(() => expect(h.getDailyWeather).toHaveBeenCalledWith('p1', '2026-08-26', '08:00'));
+    expect(await screen.findByText('8 AM')).toBeInTheDocument();
+    expect(screen.queryByText('9am')).toBeNull();
+    expect(screen.getByLabelText('Weather')).toHaveValue('Clear');
+    expect(screen.getByLabelText('Temperature')).toHaveValue('70–82°F');
+  });
+
+  it('keeps the stored weather on no, and does not ask again until the start time changes again', async () => {
+    h.confirm.mockResolvedValue(false);
+    mount(report({ startTime: '06:00' }));
+    setStart('08:00');
+    await waitFor(() => expect(h.confirm).toHaveBeenCalledTimes(1));
+
+    expect(h.getDailyWeather).not.toHaveBeenCalled();
+    expect(screen.getByText('9am')).toBeInTheDocument();
+    expect(screen.getByLabelText('Weather')).toHaveValue('Sunny');
+
+    fireEvent.blur(startField());
+    setStart('08:00');
+    await act(async () => {});
+    expect(h.confirm).toHaveBeenCalledTimes(1);
+
+    setStart('10:00');
+    await waitFor(() => expect(h.confirm).toHaveBeenCalledTimes(2));
+  });
+
+  it('does not ask when the start stays in the same hour, or when the report has no weather', async () => {
+    const { unmount } = mount(report({ startTime: '06:00' }));
+    setStart('06:45'); // same 6 AM–6 PM window
+    await act(async () => {});
+    expect(h.confirm).not.toHaveBeenCalled();
+    unmount();
+
+    mount(report({ startTime: '06:00', weatherHourly: [], weatherSummary: '', temperature: '' }));
+    setStart('09:00');
+    await act(async () => {});
+    expect(h.confirm).not.toHaveBeenCalled();
+    expect(h.getDailyWeather).not.toHaveBeenCalled();
+  });
+
+  it('a start time change while a new report\'s weather is still loading refetches for the new start without asking', async () => {
+    let finishFirst: (w: typeof FETCHED) => void = () => {};
+    h.getDailyWeather.mockReturnValueOnce(new Promise(r => { finishFirst = r; }));
+    mount(report({ version: 1, weatherHourly: [], startTime: '06:00' }));
+    await waitFor(() => expect(h.getDailyWeather).toHaveBeenCalledWith('p1', '2026-08-26', '06:00'));
+
+    setStart('18:00');
+    await waitFor(() => expect(h.getDailyWeather).toHaveBeenLastCalledWith('p1', '2026-08-26', '18:00'));
+    expect(await screen.findByText('8 AM')).toBeInTheDocument();
+    expect(h.confirm).not.toHaveBeenCalled();
+
+    // The superseded fetch landing late must not overwrite the newer weather.
+    await act(async () => { finishFirst({ hourly: [{ hour: '6 AM', tempF: 50, condition: 'Fog' }], summary: 'Fog', temperature: '50°F' }); });
+    expect(screen.queryByText('Fog')).toBeNull();
+    expect(screen.getByLabelText('Weather')).toHaveValue('Clear');
   });
 });

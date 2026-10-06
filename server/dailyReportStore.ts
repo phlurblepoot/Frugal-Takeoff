@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   type PdfAttachmentTable, listPdfAttachments, addPdfAttachment, updatePdfAttachment, removePdfAttachment,
 } from './pdfAttachments';
+import { DEFAULT_START_TIME, isStartTime } from './weather';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -15,7 +16,7 @@ export class DateTakenError extends Error {
 export interface ManCountLine { type: string; count: number; }
 export interface DailyWeatherHour { hour: string; tempF: number | null; condition: string; }
 export interface DailyReportInput {
-  reportDate?: string; jobName?: string; contractorName?: string;
+  reportDate?: string; startTime?: string | null; jobName?: string; contractorName?: string;
   weatherSummary?: string; temperature?: string; weatherHourly?: DailyWeatherHour[];
   manCounts?: ManCountLine[]; fieldNotes?: string; issues?: string;
 }
@@ -33,6 +34,26 @@ function requireProject(db: Database.Database, projectId: string): void {
 function takenBy(db: Database.Database, projectId: string, reportDate: string, excludeId?: string): string | undefined {
   const row = db.prepare('SELECT id FROM daily_reports WHERE projectId = ? AND reportDate = ?').get(projectId, reportDate) as any;
   return row && row.id !== excludeId ? row.id : undefined;
+}
+
+// startTime is 'HH:MM' (24-hour) or null — null on reports made before
+// migration 44, and when someone clears it.
+function checkStartTime(v: unknown): string | null {
+  if (v === null) return null;
+  if (!isStartTime(v)) throw new ValidationError('startTime is malformed (HH:MM)');
+  return v;
+}
+
+// A new report's start time when none is given: the previous report's — the
+// latest one dated before it that has a start time; failing that (a day filled
+// in before the first report), the latest-dated one that has one; else 6 AM,
+// which is the original fixed weather window. Kept to this one function so it
+// can narrow to a crew's own reports later.
+export function previousStartTime(db: Database.Database, projectId: string, reportDate: string): string {
+  const row = db.prepare(`SELECT startTime FROM daily_reports
+      WHERE projectId = ? AND startTime IS NOT NULL
+      ORDER BY reportDate < ? DESC, reportDate DESC LIMIT 1`).get(projectId, reportDate) as any;
+  return row?.startTime ?? DEFAULT_START_TIME;
 }
 
 function photoCount(db: Database.Database, dailyReportId: string): number {
@@ -59,15 +80,18 @@ export function listDailyReports(db: Database.Database, projectId: string): any[
 export function createDailyReport(db: Database.Database, projectId: string, input: DailyReportInput, createdBy?: string): { id: string } {
   requireProject(db, projectId);
   if (!input.reportDate || !DATE_RE.test(input.reportDate)) throw new ValidationError('reportDate is required (YYYY-MM-DD)');
+  const startTime = input.startTime == null
+    ? previousStartTime(db, projectId, input.reportDate)
+    : checkStartTime(input.startTime);
   const existing = takenBy(db, projectId, input.reportDate);
   if (existing) throw new DateTakenError(existing);
   const id = uuidv4();
   const now = Date.now();
   db.prepare(`INSERT INTO daily_reports
-      (id, projectId, reportDate, jobName, contractorName, weatherSummary, temperature,
+      (id, projectId, reportDate, startTime, jobName, contractorName, weatherSummary, temperature,
        weatherHourly, manCounts, fieldNotes, issues, createdBy, createdAt, updatedAt, version)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`)
-    .run(id, projectId, input.reportDate, input.jobName ?? '', input.contractorName ?? '',
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`)
+    .run(id, projectId, input.reportDate, startTime, input.jobName ?? '', input.contractorName ?? '',
          input.weatherSummary ?? '', input.temperature ?? '',
          JSON.stringify(input.weatherHourly ?? []), JSON.stringify(input.manCounts ?? []),
          input.fieldNotes ?? '', input.issues ?? '', createdBy ?? null, now, now);
@@ -84,13 +108,16 @@ export function saveDailyReport(db: Database.Database, id: string, input: DailyR
     const existing = takenBy(db, row.projectId, input.reportDate, id);
     if (existing) throw new DateTakenError(existing);
   }
+  // undefined keeps the stored start time; null clears it.
+  const startTime = input.startTime === undefined ? row.startTime : checkStartTime(input.startTime);
   const newVersion = row.version + 1;
   db.prepare(`UPDATE daily_reports SET
-      reportDate = ?, jobName = ?, contractorName = ?, weatherSummary = ?, temperature = ?,
+      reportDate = ?, startTime = ?, jobName = ?, contractorName = ?, weatherSummary = ?, temperature = ?,
       weatherHourly = ?, manCounts = ?, fieldNotes = ?, issues = ?, version = ?, updatedAt = ?
       WHERE id = ?`)
     .run(
       input.reportDate ?? row.reportDate,
+      startTime,
       input.jobName ?? row.jobName,
       input.contractorName ?? row.contractorName,
       input.weatherSummary ?? row.weatherSummary,

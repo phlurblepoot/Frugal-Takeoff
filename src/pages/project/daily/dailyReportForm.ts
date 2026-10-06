@@ -17,3 +17,23 @@ export const formatReportDate = (d: string): string => {
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
     .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
+
+// A report's start time ('HH:MM', 24-hour) as the app shows it: "7:00 AM".
+// Blank for none (a report made before start times existed); a malformed value
+// falls back to the raw string, as formatReportDate does.
+export const formatStartTime = (t: string | null | undefined): string => {
+  if (!t) return '';
+  const m = t.match(/^(\d{2}):(\d{2})$/);
+  if (!m) return t;
+  const h = Number(m[1]);
+  return `${h % 12 === 0 ? 12 : h % 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`;
+};
+
+// The hour the report's weather starts at: the start time's hour (minutes
+// dropped, as the server does), or 6 — the original 6 AM–6 PM window — when
+// there is no start time. Two start times in the same hour fetch the same
+// weather.
+export const weatherStartHour = (t: string | null | undefined): number => {
+  const m = (t ?? '').match(/^(\d{2}):\d{2}$/);
+  return m ? Number(m[1]) : 6;
+};

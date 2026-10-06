@@ -318,6 +318,15 @@ describe('pj-daily-latest', () => {
     expect(screen.getByText('3 on site')).toBeInTheDocument();
   });
 
+  it('says when the newest report started', async () => {
+    getDailyReports.mockResolvedValue([
+      { id: 'd1', projectId: 'p1', reportDate: '2026-08-05', jobName: 'j', contractorName: 'c', startTime: '07:30', weatherSummary: '', temperature: '', manCounts: [{ type: 'Framers', count: 3 }], createdBy: null, createdAt: 1, updatedAt: 1, version: 1, photoCount: 0 },
+    ]);
+    getDailyReport.mockResolvedValue({ id: 'd1', fieldNotes: '' });
+    mount('pj-daily-latest', 1);
+    expect(await screen.findByText('3 on site · started 7:30 AM')).toBeInTheDocument();
+  });
+
   it('shows the empty state when there are no daily reports', async () => {
     getDailyReports.mockResolvedValue([]);
     mount('pj-daily-latest', 1);

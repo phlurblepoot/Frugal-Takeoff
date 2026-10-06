@@ -1,5 +1,5 @@
 // server/routes.dailyReports.test.ts
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import fsSync from 'fs';
@@ -216,5 +216,76 @@ describe('GET /api/projects/:id/daily-weather', () => {
     const malformed = await request(app).get('/api/projects/p1/daily-weather').query({ date: 'not-a-date' });
     expect(malformed.status).toBe(400);
     expect(malformed.body).toEqual({ error: 'bad_date' });
+  });
+
+  it('returns 400 bad_start for a malformed start time', async () => {
+    for (const start of ['7:00', '24:00', '12:60', 'noon', '']) {
+      const res = await request(app).get('/api/projects/p1/daily-weather').query({ date: '2026-08-20', start });
+      expect(res.status, start).toBe(400);
+      expect(res.body, start).toEqual({ error: 'bad_start' });
+    }
+  });
+
+  describe('with an address (Nominatim and Open-Meteo mocked)', () => {
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    // Geocodes are cached per address, so each test uses its own.
+    const stubUpstream = () => {
+      db.prepare('UPDATE projects SET address = ? WHERE id = ?').run(`1 Main St ${Math.random()}`, 'p1');
+      const time: string[] = []; const temperature_2m: number[] = []; const weather_code: number[] = [];
+      for (const date of ['2026-08-20', '2026-08-21']) {
+        for (let h = 0; h < 24; h++) { time.push(`${date}T${String(h).padStart(2, '0')}:00`); temperature_2m.push(60 + h); weather_code.push(0); }
+      }
+      const fetchMock = vi.fn(async (url: string) => url.includes('nominatim')
+        ? { ok: true, json: async () => [{ lat: '26.05', lon: '-80.14' }] }
+        : { ok: true, json: async () => ({ hourly: { time, temperature_2m, weather_code } }) });
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    };
+
+    it('without a start, covers 6 AM to 6 PM of the date', async () => {
+      const fetchMock = stubUpstream();
+      const res = await request(app).get('/api/projects/p1/daily-weather').query({ date: '2026-08-20' });
+      expect(res.status).toBe(200);
+      expect(res.body.hourly).toHaveLength(13);
+      expect(res.body.hourly[0].hour).toBe('6 AM');
+      expect(res.body.hourly[12].hour).toBe('6 PM');
+      expect(fetchMock.mock.calls[1][0]).toContain('start_date=2026-08-20&end_date=2026-08-20');
+    });
+
+    it('covers the given start through 12 hours later, into the next day when it runs past midnight', async () => {
+      const fetchMock = stubUpstream();
+      const res = await request(app).get('/api/projects/p1/daily-weather').query({ date: '2026-08-20', start: '19:00' });
+      expect(res.status).toBe(200);
+      expect(res.body.hourly).toHaveLength(13);
+      expect(res.body.hourly[0].hour).toBe('7 PM');
+      expect(res.body.hourly[12].hour).toBe('7 AM +1');
+      expect(res.body.summary).toBe('Clear');
+      expect(fetchMock.mock.calls[1][0]).toContain('start_date=2026-08-20&end_date=2026-08-21');
+    });
+  });
+});
+
+describe('daily report start time', () => {
+  it('POST without a start time copies the previous report\'s (6 AM for the first); GET and the list carry it', async () => {
+    const first = await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' });
+    expect((await request(app).get(`/api/daily-reports/${first.body.id}`)).body.startTime).toBe('06:00');
+
+    await request(app).put(`/api/daily-reports/${first.body.id}`).send({ version: 1, startTime: '07:00' }).expect(200);
+    const second = await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-21' });
+    expect((await request(app).get(`/api/daily-reports/${second.body.id}`)).body.startTime).toBe('07:00');
+
+    const list = await request(app).get('/api/projects/p1/daily-reports');
+    expect(list.body.map((r: any) => r.startTime)).toEqual(['07:00', '07:00']);
+  });
+
+  it('POST and PUT refuse a malformed start time with 400', async () => {
+    const bad = await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20', startTime: '7am' });
+    expect(bad.status).toBe(400);
+    const created = await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20', startTime: '06:30' });
+    expect(created.status).toBe(200);
+    const put = await request(app).put(`/api/daily-reports/${created.body.id}`).send({ version: 1, startTime: '25:00' });
+    expect(put.status).toBe(400);
+    expect((await request(app).get(`/api/daily-reports/${created.body.id}`)).body.startTime).toBe('06:30');
   });
 });

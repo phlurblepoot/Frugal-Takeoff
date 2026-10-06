@@ -1241,3 +1241,29 @@ describe('migration 43: payment-attachments', () => {
     db.close();
   });
 });
+
+describe('migration 44: daily-report-start-time', () => {
+  it('adds startTime (nullable) to daily_reports, leaves existing reports and their weather alone, and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 43));
+    expect(columnNames(db, 'daily_reports')).not.toContain('startTime');
+
+    const hourly = JSON.stringify([{ hour: '6 AM', tempF: 71, condition: 'Clear' }]);
+    db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, weatherSummary, temperature, weatherHourly, createdAt, updatedAt)
+                VALUES ('d1', 'p1', '2026-08-26', 'Clear', '71–80°F', ?, 1, 1)`).run(hourly);
+
+    runMigrations(db, dir, migrations);
+
+    expect(columnNames(db, 'daily_reports')).toContain('startTime');
+    expect(db.prepare('SELECT startTime, weatherSummary, temperature, weatherHourly, version FROM daily_reports WHERE id = ?').get('d1'))
+      .toEqual({ startTime: null, weatherSummary: 'Clear', temperature: '71–80°F', weatherHourly: hourly, version: 1 });
+
+    // Idempotent: replaying up() must not throw (duplicate column) or reset data.
+    db.prepare('UPDATE daily_reports SET startTime = ? WHERE id = ?').run('07:00', 'd1');
+    const m44 = migrations.find(m => m.version === 44)!;
+    expect(() => m44.up({ db, dataDir: dir })).not.toThrow();
+    expect(db.prepare('SELECT startTime FROM daily_reports WHERE id = ?').get('d1')).toEqual({ startTime: '07:00' });
+    db.close();
+  });
+});

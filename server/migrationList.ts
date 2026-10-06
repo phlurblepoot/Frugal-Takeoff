@@ -1895,4 +1895,21 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 44,
+    name: 'daily-report-start-time',
+    // ADDITIVE, IDEMPOTENT: one nullable column, same pattern as migrations
+    // 24 and 33. daily_reports.startTime is 'HH:MM' (24-hour); the report's
+    // weather covers that hour through 12 hours later (spec
+    // docs/superpowers/specs/2026-10-06-daily-report-start-time-design.md).
+    // Existing reports keep NULL — their weather was fetched for the old fixed
+    // 6 AM–6 PM window, which is also what a NULL start time fetches, and their
+    // stored weather is untouched.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(daily_reports)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('startTime')) {
+        db.exec(`ALTER TABLE daily_reports ADD COLUMN startTime TEXT;`);
+      }
+    },
+  },
 ];

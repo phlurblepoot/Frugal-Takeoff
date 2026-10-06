@@ -25,7 +25,7 @@ import { useDocumentViewer } from '../../components/documents/useDocumentViewer'
 // Owned by dailyReportForm.ts (a leaf module) so DailyReportEditor/dailyReportPdf
 // can import them without a cycle back through this file. Re-exported here for
 // existing callers of this module (including this file's own test).
-import { manCountTotal, formatReportDate } from './daily/dailyReportForm';
+import { manCountTotal, formatReportDate, formatStartTime } from './daily/dailyReportForm';
 export { manCountTotal, formatReportDate };
 
 export const ProjectDailyReports: React.FC = () => {
@@ -171,11 +171,12 @@ export const ProjectDailyReports: React.FC = () => {
       ) : (
         <div key={view} className="anim-tab-in">
         <Table>
-          <THead><TR><TH>Date</TH><TH>Crew</TH><TH>Weather</TH><TH>Photos</TH><TH></TH></TR></THead>
+          <THead><TR><TH>Date</TH><TH>Start</TH><TH>Crew</TH><TH>Weather</TH><TH>Photos</TH><TH></TH></TR></THead>
           <TBody>
             {reports.map(r => (
               <TR key={r.id} interactive onClick={() => openReport(r.id)}>
                 <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{formatReportDate(r.reportDate)}<EditingChip type="dailyReport" id={r.id} />{replyFlags.has(r.id) && <ReplyFlagChip data-testid={`daily-report-reply-flag-${r.id}`} />}</span></TD>
+                <TD className="whitespace-nowrap text-ink-soft">{formatStartTime(r.startTime) || '—'}</TD>
                 <TD className="text-ink-soft">{manCountTotal(r.manCounts) > 0 ? `${manCountTotal(r.manCounts)} men` : '—'}</TD>
                 <TD className="max-w-[16rem] truncate text-ink-soft">{[r.weatherSummary, r.temperature].filter(Boolean).join(' ') || '—'}</TD>
                 <TD className="text-ink-soft">{r.photoCount > 0 ? <span className="inline-flex items-center gap-1"><ImageIcon size={13} />{r.photoCount}</span> : '—'}</TD>

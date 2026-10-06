@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeManCounts, manCountLabel, weatherLine } from './dailyReportForm';
+import { normalizeManCounts, manCountLabel, weatherLine, formatStartTime, weatherStartHour } from './dailyReportForm';
 
 describe('normalizeManCounts', () => {
   it('drops empty-type lines and clamps counts to non-negative integers', () => {
@@ -22,5 +22,33 @@ describe('weatherLine', () => {
     expect(weatherLine('Partly cloudy', '58–74°F')).toBe('Partly cloudy · 58–74°F');
     expect(weatherLine('', '58–74°F')).toBe('58–74°F');
     expect(weatherLine('', '')).toBe('');
+  });
+});
+describe('formatStartTime', () => {
+  it('shows HH:MM as a 12-hour clock time', () => {
+    expect(formatStartTime('07:00')).toBe('7:00 AM');
+    expect(formatStartTime('06:30')).toBe('6:30 AM');
+    expect(formatStartTime('13:45')).toBe('1:45 PM');
+    expect(formatStartTime('12:00')).toBe('12:00 PM');
+    expect(formatStartTime('00:15')).toBe('12:15 AM');
+    expect(formatStartTime('23:59')).toBe('11:59 PM');
+  });
+  it('is blank for no start time and the raw string when malformed', () => {
+    expect(formatStartTime(null)).toBe('');
+    expect(formatStartTime(undefined)).toBe('');
+    expect(formatStartTime('')).toBe('');
+    expect(formatStartTime('7am')).toBe('7am');
+  });
+});
+describe('weatherStartHour', () => {
+  it('is the start time\'s hour, minutes dropped', () => {
+    expect(weatherStartHour('07:00')).toBe(7);
+    expect(weatherStartHour('07:59')).toBe(7);
+    expect(weatherStartHour('18:30')).toBe(18);
+    expect(weatherStartHour('00:00')).toBe(0);
+  });
+  it('is 6 (the original 6 AM–6 PM window) without a start time', () => {
+    expect(weatherStartHour(null)).toBe(6);
+    expect(weatherStartHour('')).toBe(6);
   });
 });

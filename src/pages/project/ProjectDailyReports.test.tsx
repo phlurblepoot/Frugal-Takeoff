@@ -118,6 +118,15 @@ describe('ProjectDailyReports — report status on rows', () => {
     expect(screen.getAllByRole('button', { name: 'Open PDF' })).toHaveLength(1);
   });
 
+  it('shows each report\'s start time, and a dash for one made before start times', async () => {
+    getDailyReports.mockResolvedValue([listRow({ startTime: '07:00' }), listRow({ id: 'dr2', reportDate: '2026-08-27', startTime: null })]);
+    mount();
+    expect(await screen.findByRole('columnheader', { name: 'Start' })).toBeInTheDocument();
+    const [, row1, row2] = screen.getAllByRole('row');
+    expect(row1).toHaveTextContent('7:00 AM');
+    expect(row2.querySelectorAll('td')[1]).toHaveTextContent('—');
+  });
+
   it('marks the chip out of date when the report changed after the PDF was made', async () => {
     getDocumentsBySource.mockResolvedValue({ dr1: { ...FILE, createdAt: 5 }, dr2: null });
     mount();

@@ -41,7 +41,7 @@ import {
   ValidationError as DailyValidationError, ConflictError as DailyConflictError,
   NotFoundError as DailyNotFoundError, DateTakenError as DailyDateTakenError,
 } from './dailyReportStore';
-import { geocodeAddress, fetchDailyWeather } from './weather';
+import { geocodeAddress, fetchDailyWeather, DEFAULT_START_TIME, isStartTime } from './weather';
 import {
   getPunchItem, listPunchItems, createPunchItem, savePunchItem,
   setPunchDone, deletePunchItem, addPunchPhoto, removePunchPhoto,
@@ -1090,13 +1090,16 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.get('/api/projects/:id/daily-weather', authenticateToken, async (req, res) => {
     const date = String(req.query.date ?? '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'bad_date' });
+    // The report's start time (HH:MM); the weather covers it through 12 hours later.
+    const start = req.query.start === undefined ? DEFAULT_START_TIME : req.query.start;
+    if (!isStartTime(start)) return res.status(400).json({ error: 'bad_start' });
     const row = db.prepare('SELECT address FROM projects WHERE id = ?').get(req.params.id) as any;
     if (!row) return res.status(404).json({ error: 'Project not found' });
     if (!row.address) return res.status(400).json({ error: 'no_address' });
     try {
       const geo = await geocodeAddress(row.address);
       if (!geo) return res.status(502).json({ error: 'weather_unavailable' });
-      res.json(await fetchDailyWeather(geo.lat, geo.lon, date));
+      res.json(await fetchDailyWeather(geo.lat, geo.lon, date, start));
     } catch (e) {
       console.error('Daily weather fetch failed:', e);
       res.status(502).json({ error: 'weather_unavailable' });

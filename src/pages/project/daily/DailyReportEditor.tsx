@@ -1,5 +1,5 @@
 // src/pages/project/daily/DailyReportEditor.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CloudSun, Plus, Trash2 } from 'lucide-react';
 import {
   DailyReport, ManCountLine, DateTakenError,
@@ -8,6 +8,7 @@ import {
   addDailyReportAttachment, updateDailyReportAttachment, removeDailyReportAttachment,
 } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
+import { useConfirm } from '../../../components/ConfirmDialog';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
@@ -16,7 +17,7 @@ import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
-import { formatReportDate, manCountTotal, normalizeManCounts } from './dailyReportForm';
+import { formatReportDate, formatStartTime, manCountTotal, normalizeManCounts, weatherStartHour } from './dailyReportForm';
 import { buildDailyReportPdf, dailyReportFileName } from './dailyReportPdf';
 import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
@@ -33,7 +34,10 @@ export const DailyReportEditor: React.FC<{
   onSaved: (opts?: { keepMounted?: boolean }) => void;
 }> = ({ report, projectId, projectName, onClose, onSaved }) => {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [reportDate, setReportDate] = useState(report.reportDate);
+  // '' = no start time (a report made before they existed): weather 6 AM–6 PM.
+  const [startTime, setStartTime] = useState(report.startTime ?? '');
   const [jobName, setJobName] = useState(report.jobName ?? '');
   const [contractorName, setContractorName] = useState(report.contractorName ?? '');
   const [weatherSummary, setWeatherSummary] = useState(report.weatherSummary ?? '');
@@ -49,6 +53,7 @@ export const DailyReportEditor: React.FC<{
 
   const isDirty = () =>
     reportDate !== report.reportDate ||
+    (startTime || null) !== (report.startTime ?? null) ||
     jobName.trim() !== (report.jobName ?? '') ||
     contractorName.trim() !== (report.contractorName ?? '') ||
     weatherSummary !== (report.weatherSummary ?? '') ||
@@ -73,23 +78,62 @@ export const DailyReportEditor: React.FC<{
   // the 'pm' role) rather than widen the union for one caller.
   const emailDefaults = useItemEmailDefaults('rfi', projectId);
 
-  const fetchWeather = async (opts?: { silent?: boolean }) => {
+  // The start time the weather on screen was fetched for (assumed to be the
+  // saved one on open) — or, while a fetch is in flight, the one it is
+  // fetching for — and the start time last committed in the field: a change
+  // asks about the weather once, and only when its window moves.
+  const weatherStartRef = useRef(report.startTime ?? '');
+  const fetchingStartRef = useRef('');
+  const committedStartRef = useRef(report.startTime ?? '');
+  // Only the latest fetch lands: a start-time change can supersede one still
+  // in flight (the new-report auto-fetch).
+  const weatherReqRef = useRef(0);
+
+  const fetchWeather = async (opts?: { silent?: boolean; start?: string }) => {
+    const start = opts?.start ?? startTime;
+    const req = ++weatherReqRef.current;
+    fetchingStartRef.current = start;
     setFetchingWeather(true);
     setWeatherNote(null);
     try {
-      const w = await getDailyWeather(projectId, reportDate);
+      const w = await getDailyWeather(projectId, reportDate, start || null);
+      if (req !== weatherReqRef.current) return;
       setWeatherHourly(w.hourly);
       setWeatherSummary(w.summary);
       setTemperature(w.temperature);
+      weatherStartRef.current = start;
     } catch (e) {
+      if (req !== weatherReqRef.current) return;
       if (e instanceof Error && e.message === 'no_address') {
         setWeatherNote('Add a project address to auto-fill weather.');
       } else if (!opts?.silent) {
         toast('Weather unavailable — enter it manually', { type: 'warning' });
       }
     } finally {
-      setFetchingWeather(false);
+      if (req === weatherReqRef.current) setFetchingWeather(false);
     }
+  };
+
+  // Runs when the start time field is left (a time input fires change on
+  // every keystroke, so asking on change would interrupt the typing). Weather
+  // already on the report is only replaced if the user says so; with none yet
+  // there is nothing to ask about, except a fetch still in flight, which is
+  // simply redone for the new start.
+  const commitStartTime = async () => {
+    const next = startTime;
+    if (next === committedStartRef.current) return;
+    committedStartRef.current = next;
+    const current = fetchingWeather ? fetchingStartRef.current : weatherStartRef.current;
+    if (weatherStartHour(next) === weatherStartHour(current)) return;
+    if (fetchingWeather) { void fetchWeather({ silent: true, start: next }); return; }
+    if (weatherHourly.length === 0) return;
+    const yes = await confirm({
+      title: 'Update the weather?',
+      message: `Update the weather to match the new start time${next ? ` (${formatStartTime(next)})` : ''}? Keep current leaves the weather on this report as it is.`,
+      confirmLabel: 'Update weather',
+      cancelLabel: 'Keep current',
+    });
+    if (yes) await fetchWeather({ start: next });
   };
 
   // Auto-fetch once for a brand-new report only — never clobber saved data
@@ -170,6 +214,7 @@ export const DailyReportEditor: React.FC<{
       await saveDailyReport(report.id, {
         version: collab.keepMineVersion ?? report.version,
         reportDate,
+        startTime: startTime || null,
         jobName: jobName.trim(),
         contractorName: contractorName.trim(),
         weatherSummary,
@@ -243,11 +288,14 @@ export const DailyReportEditor: React.FC<{
     >
       <EditPresenceBanner state={collab} />
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
         <Field label="Job name" htmlFor="dr-job"><Input id="dr-job" value={jobName} onChange={e => setJobName(e.target.value)} /></Field>
         <Field label="Contractor" htmlFor="dr-contractor"><Input id="dr-contractor" value={contractorName} onChange={e => setContractorName(e.target.value)} /></Field>
         <Field label="Date" htmlFor="dr-date" error={dateError ?? undefined}>
           <Input id="dr-date" type="date" value={reportDate} onChange={e => setReportDate(e.target.value)} />
+        </Field>
+        <Field label="Start time" htmlFor="dr-start">
+          <Input id="dr-start" type="time" value={startTime} onChange={e => setStartTime(e.target.value)} onBlur={() => { void commitStartTime(); }} />
         </Field>
       </div>
 

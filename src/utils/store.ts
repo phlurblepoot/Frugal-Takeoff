@@ -1922,6 +1922,9 @@ export interface ManCountLine { type: string; count: number; }
 export interface DailyWeatherHour { hour: string; tempF: number | null; condition: string; }
 export interface DailyReport {
   id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
+  // 'HH:MM' (24-hour); the weather covers it through 12 hours later. Null on
+  // reports made before it existed (migration 44) — their weather is 6 AM–6 PM.
+  startTime: string | null;
   weatherSummary: string; temperature: string; weatherHourly: DailyWeatherHour[];
   manCounts: ManCountLine[]; fieldNotes: string; issues: string;
   createdBy: string | null; createdAt: number; updatedAt: number; version: number;
@@ -1929,7 +1932,7 @@ export interface DailyReport {
   attachments: PdfAttachment[]; // appended to the daily report PDF after the photos (migration 42)
 }
 export interface DailyReportListItem {
-  id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
+  id: string; projectId: string; reportDate: string; jobName: string; contractorName: string; startTime: string | null;
   weatherSummary: string; temperature: string; manCounts: ManCountLine[];
   createdBy: string | null; createdAt: number; updatedAt: number; version: number; photoCount: number;
 }
@@ -1989,10 +1992,13 @@ export const removeDailyReportAttachment = async (id: string, fileId: string): P
 export const sendDailyReport = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res); return res.json();
 };
-export const getDailyWeather = async (projectId: string, date: string): Promise<{ hourly: DailyWeatherHour[]; summary: string; temperature: string }> => {
+// `startTime` (HH:MM) starts the 12-hour window; without one the server uses
+// 6 AM, the window reports had before start times existed.
+export const getDailyWeather = async (projectId: string, date: string, startTime?: string | null): Promise<{ hourly: DailyWeatherHour[]; summary: string; temperature: string }> => {
   // No retries: a failing upstream (Open-Meteo/Nominatim) should fail fast
   // rather than the user waiting through ~4 retried upstream calls.
-  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-weather?date=${encodeURIComponent(date)}`, { headers: { ...getAuthHeaders() } }, { retries: 0 });
+  const start = startTime ? `&start=${encodeURIComponent(startTime)}` : '';
+  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-weather?date=${encodeURIComponent(date)}${start}`, { headers: { ...getAuthHeaders() } }, { retries: 0 });
   if (res.status === 400) {
     const b = await res.json().catch(() => ({} as any));
     if (b?.error === 'no_address') throw new Error('no_address');

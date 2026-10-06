@@ -28,6 +28,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.4.0',
+    date: 'October 6, 2026',
+    changes: [
+      'Daily reports now have a start time, next to the date (and on the PDF under the date). The weather covers the start time through 12 hours later — a 7:00 AM start shows 7 AM to 7 PM. A start after noon runs past midnight, and the next morning\'s hours are marked "+1", e.g. "2 AM +1".',
+      'A new daily report starts at the same time as the report before it, so you rarely need to change it; the first report on a project starts at 6:00 AM, which gives the same 6 AM–6 PM weather as before.',
+      'Changing the start time on a report that already has weather asks "Update the weather to match the new start time?" — Update weather fetches it again for the new hours, Keep current leaves it as it is. Fetch weather and Refresh weather always use the start time in the form.',
+      'The start time also shows in the Daily Reports list and on the project dashboard\'s Latest daily report card. Reports made before this update have no start time, and their weather (6 AM–6 PM) is unchanged.',
+      'Note for self-hosters: this update adds one new column to the daily reports table (migration 44, additive — existing data untouched).',
+    ],
+  },
+  {
     version: '4.3.0',
     date: 'October 6, 2026',
     changes: [

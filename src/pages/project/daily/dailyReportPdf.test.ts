@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dailyReportHeading, dailyReportFileName } from './dailyReportPdf';
+import { dailyReportHeading, dailyReportFileName, dailyReportFieldRows } from './dailyReportPdf';
 
 describe('dailyReportHeading', () => {
   it('joins title and date', () => {
@@ -21,5 +21,18 @@ describe('dailyReportFileName', () => {
   });
   it('strips characters illegal in filenames', () => {
     expect(dailyReportFileName({ reportDate: '2026-08-26' }, 'Big/Bear: "Plaster" <Co>')).toBe('DailyReport-BigBear-Plaster-Co-2026-08-26.pdf');
+  });
+});
+describe('dailyReportFieldRows', () => {
+  const base = { jobName: 'Dania Beach', contractorName: 'GC Inc', reportDate: '2026-08-26' };
+  it('prints the start time under the date', () => {
+    expect(dailyReportFieldRows({ ...base, startTime: '07:00' })).toEqual([
+      ['Job name:', 'Dania Beach'], ['Contractor:', 'GC Inc'], ['Date:', 'Aug 26, 2026'], ['Start time:', '7:00 AM'],
+    ]);
+  });
+  it('leaves the row out for a report without a start time, as it printed before', () => {
+    expect(dailyReportFieldRows({ ...base, startTime: null })).toEqual([
+      ['Job name:', 'Dania Beach'], ['Contractor:', 'GC Inc'], ['Date:', 'Aug 26, 2026'],
+    ]);
   });
 });

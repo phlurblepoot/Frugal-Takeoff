@@ -6,7 +6,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { putBuffer } from './files';
 import {
-  getDailyReport, listDailyReports, createDailyReport, saveDailyReport, deleteDailyReport,
+  getDailyReport, listDailyReports, createDailyReport, saveDailyReport, deleteDailyReport, previousStartTime,
   addPhoto, removePhoto, addAttachment, updateAttachment, removeAttachment,
   ValidationError, ConflictError, NotFoundError, DateTakenError,
 } from './dailyReportStore';
@@ -52,6 +52,72 @@ describe('createDailyReport', () => {
   });
   it('throws NotFoundError for a missing project', () => {
     expect(() => createDailyReport(db, 'nope', { reportDate: '2026-08-26' })).toThrow(NotFoundError);
+  });
+});
+
+// Start time (spec docs/superpowers/specs/2026-10-06-daily-report-start-time-design.md):
+// 'HH:MM' or null; a new report without one copies the previous report's.
+describe('startTime', () => {
+  // A report made before migration 44, which keeps NULL.
+  const legacy = (projectId: string, reportDate: string) => {
+    const { id } = createDailyReport(db, projectId, { reportDate });
+    db.prepare('UPDATE daily_reports SET startTime = NULL WHERE id = ?').run(id);
+    return id;
+  };
+
+  it('round-trips through create, get, list and save; an omitted startTime keeps it, null clears it', () => {
+    const { id } = createDailyReport(db, 'p1', { reportDate: '2026-08-26', startTime: '07:30' });
+    expect(getDailyReport(db, id).startTime).toBe('07:30');
+    expect(listDailyReports(db, 'p1')[0].startTime).toBe('07:30');
+
+    saveDailyReport(db, id, { version: 1, startTime: '05:45' });
+    expect(getDailyReport(db, id).startTime).toBe('05:45');
+    saveDailyReport(db, id, { version: 2, fieldNotes: 'x' });
+    expect(getDailyReport(db, id).startTime).toBe('05:45');
+    saveDailyReport(db, id, { version: 3, startTime: null });
+    expect(getDailyReport(db, id).startTime).toBeNull();
+  });
+
+  it('rejects anything but HH:MM from 00:00 to 23:59, on create and on save', () => {
+    const { id } = createDailyReport(db, 'p1', { reportDate: '2026-08-26' });
+    for (const bad of ['7:00', '24:00', '12:60', '07:00:00', 'noon', '', 700]) {
+      expect(() => createDailyReport(db, 'p1', { reportDate: '2026-08-27', startTime: bad as any }), String(bad)).toThrow(ValidationError);
+      expect(() => saveDailyReport(db, id, { version: 1, startTime: bad as any }), String(bad)).toThrow(ValidationError);
+    }
+    expect(getDailyReport(db, id).version).toBe(1); // nothing was written
+    expect(listDailyReports(db, 'p1')).toHaveLength(1);
+    createDailyReport(db, 'p1', { reportDate: '2026-08-27', startTime: '23:59' });
+    createDailyReport(db, 'p1', { reportDate: '2026-08-28', startTime: '00:00' });
+  });
+
+  it('defaults to 6 AM with no earlier report, or only ones without a start time', () => {
+    const first = createDailyReport(db, 'p1', { reportDate: '2026-08-26' });
+    expect(getDailyReport(db, first.id).startTime).toBe('06:00');
+    legacy('p2', '2026-08-20');
+    const afterLegacy = createDailyReport(db, 'p2', { reportDate: '2026-08-21' });
+    expect(getDailyReport(db, afterLegacy.id).startTime).toBe('06:00');
+  });
+
+  it('copies the latest earlier report\'s start time, skipping ones without one', () => {
+    createDailyReport(db, 'p1', { reportDate: '2026-08-20', startTime: '05:00' });
+    createDailyReport(db, 'p1', { reportDate: '2026-08-22', startTime: '07:00' });
+    legacy('p1', '2026-08-23');
+    createDailyReport(db, 'p1', { reportDate: '2026-08-25', startTime: '08:00' }); // later: not "previous"
+    createDailyReport(db, 'p2', { reportDate: '2026-08-23', startTime: '09:00' }); // other project
+    const { id } = createDailyReport(db, 'p1', { reportDate: '2026-08-24' });
+    expect(getDailyReport(db, id).startTime).toBe('07:00');
+    // An explicit start time wins over the copy.
+    const own = createDailyReport(db, 'p1', { reportDate: '2026-08-21', startTime: '06:30' });
+    expect(getDailyReport(db, own.id).startTime).toBe('06:30');
+  });
+
+  it('a day filled in before the first report copies the latest-dated report that has one', () => {
+    createDailyReport(db, 'p1', { reportDate: '2026-08-20', startTime: '07:00' });
+    createDailyReport(db, 'p1', { reportDate: '2026-08-25', startTime: '08:00' });
+    legacy('p1', '2026-08-27');
+    expect(previousStartTime(db, 'p1', '2026-08-01')).toBe('08:00');
+    expect(previousStartTime(db, 'p1', '2026-08-22')).toBe('07:00');
+    expect(previousStartTime(db, 'p2', '2026-08-22')).toBe('06:00');
   });
 });
 

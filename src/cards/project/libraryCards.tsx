@@ -33,7 +33,7 @@ import type { CustomerRoleEmails } from '../../types';
 import type { ProjectThreadRow } from '../../pages/mail/types';
 import { mailApi } from '../../utils/mailApi';
 import { formatMoney } from '../../utils/money';
-import { manCountTotal, weatherLine, formatReportDate } from '../../pages/project/daily/dailyReportForm';
+import { manCountTotal, weatherLine, formatReportDate, formatStartTime } from '../../pages/project/daily/dailyReportForm';
 import { formatMailDate } from '../../pages/mail/mailFormat';
 import { ReplyFlagChip } from '../../components/documents/ReplyFlagChip';
 import { Lightbox } from '../../components/Lightbox';
@@ -356,7 +356,9 @@ const DailyLatestCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx
           {(latest.weatherSummary || latest.temperature) && (
             <p className="text-xs text-ink-soft">{weatherLine(latest.weatherSummary, latest.temperature)}</p>
           )}
-          <p className="text-xs text-ink-faint">{manCountTotal(latest.manCounts)} on site</p>
+          <p className="text-xs text-ink-faint">
+            {manCountTotal(latest.manCounts)} on site{latest.startTime ? ` · started ${formatStartTime(latest.startTime)}` : ''}
+          </p>
           {notes && <p className="line-clamp-2 text-xs text-ink-faint">{notes}</p>}
         </div>
       )}

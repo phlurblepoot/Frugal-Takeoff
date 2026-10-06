@@ -6,7 +6,7 @@ import { DailyReportsCalendar, monthGrid } from './DailyReportsCalendar';
 import { DailyReportListItem } from '../../../utils/store';
 
 const report = (over: Partial<DailyReportListItem> = {}): DailyReportListItem => ({
-  id: 'r1', projectId: 'p1', reportDate: '2026-09-05', jobName: 'Job', contractorName: 'GC',
+  id: 'r1', projectId: 'p1', reportDate: '2026-09-05', jobName: 'Job', contractorName: 'GC', startTime: null,
   weatherSummary: '', temperature: '', manCounts: [], createdBy: null,
   createdAt: 1, updatedAt: 1, version: 1, photoCount: 0,
   ...over,
