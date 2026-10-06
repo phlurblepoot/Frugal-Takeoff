@@ -77,7 +77,11 @@ const LABEL_RESOLVERS: Partial<Record<ItemType, LabelResolver>> = {
     sql: 'SELECT number, title FROM rfis WHERE id = ?',
     format: r => { const base = `RFI-${String(r.number).padStart(3, '0')}`; return r.title && String(r.title).trim() ? `${base} — ${String(r.title).trim()}` : base; },
   },
-  dailyReport: { sql: 'SELECT reportDate FROM daily_reports WHERE id = ?', format: r => `Daily Report — ${formatReportDate(r.reportDate)}` },
+  // One date can hold a report per crew (migration 45), so the crew names it too.
+  dailyReport: {
+    sql: 'SELECT r.reportDate, c.name AS crewName FROM daily_reports r LEFT JOIN daily_report_crews c ON c.id = r.crewId WHERE r.id = ?',
+    format: r => `Daily Report — ${formatReportDate(r.reportDate)}${r.crewName ? ` — ${r.crewName}` : ''}`,
+  },
   project: { sql: 'SELECT name FROM projects WHERE id = ?', format: r => (r.name && String(r.name).trim()) ? String(r.name).trim() : null },
   task: { sql: 'SELECT title FROM tasks WHERE id = ?', format: r => (r.title && String(r.title).trim()) ? String(r.title).trim() : null },
   customer: { sql: 'SELECT name FROM customers WHERE id = ?', format: r => (r.name && String(r.name).trim()) ? String(r.name).trim() : null },
@@ -85,7 +89,7 @@ const LABEL_RESOLVERS: Partial<Record<ItemType, LabelResolver>> = {
 
 /** Human label for a linked item, in the app's own display conventions per
  *  type (RFI-012, ISS-004, CO-3, Invoice 104, Proposal #2, Pay App #1,
- *  project/customer name, task title, Daily Report — <date>). A missing row
+ *  project/customer name, task title, Daily Report — <date> — <crew>). A missing row
  *  (deleted item) or unmapped itemType falls back to the capitalized type name. */
 export function resolveLinkLabel(db: Database.Database, itemType: ItemType, itemId: string): string {
   const fallback = TYPE_FALLBACK[itemType] ?? itemType;

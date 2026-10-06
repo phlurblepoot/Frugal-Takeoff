@@ -53,8 +53,10 @@ describe('resolveLinkLabel', () => {
 
     expect(resolveLinkLabel(db, 'rfi', rfiId)).toBe('RFI-001 — Ceilings');
 
-    db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, createdAt, updatedAt) VALUES ('dr1', ?, '2026-09-01', 1, 1)`).run(projectId);
-    expect(resolveLinkLabel(db, 'dailyReport', 'dr1')).toBe('Daily Report — Sep 1, 2026');
+    // One date can hold a report per crew (migration 45), so the crew names it too.
+    db.prepare(`INSERT INTO daily_report_crews (id, projectId, name, sortOrder, createdAt, updatedAt) VALUES ('crew1', ?, 'Smith Drywall', 0, 1, 1)`).run(projectId);
+    db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES ('dr1', ?, 'crew1', '2026-09-01', 1, 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'dailyReport', 'dr1')).toBe('Daily Report — Sep 1, 2026 — Smith Drywall');
 
     expect(resolveLinkLabel(db, 'punch', projectId)).toBe('Dania');
     expect(resolveLinkLabel(db, 'project', projectId)).toBe('Dania');
@@ -84,10 +86,14 @@ describe('resolveLinkLabel', () => {
     // Regression: a first pass emitted the raw ISO string ('2026-08-26') instead of
     // matching formatReportDate ('Aug 26, 2026') used by the list row, editor title,
     // email subject, and PDF.
-    db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, createdAt, updatedAt) VALUES ('dr2', ?, '2026-08-26', 1, 1)`).run(projectId);
-    expect(resolveLinkLabel(db, 'dailyReport', 'dr2')).toBe('Daily Report — Aug 26, 2026');
+    db.prepare(`INSERT INTO daily_report_crews (id, projectId, name, sortOrder, createdAt, updatedAt) VALUES ('crew2', ?, 'Crew 1', 0, 1, 1)`).run(projectId);
+    db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES ('dr2', ?, 'crew2', '2026-08-26', 1, 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'dailyReport', 'dr2')).toBe('Daily Report — Aug 26, 2026 — Crew 1');
     // A malformed date (shouldn't happen, but the format falls back rather than throwing)
-    db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, createdAt, updatedAt) VALUES ('dr3', ?, 'garbage', 1, 1)`).run(projectId);
-    expect(resolveLinkLabel(db, 'dailyReport', 'dr3')).toBe('Daily Report — garbage');
+    db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES ('dr3', ?, 'crew2', 'garbage', 1, 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'dailyReport', 'dr3')).toBe('Daily Report — garbage — Crew 1');
+    // A report whose crew row is gone (a deleted project's) keeps its date label.
+    db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES ('dr4', ?, 'gone', '2026-08-27', 1, 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'dailyReport', 'dr4')).toBe('Daily Report — Aug 27, 2026');
   });
 });

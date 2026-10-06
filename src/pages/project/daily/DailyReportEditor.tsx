@@ -17,7 +17,7 @@ import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
-import { formatReportDate, formatStartTime, manCountTotal, normalizeManCounts, weatherStartHour } from './dailyReportForm';
+import { dailyReportTitle, formatReportDate, formatStartTime, manCountTotal, normalizeManCounts, weatherStartHour } from './dailyReportForm';
 import { buildDailyReportPdf, dailyReportFileName } from './dailyReportPdf';
 import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
@@ -230,7 +230,7 @@ export const DailyReportEditor: React.FC<{
       onSaved({ keepMounted: opts?.keepMounted === true && collab.keepMineVersion === null });
     } catch (e) {
       if (e instanceof DateTakenError) {
-        setDateError('A report for this date already exists.');
+        setDateError(report.crewName ? `${report.crewName} already has a report for this date.` : 'A report for this date already exists.');
       } else if (e instanceof Error && e.name === 'ConflictError') {
         toast('Report changed elsewhere — reopen it', { type: 'error' });
       } else {
@@ -248,7 +248,8 @@ export const DailyReportEditor: React.FC<{
   };
 
   return (
-    <Modal open onClose={onClose} title={`Daily Report — ${formatReportDate(report.reportDate)}`} width="lg"
+    // The title names the crew: each crew is its own set of reports.
+    <Modal open onClose={onClose} title={dailyReportTitle(report)} width="lg"
       footer={<>
         <div className="mr-auto">
           <DocumentActionsBar
@@ -269,8 +270,8 @@ export const DailyReportEditor: React.FC<{
                 defaultTo: emailDefaults.defaultTo || undefined,
                 defaultCc: emailDefaults.defaultCc || undefined,
                 defaultBcc: emailDefaults.defaultBcc || undefined,
-                defaultSubject: `Daily Report — ${formatReportDate(report.reportDate)} — ${projectName}`,
-                defaultBody: `Hello,\n\nPlease find attached the daily report for ${formatReportDate(report.reportDate)} on ${projectName}.\n\nThank you.`,
+                defaultSubject: `${dailyReportTitle(report)} — ${projectName}`,
+                defaultBody: `Hello,\n\nPlease find attached the daily report for ${formatReportDate(report.reportDate)}${report.crewName ? ` (${report.crewName})` : ''} on ${projectName}.\n\nThank you.`,
                 headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
                 defaultHeaderEmail: emailDefaults.companyEmail || undefined,
               },

@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   addDailyReportPhoto: vi.fn(),
   uploadProjectFile: vi.fn(),
   pickerProps: { last: null as any },
+  composerProps: { last: null as any },
   persistGeneratedDocument: vi.fn(),
   getDocumentBySource: vi.fn(),
   buildDailyReportPdf: vi.fn(),
@@ -85,8 +86,9 @@ vi.mock('../../../pages/documents/DocumentViewerModal', () => ({
 // SendRequest exactly as the real one does once the user hits Send.
 vi.mock('../../../pages/mail/compose/MailComposer', async (orig) => ({
   ...(await orig<typeof import('../../../pages/mail/compose/MailComposer')>()),
-  MailComposer: ({ open, onSend, onClose }: any) =>
-    open ? (
+  MailComposer: ({ open, onSend, onClose, ...rest }: any) => {
+    h.composerProps.last = { open, ...rest };
+    return open ? (
       <div data-testid="composer">
         <button
           data-testid="composer-send"
@@ -99,7 +101,8 @@ vi.mock('../../../pages/mail/compose/MailComposer', async (orig) => ({
           send
         </button>
       </div>
-    ) : null,
+    ) : null;
+  },
 }));
 
 // The document bar loads the user's mailboxes (for the composer's From select)
@@ -117,7 +120,7 @@ import { ToastProvider } from '../../../components/Toast';
 import { DailyReportEditor } from './DailyReportEditor';
 
 const report = (over: Partial<DailyReport> = {}): DailyReport => ({
-  id: 'dr-1', projectId: 'p1', reportDate: '2026-08-26', startTime: '06:00', jobName: 'Big Job',
+  id: 'dr-1', projectId: 'p1', crewId: 'crew-1', crewName: 'Crew 1', reportDate: '2026-08-26', startTime: '06:00', jobName: 'Big Job',
   contractorName: 'GC Inc', weatherSummary: 'Sunny', temperature: '78F',
   weatherHourly: [{ hour: '9am', tempF: 78, condition: 'Sunny' }],
   manCounts: [{ type: 'Plasterer', count: 3 }], fieldNotes: 'All quiet', issues: '',
@@ -172,6 +175,33 @@ beforeEach(() => {
   h.appendAttachedPdfs.mockResolvedValue(MERGED);
   h.getDailyWeather.mockResolvedValue(FETCHED);
   h.confirm.mockResolvedValue(true);
+});
+
+// Each crew is its own set of reports, so the editor names the crew.
+describe('DailyReportEditor — crew', () => {
+  it('shows the report\'s crew in the title', async () => {
+    mount(report({ crewName: 'Smith Drywall' }));
+    expect(await screen.findByText('Daily Report — Aug 26, 2026 — Smith Drywall')).toBeInTheDocument();
+  });
+
+  it('names the crew in the email\'s subject and body and in the PDF\'s file name', async () => {
+    mount(report({ crewName: 'Smith Drywall' }));
+    fireEvent.click(await screen.findByTestId('doc-send'));
+    await screen.findByTestId('composer');
+    const { initial, primaryAttachment } = h.composerProps.last;
+    expect(initial.subject).toBe('Daily Report — Aug 26, 2026 — Smith Drywall — Big Job');
+    expect(initial.html).toContain('the daily report for Aug 26, 2026 (Smith Drywall) on Big Job');
+    expect(primaryAttachment.name).toBe('DailyReport-Big-Job-Smith-Drywall-2026-08-26.pdf');
+  });
+
+  it('says which crew already has a report on the date it was moved to', async () => {
+    const { DateTakenError } = await import('../../../utils/store');
+    h.saveDailyReport.mockRejectedValue(new DateTakenError('dr-2'));
+    mount(report({ crewName: 'Smith Drywall' }));
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-08-27' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Smith Drywall already has a report for this date.')).toBeInTheDocument();
+  });
 });
 
 describe('DailyReportEditor — document actions', () => {

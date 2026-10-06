@@ -678,9 +678,11 @@ describe('migration 24: change-order-title', () => {
 });
 
 describe('migration 27: daily reports', () => {
+  // As migration 27 made it: one report per project per date. Migration 45
+  // makes that per crew (its own tests below).
   it('creates daily_reports with the unique date rule and the photos join table', () => {
     const db = openDb(':memory:');
-    runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-m27-')), migrations);
+    runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-m27-')), migrations.filter(m => m.version <= 27));
     db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, createdAt, updatedAt) VALUES ('d1','p1','2026-08-26',1,1)`).run();
     expect(() =>
       db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, createdAt, updatedAt) VALUES ('d2','p1','2026-08-26',1,1)`).run(),
@@ -1264,6 +1266,118 @@ describe('migration 44: daily-report-start-time', () => {
     const m44 = migrations.find(m => m.version === 44)!;
     expect(() => m44.up({ db, dataDir: dir })).not.toThrow();
     expect(db.prepare('SELECT startTime FROM daily_reports WHERE id = ?').get('d1')).toEqual({ startTime: '07:00' });
+    db.close();
+  });
+});
+
+describe('migration 45: daily-report-crews', () => {
+  // Every column daily_reports had at v44, in its v44 order.
+  const V44_COLS = ['id', 'projectId', 'reportDate', 'jobName', 'contractorName', 'weatherSummary', 'temperature',
+    'weatherHourly', 'manCounts', 'fieldNotes', 'issues', 'createdBy', 'createdAt', 'updatedAt', 'version', 'startTime'];
+
+  // A v44 database with reports on two projects (one since deleted — project
+  // delete never removed its reports), a project with none, and the photo and
+  // PDF-attachment rows that hang off the reports by id.
+  const seedV44 = () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 44));
+    expect(columnNames(db, 'daily_reports')).toEqual(V44_COLS);
+    db.prepare(`INSERT INTO projects (id, name, createdAt) VALUES ('p1', 'Dania', 1), ('p2', 'Hollywood', 1), ('p3', 'No reports', 1)`).run();
+    const ins = db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, startTime, jobName, contractorName, weatherSummary,
+        temperature, weatherHourly, manCounts, fieldNotes, issues, createdBy, createdAt, updatedAt, version)
+      VALUES (?, ?, ?, ?, 'Job', 'GC', 'Clear', '71–80°F', '[{"hour":"6 AM","tempF":71,"condition":"Clear"}]',
+        '[{"type":"Plasterer","count":4}]', 'notes', 'none', 'nathan', 5, 6, 3)`);
+    ins.run('d1', 'p1', '2026-08-25', '07:00');
+    ins.run('d2', 'p1', '2026-08-26', null);
+    ins.run('d3', 'p2', '2026-08-26', '06:00');
+    ins.run('d4', 'gone', '2026-08-20', null); // its project was deleted
+    db.prepare(`INSERT INTO daily_report_photos (id, dailyReportId, fileId, sortOrder, createdAt) VALUES ('ph1', 'd1', 'f1', 0, 1)`).run();
+    db.prepare(`INSERT INTO daily_report_attachments (id, dailyReportId, fileId, sortOrder, createdAt) VALUES ('at1', 'd3', 'f2', 0, 1)`).run();
+    return { db, dir, before: db.prepare('SELECT * FROM daily_reports ORDER BY id').all() as any[] };
+  };
+
+  it('rebuilds daily_reports with crewId, keeping every row, id, column value and its photos/attachments', () => {
+    const { db, dir, before } = seedV44();
+    runMigrations(db, dir, migrations);
+
+    expect(columnNames(db, 'daily_reports').sort()).toEqual([...V44_COLS, 'crewId'].sort());
+    const after = db.prepare('SELECT * FROM daily_reports ORDER BY id').all() as any[];
+    expect(after.map(({ crewId, ...rest }) => rest)).toEqual(before);
+    expect(after.every(r => typeof r.crewId === 'string' && r.crewId)).toBe(true);
+    // Children still find their report by id.
+    expect(db.prepare(`SELECT r.reportDate FROM daily_report_photos p JOIN daily_reports r ON r.id = p.dailyReportId`).all())
+      .toEqual([{ reportDate: '2026-08-25' }]);
+    expect(db.prepare(`SELECT r.projectId FROM daily_report_attachments a JOIN daily_reports r ON r.id = a.dailyReportId`).all())
+      .toEqual([{ projectId: 'p2' }]);
+    // Defaults survive the rebuild.
+    db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES ('d9', 'p3', 'c9', '2026-08-26', 1, 1)`).run();
+    expect(db.prepare('SELECT jobName, weatherHourly, manCounts, startTime, version FROM daily_reports WHERE id = ?').get('d9'))
+      .toEqual({ jobName: '', weatherHourly: '[]', manCounts: '[]', startTime: null, version: 1 });
+    db.close();
+  });
+
+  it('gives every project with reports one "Crew 1" holding all of them, and a project with none no crew', () => {
+    const { db, dir } = seedV44();
+    runMigrations(db, dir, migrations);
+
+    expect(columnNames(db, 'daily_report_crews')).toEqual(['id', 'projectId', 'name', 'sortOrder', 'createdAt', 'updatedAt']);
+    const crews = db.prepare('SELECT id, projectId, name, sortOrder FROM daily_report_crews ORDER BY projectId').all() as any[];
+    expect(crews.map(c => [c.projectId, c.name, c.sortOrder])).toEqual([['gone', 'Crew 1', 0], ['p1', 'Crew 1', 0], ['p2', 'Crew 1', 0]]);
+    const crewOf = Object.fromEntries(crews.map(c => [c.projectId, c.id]));
+    expect(db.prepare('SELECT id, crewId FROM daily_reports ORDER BY id').all()).toEqual([
+      { id: 'd1', crewId: crewOf.p1 }, { id: 'd2', crewId: crewOf.p1 }, { id: 'd3', crewId: crewOf.p2 }, { id: 'd4', crewId: crewOf.gone },
+    ]);
+    db.close();
+  });
+
+  it('makes the date rule one report per date PER CREW, and keeps the indexes', () => {
+    const { db, dir } = seedV44();
+    runMigrations(db, dir, migrations);
+    const crew1 = (db.prepare(`SELECT id FROM daily_report_crews WHERE projectId = 'p1'`).get() as any).id;
+    const ins = db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, 1)`);
+    expect(() => ins.run('dup', 'p1', crew1, '2026-08-26')).toThrow(/UNIQUE/);
+    ins.run('other-crew', 'p1', 'crew-2', '2026-08-26'); // same date, another crew: fine
+    expect(() => ins.run('no-crew', 'p1', null, '2026-08-27')).toThrow(/NOT NULL/);
+
+    const indexCols = (idx: string) => (db.prepare(`PRAGMA index_info(${idx})`).all() as { name: string }[]).map(r => r.name);
+    expect(indexCols('idx_daily_reports_project')).toEqual(['projectId']);
+    expect(indexCols('idx_daily_report_crews_project')).toEqual(['projectId']);
+    const unique = (db.prepare(`PRAGMA index_list(daily_reports)`).all() as any[]).filter(i => i.unique && i.origin === 'u');
+    expect(unique.map(i => indexCols(i.name))).toEqual([['projectId', 'crewId', 'reportDate']]);
+    expect(tableNames(db)).not.toContain('daily_reports_new');
+    db.close();
+  });
+
+  it('replaying up() is a no-op: no second crew, no second rebuild', () => {
+    const { db, dir } = seedV44();
+    runMigrations(db, dir, migrations);
+    const crews = db.prepare('SELECT * FROM daily_report_crews ORDER BY id').all();
+    const reports = db.prepare('SELECT * FROM daily_reports ORDER BY id').all();
+
+    const m45 = migrations.find(m => m.version === 45)!;
+    expect(() => m45.up({ db, dataDir: dir })).not.toThrow();
+    expect(db.prepare('SELECT * FROM daily_report_crews ORDER BY id').all()).toEqual(crews);
+    expect(db.prepare('SELECT * FROM daily_reports ORDER BY id').all()).toEqual(reports);
+    db.close();
+  });
+
+  it('on a fresh install, makes the crews table and an empty per-crew daily_reports', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    expect(db.prepare('SELECT COUNT(*) c FROM daily_report_crews').get()).toEqual({ c: 0 });
+    expect(columnNames(db, 'daily_reports')).toContain('crewId');
+    db.close();
+  });
+
+  it('a column the rebuild does not know stops the migration, leaving the v44 table and its rows as they were', () => {
+    const { db, dir, before } = seedV44();
+    db.exec(`ALTER TABLE daily_reports ADD COLUMN somethingElse TEXT`);
+    expect(() => runMigrations(db, dir, migrations)).toThrow(/columns the rebuild would drop: somethingElse/);
+    expect(db.prepare('SELECT MAX(version) v FROM schema_version').get()).toEqual({ v: 44 });
+    expect(columnNames(db, 'daily_reports')).toEqual([...V44_COLS, 'somethingElse']);
+    expect((db.prepare('SELECT * FROM daily_reports ORDER BY id').all() as any[]).map(({ somethingElse, ...r }) => r)).toEqual(before);
+    expect(tableNames(db)).not.toContain('daily_report_crews');
     db.close();
   });
 });

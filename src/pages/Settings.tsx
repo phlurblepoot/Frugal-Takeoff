@@ -28,6 +28,19 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.5.0',
+    date: 'October 6, 2026',
+    changes: [
+      'Daily reports now have crews. Each project\'s Daily Reports page has a tab for each crew — your own crew or a sub\'s — and every crew keeps its own full set of daily reports with its own calendar: one report per day per crew, each with its own date, start time, weather, man count, notes, issues, photos and PDFs.',
+      'Add crew (next to the tabs) adds a crew under the name you type, and opens its tab. The ⋯ button next to it renames the open crew or deletes it — only a crew with no reports can be deleted, and a project always keeps at least one crew. Your tab is kept in the page address, so a link or a refresh opens the same crew.',
+      'A new report starts at the same time as that crew\'s last report, so a crew on nights and a crew on days each keep their own start time.',
+      'The All crews tab shows every crew\'s reports on one calendar (or list): each day lists each crew\'s report with its crew name and man count. It is for viewing — click a report to open it; new reports are added on a crew\'s tab.',
+      'Since one day can now have a report from several crews, a report is named with its crew everywhere it is named by its date: the report\'s title, the PDF (in its heading, a new Crew line, and its file name, e.g. DailyReport-Dania-Beach-Crew-1-2026-10-06.pdf), the email subject, Documents (which now opens the report\'s crew tab), mail links, the activity feed and the dashboard\'s Latest daily report card. In the list view the men-on-site column is now called "Men".',
+      'Your existing daily reports are now in a crew called "Crew 1" on each project — rename it to whatever you call that crew. Renaming a crew marks its reports\' PDFs out of date, since the crew\'s name is printed on them.',
+      'Note for self-hosters: this update includes a data-transforming migration (45) that rebuilds the daily reports table to give each report a crew, and moves every project\'s existing reports into a new "Crew 1" (report ids, photos and PDF attachments are unchanged) — back up before pulling this update.',
+    ],
+  },
+  {
     version: '4.4.0',
     date: 'October 6, 2026',
     changes: [

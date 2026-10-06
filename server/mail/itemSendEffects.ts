@@ -5,7 +5,7 @@ import { getProposal, markSent as markProposalSent } from '../proposalStore';
 import { getInvoice, setInvoiceStatus, getChangeOrder, setChangeOrderStatus } from '../billingStore';
 import { getIssue, markIssueSent } from '../issueStore';
 import { getRfi, markRfiSent } from '../rfiStore';
-import { getDailyReport } from '../dailyReportStore';
+import { getDailyReport, dailyReportActivityName } from '../dailyReportStore';
 import type { EntityType } from '../realtime/changeFeed';
 import { resolveChain, type ItemType } from './links';
 // Verified locations: proposalStore.ts:126/311, billingStore.ts:64/199/263/339,
@@ -54,7 +54,7 @@ export function applySendEffects(db: Database.Database, i: SendEffectsInput): Se
     }
     case 'dailyReport': {
       const r = getDailyReport(db, i.itemId); if (!r) return { applied: false, skipped: 'missing' };
-      logActivity(db, { projectId: r.projectId, userId: i.userId, type: 'daily_report_sent', message: `Daily report ${r.reportDate} emailed to ${i.to}` });
+      logActivity(db, { projectId: r.projectId, userId: i.userId, type: 'daily_report_sent', message: `Daily report ${dailyReportActivityName(r)} emailed to ${i.to}` });
       return { applied: true };
     }
     case 'punch': {

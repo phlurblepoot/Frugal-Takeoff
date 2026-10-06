@@ -32,6 +32,11 @@ const PROJECT = {
   takeoffs: [],
 };
 
+// Every daily report is filed under a crew; listing a project's crews makes
+// its first one ("Crew 1").
+const firstCrew = async (projectId = 'p1'): Promise<string> =>
+  (await request(app).get(`/api/projects/${projectId}/daily-report-crews`)).body[0].id;
+
 beforeEach(() => {
   dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-rt-'));
   db = openDb(':memory:');
@@ -606,7 +611,8 @@ describe('deleteProject attachments cascade', () => {
     const co = (await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1' })).body.id;
     const iss = (await request(app).post('/api/projects/p1/issues').send({ title: 'Crack' })).body.id;
     const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Which finish?' })).body.id;
-    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' })).body.id;
+    const crewId = await firstCrew();
+    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ crewId, reportDate: '2026-08-20' })).body.id;
     await request(app).post(`/api/change-orders/${co}/attachments`).send({ fileId: 'spec1' }).expect(200);
     await request(app).post(`/api/issues/${iss}/attachments`).send({ fileId: 'spec1' }).expect(200);
     await request(app).post(`/api/rfis/${rfi}/attachments`).send({ fileId: 'spec1' }).expect(200);
@@ -619,6 +625,8 @@ describe('deleteProject attachments cascade', () => {
     ]) {
       expect(db.prepare(`SELECT COUNT(*) c FROM ${table} WHERE ${owner} = ?`).get(id), table).toEqual({ c: 0 });
     }
+    // ...and its daily report crews (migration 45).
+    expect(db.prepare('SELECT COUNT(*) c FROM daily_report_crews WHERE id = ?').get(crewId)).toEqual({ c: 0 });
   });
 });
 
@@ -1451,7 +1459,7 @@ describe('PDF attachment routes', () => {
   const FIELD_RECORDS = [
     { label: 'issues', base: '/api/issues', type: 'issue', create: async () => (await request(app).post('/api/projects/p1/issues').send({ title: 'Crack' })).body.id },
     { label: 'RFIs', base: '/api/rfis', type: 'rfi', create: async () => (await request(app).post('/api/projects/p1/rfis').send({ title: 'Which finish?' })).body.id },
-    { label: 'daily reports', base: '/api/daily-reports', type: 'dailyReport', create: async () => (await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' })).body.id },
+    { label: 'daily reports', base: '/api/daily-reports', type: 'dailyReport', create: async () => (await request(app).post('/api/projects/p1/daily-reports').send({ crewId: await firstCrew(), reportDate: '2026-08-20' })).body.id },
   ] as const;
 
   for (const rec of FIELD_RECORDS) {
@@ -2068,23 +2076,28 @@ describe('email send routes', () => {
     expect((await request(emailApp).post(`/api/rfis/${rfi.id}/send`).send({ to: 'a@b.com', fileId: 'primary' })).status).toBe(409);
   });
 
-  it('daily report send: default subject + date-only filename when jobName is blank', async () => {
-    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' })).body;
+  // One date can hold a report per crew, so the crew is in the subject and
+  // the attachment's name.
+  it('daily report send: default subject + crew-and-date filename when jobName is blank', async () => {
+    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ crewId: await firstCrew(), reportDate: '2026-08-20' })).body;
     const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
     expect(res.status).toBe(200);
     const m = provider.sent[0];
-    expect(m.subject).toBe('Daily Report — 2026-08-20');
-    expect(names(m.attachments)).toEqual(['DailyReport-2026-08-20.pdf']);
+    expect(m.subject).toBe('Daily Report — 2026-08-20 — Crew 1');
+    expect(names(m.attachments)).toEqual(['DailyReport-Crew-1-2026-08-20.pdf']);
+    expect(db.prepare(`SELECT message FROM activity WHERE type = 'daily_report_sent'`).get())
+      .toEqual({ message: 'Daily report 2026-08-20 (Crew 1) emailed to gc@example.com' });
   });
 
-  it('daily report send: sanitizes jobName into the attachment filename', async () => {
+  it('daily report send: sanitizes jobName and the crew name into the attachment filename', async () => {
+    const crew = (await request(app).post('/api/projects/p1/daily-report-crews').send({ name: 'Smith / Sons' })).body;
     const dr = (await request(app).post('/api/projects/p1/daily-reports')
-      .send({ reportDate: '2026-08-20', jobName: 'Dania Beach: "Unit 4"' })).body;
+      .send({ crewId: crew.id, reportDate: '2026-08-20', jobName: 'Dania Beach: "Unit 4"' })).body;
     const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
     expect(res.status).toBe(200);
     const m = provider.sent[0];
-    expect(m.subject).toBe('Daily Report — 2026-08-20 — Dania Beach: "Unit 4"');
-    expect(names(m.attachments)).toEqual(['DailyReport-Dania-Beach-Unit-4-2026-08-20.pdf']);
+    expect(m.subject).toBe('Daily Report — 2026-08-20 — Smith / Sons — Dania Beach: "Unit 4"');
+    expect(names(m.attachments)).toEqual(['DailyReport-Dania-Beach-Unit-4-Smith-Sons-2026-08-20.pdf']);
   });
 
   it('rfi send: marks rfi sent with sentAt set after send', async () => {

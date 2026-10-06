@@ -7,26 +7,31 @@ import {
 } from '../../../utils/documentLetterhead';
 import { manCountLabel, weatherLine, formatReportDate, formatStartTime, manCountTotal } from './dailyReportForm';
 
-export const dailyReportHeading = (r: { reportDate: string; jobName: string }): string =>
-  `Daily Report — ${formatReportDate(r.reportDate)}${r.jobName ? ' · ' + r.jobName : ''}`;
+// The crew comes before the job name: one date can hold a report per crew, and
+// a long job name is what gets cut off at the end of the line.
+export const dailyReportHeading = (r: { reportDate: string; jobName: string; crewName?: string | null }): string =>
+  `Daily Report — ${formatReportDate(r.reportDate)}${r.crewName ? ' · ' + r.crewName : ''}${r.jobName ? ' · ' + r.jobName : ''}`;
 
 // Strips characters illegal in filenames and collapses whitespace, so a
 // project/job name can drop straight into a filename.
 const sanitizeForFileName = (s: string): string =>
   s.replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
 
-// Spec letter: `DailyReport-<project>-<date>.pdf`. `name` is optional so a
-// blank/missing project name falls back to the pre-existing date-only form.
-export const dailyReportFileName = (r: { reportDate: string }, name?: string): string => {
-  const sanitized = name ? sanitizeForFileName(name) : '';
-  return sanitized ? `DailyReport-${sanitized}-${r.reportDate}.pdf` : `DailyReport-${r.reportDate}.pdf`;
+// Spec letter: `DailyReport-<project>-<crew>-<date>.pdf` — the crew because
+// one date can hold a report per crew. Each name part is left out when blank
+// (`name` is optional), down to the date-only form.
+export const dailyReportFileName = (r: { reportDate: string; crewName?: string | null }, name?: string): string => {
+  const parts = [name ? sanitizeForFileName(name) : '', r.crewName ? sanitizeForFileName(r.crewName) : ''].filter(Boolean);
+  return `DailyReport-${[...parts, r.reportDate].join('-')}.pdf`;
 };
 
 // The header's label/value rows. Start time only when the report has one —
-// a report made before start times existed prints as it always did.
-export const dailyReportFieldRows = (r: Pick<DailyReport, 'jobName' | 'contractorName' | 'reportDate' | 'startTime'>): Array<[string, string]> => [
+// a report made before start times existed prints as it always did. The crew
+// whenever its name is known.
+export const dailyReportFieldRows = (r: Pick<DailyReport, 'jobName' | 'contractorName' | 'reportDate' | 'startTime'> & { crewName?: string | null }): Array<[string, string]> => [
   ['Job name:', r.jobName || ''],
   ['Contractor:', r.contractorName || ''],
+  ...(r.crewName ? [['Crew:', r.crewName] as [string, string]] : []),
   ['Date:', formatReportDate(r.reportDate)],
   ...(r.startTime ? [['Start time:', formatStartTime(r.startTime)] as [string, string]] : []),
 ];

@@ -1,7 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act, waitFor as rtlWaitFor, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { render, screen, act, waitFor as rtlWaitFor, fireEvent, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import React from 'react';
+
+const crewApi = vi.hoisted(() => ({
+  getDailyReportCrews: vi.fn(),
+  createDailyReportCrew: vi.fn(),
+  renameDailyReportCrew: vi.fn(),
+  deleteDailyReportCrew: vi.fn(),
+  createDailyReport: vi.fn(),
+  confirm: vi.fn(),
+}));
 
 const { fakeSocket, getDailyReports, getDailyReport, getDocumentsBySource } = vi.hoisted(() => {
   const handlers: Record<string, ((...a: any[]) => void)[]> = {};
@@ -20,9 +29,17 @@ vi.mock('../../context/CollaborationContext', () => ({
 // Not under test here — see ReplyFlagChip/useReplyFlags.test for that; a real
 // fetch would otherwise fire (and outlive) this file's tests.
 vi.mock('../../hooks/useReplyFlags', () => ({ useReplyFlags: () => new Set<string>() }));
+vi.mock('../../components/ConfirmDialog', () => ({ useConfirm: () => crewApi.confirm }));
 vi.mock('../../utils/store', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getDailyReports, getDailyReport, getDocumentsBySource,
+  getDailyReportCrews: crewApi.getDailyReportCrews,
+  createDailyReportCrew: crewApi.createDailyReportCrew,
+  renameDailyReportCrew: crewApi.renameDailyReportCrew,
+  deleteDailyReportCrew: crewApi.deleteDailyReportCrew,
+  createDailyReport: crewApi.createDailyReport,
+  getProject: vi.fn(async () => null),
+  getSettings: vi.fn(async () => ({})),
   getDocumentTypes: vi.fn(async () => []),
   fetchFileBlob: vi.fn(async () => new Blob(['pdf'])),
 }));
@@ -40,10 +57,10 @@ vi.mock('../documents/DocumentViewerModal', () => ({
 // mid-flow.
 const mounts = { count: 0 };
 vi.mock('./daily/DailyReportEditor', () => ({
-  DailyReportEditor: ({ onSaved }: any) => {
+  DailyReportEditor: ({ onSaved, report }: any) => {
     React.useEffect(() => { mounts.count += 1; }, []);
     return (
-      <div data-testid="editor">
+      <div data-testid="editor" data-report-id={report?.id}>
         <button data-testid="save-kept" onClick={() => onSaved({ keepMounted: true })}>save kept</button>
         <button data-testid="save-plain" onClick={() => onSaved()}>save plain</button>
       </div>
@@ -56,13 +73,26 @@ vi.mock('./ProjectLayout', () => ({
 
 import { ProjectDailyReports, manCountTotal, formatReportDate } from './ProjectDailyReports';
 
-function mount() {
+// Shows the URL's query string, where the open crew tab lives.
+const Search: React.FC = () => <div data-testid="search">{useLocation().search}</div>;
+
+function mount(path = '/project/p1/daily') {
   return render(
-    <MemoryRouter initialEntries={['/project/p1/daily']}>
-      <Routes><Route path="/project/:projectId/daily" element={<ProjectDailyReports />} /></Routes>
+    <MemoryRouter initialEntries={[path]}>
+      <Routes><Route path="/project/:projectId/daily" element={<><ProjectDailyReports /><Search /></>} /></Routes>
     </MemoryRouter>
   );
 }
+
+const crewRow = (over: Record<string, any> = {}) => ({
+  id: 'c1', projectId: 'p1', name: 'Crew 1', sortOrder: 0, createdAt: 1, updatedAt: 1, reportCount: 0, ...over,
+});
+
+// Every test starts with one crew ("Crew 1", c1) that the default rows below belong to.
+beforeEach(() => {
+  for (const f of Object.values(crewApi)) f.mockReset();
+  crewApi.getDailyReportCrews.mockResolvedValue([crewRow()]);
+});
 
 describe('manCountTotal', () => {
   it('sums counts', () => { expect(manCountTotal([{ type: 'Plasterer', count: 4 }, { type: 'Supervisor', count: 1 }])).toBe(5); });
@@ -83,7 +113,7 @@ describe('formatReportDate', () => {
 // docs/superpowers/specs/2026-08-29-document-actions-rollout-design.md)
 
 const listRow = (over: Record<string, any> = {}) => ({
-  id: 'dr1', projectId: 'p1', reportDate: '2026-08-26', jobName: 'Big Job', contractorName: 'GC',
+  id: 'dr1', projectId: 'p1', crewId: 'c1', crewName: 'Crew 1', reportDate: '2026-08-26', jobName: 'Big Job', contractorName: 'GC',
   weatherSummary: 'Sunny', temperature: '78F', manCounts: [], createdBy: null,
   createdAt: 1, updatedAt: 10, version: 1, photoCount: 0,
   ...over,
@@ -201,5 +231,177 @@ describe('ProjectDailyReports — calendar/list view toggle', () => {
     mount();
     expect(await screen.findByRole('table')).toBeInTheDocument();
     expect(screen.queryByTestId('daily-calendar')).not.toBeInTheDocument();
+  });
+});
+
+// Crews (spec docs/superpowers/specs/2026-10-06-daily-report-crews-design.md):
+// a tab per crew, each its own set of reports, plus a read-only All crews tab.
+describe('ProjectDailyReports — crews', () => {
+  const CREWS = [crewRow({ reportCount: 1 }), crewRow({ id: 'c2', name: 'Smith Drywall', sortOrder: 1, reportCount: 1 }), crewRow({ id: 'c3', name: 'Night crew', sortOrder: 2 })];
+  const ours = listRow({ id: 'r1', reportDate: '2026-08-26' });
+  const theirs = listRow({ id: 'r2', crewId: 'c2', crewName: 'Smith Drywall', reportDate: '2026-08-26', manCounts: [{ type: 'Hanger', count: 3 }] });
+  const crewTabs = () => within(screen.getByRole('tablist', { name: 'Crews' })).getAllByRole('tab');
+
+  beforeEach(() => {
+    localStorage.setItem('dailyReports:view', 'list');
+    getDailyReports.mockReset();
+    getDailyReport.mockReset();
+    getDocumentsBySource.mockReset();
+    for (const k of Object.keys(fakeSocket.handlers)) delete fakeSocket.handlers[k];
+    crewApi.getDailyReportCrews.mockResolvedValue(CREWS);
+    getDailyReports.mockResolvedValue([ours, theirs]);
+    getDocumentsBySource.mockResolvedValue({});
+    getDailyReport.mockImplementation(async (id: string) => ({ ...(id === 'r2' ? theirs : ours), photos: [], attachments: [] }));
+    crewApi.confirm.mockResolvedValue(true);
+  });
+
+  it('shows a tab per crew in order, then All crews; the first crew is open with only its own reports', async () => {
+    mount();
+    await rtlWaitFor(() => expect(crewTabs().map(t => t.textContent)).toEqual(['Crew 1', 'Smith Drywall', 'Night crew', 'All crews']));
+    expect(crewTabs()[0]).toHaveAttribute('aria-selected', 'true');
+    await screen.findByRole('table');
+    expect(screen.getAllByRole('row')).toHaveLength(2); // header + Crew 1's one report
+    expect(screen.getByLabelText('New report — Crew 1')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Men' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Crew' })).toBeNull();
+  });
+
+  it('switching tabs shows that crew\'s reports and keeps the tab in the URL', async () => {
+    mount();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Smith Drywall' }));
+    expect(screen.getByTestId('search')).toHaveTextContent('?crew=c2');
+    expect(screen.getByRole('tab', { name: 'Smith Drywall' })).toHaveAttribute('aria-selected', 'true');
+    const rows = screen.getAllByRole('row');
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toHaveTextContent('3 men');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Night crew' }));
+    expect(await screen.findByText('No daily reports for Night crew yet')).toBeInTheDocument();
+  });
+
+  it('opens the tab named in the URL, and the first crew for one that is gone', async () => {
+    mount('/project/p1/daily?crew=c2');
+    await rtlWaitFor(() => expect(screen.getByRole('tab', { name: 'Smith Drywall' })).toHaveAttribute('aria-selected', 'true'));
+  });
+
+  it('falls back to the first crew when the URL\'s crew is gone', async () => {
+    mount('/project/p1/daily?crew=deleted');
+    await rtlWaitFor(() => expect(screen.getByRole('tab', { name: 'Crew 1' })).toHaveAttribute('aria-selected', 'true'));
+  });
+
+  it('files a new report under the open crew, and opens it', async () => {
+    crewApi.createDailyReport.mockResolvedValue({ id: 'r2' });
+    mount('/project/p1/daily?crew=c2');
+    await screen.findByLabelText('New report — Smith Drywall');
+    fireEvent.change(screen.getByLabelText('New report — Smith Drywall'), { target: { value: '2026-09-01' } });
+    fireEvent.click(screen.getByRole('button', { name: 'New report' }));
+    await rtlWaitFor(() => expect(crewApi.createDailyReport).toHaveBeenCalledWith('p1', expect.objectContaining({ crewId: 'c2', reportDate: '2026-09-01', jobName: 'P1' })));
+    expect(await screen.findByTestId('editor')).toHaveAttribute('data-report-id', 'r2');
+  });
+
+  it('All crews lists every crew\'s reports with their crew, for viewing — no create, no delete — and opens one', async () => {
+    mount('/project/p1/daily?crew=all');
+    await rtlWaitFor(() => expect(screen.getByRole('tab', { name: 'All crews' })).toHaveAttribute('aria-selected', 'true'));
+    expect(screen.getByRole('columnheader', { name: 'Crew' })).toBeInTheDocument();
+    const rows = screen.getAllByRole('row');
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toHaveTextContent('Crew 1');
+    expect(rows[2]).toHaveTextContent('Smith Drywall');
+    expect(screen.queryByRole('button', { name: 'New report' })).toBeNull();
+    expect(screen.queryByTitle('Delete')).toBeNull();
+    expect(screen.queryByTestId('daily-crew-menu-button')).toBeNull();
+
+    fireEvent.click(rows[2]);
+    expect(await screen.findByTestId('editor')).toHaveAttribute('data-report-id', 'r2');
+    expect(getDailyReport).toHaveBeenCalledWith('r2');
+  });
+
+  it('the All crews calendar shows each crew\'s report on a shared day and opens the clicked one', async () => {
+    localStorage.setItem('dailyReports:view', 'calendar');
+    const today = new Date().toLocaleDateString('en-CA');
+    getDailyReports.mockResolvedValue([{ ...ours, reportDate: today }, { ...theirs, reportDate: today }]);
+    mount('/project/p1/daily?crew=all');
+    expect(await screen.findByTestId('daily-calendar-entry-r1')).toHaveTextContent('Crew 1');
+    expect(screen.getByTestId('daily-calendar-entry-r2')).toHaveTextContent('Smith Drywall');
+    fireEvent.click(screen.getByTestId('daily-calendar-entry-r2'));
+    expect(await screen.findByTestId('editor')).toHaveAttribute('data-report-id', 'r2');
+  });
+
+  it('Add crew asks for a name, adds the crew and opens its tab', async () => {
+    crewApi.createDailyReportCrew.mockResolvedValue(crewRow({ id: 'c4', name: 'Acme Lath', sortOrder: 3 }));
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add crew' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Crew name'), { target: { value: '  Acme Lath ' } });
+    crewApi.getDailyReportCrews.mockResolvedValue([...CREWS, crewRow({ id: 'c4', name: 'Acme Lath', sortOrder: 3 })]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add crew' }));
+
+    await rtlWaitFor(() => expect(crewApi.createDailyReportCrew).toHaveBeenCalledWith('p1', 'Acme Lath'));
+    await rtlWaitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByTestId('search')).toHaveTextContent('?crew=c4');
+    expect(await screen.findByRole('tab', { name: 'Acme Lath' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('a name the server refuses keeps the prompt open and says why; a blank one is caught first', async () => {
+    crewApi.createDailyReportCrew.mockRejectedValue(new Error('There is already a crew named "crew 1" on this project'));
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add crew' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add crew' }));
+    expect(await within(dialog).findByText('Enter a name for the crew.')).toBeInTheDocument();
+    expect(crewApi.createDailyReportCrew).not.toHaveBeenCalled();
+
+    fireEvent.change(within(dialog).getByLabelText('Crew name'), { target: { value: 'crew 1' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add crew' }));
+    expect(await within(dialog).findByText('There is already a crew named "crew 1" on this project')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('renames the open crew from its menu', async () => {
+    crewApi.renameDailyReportCrew.mockResolvedValue(crewRow({ name: 'Our crew' }));
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Crew 1 options' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Rename crew/ }));
+    const dialog = await screen.findByRole('dialog');
+    const input = within(dialog).getByLabelText('Crew name');
+    expect(input).toHaveValue('Crew 1');
+    fireEvent.change(input, { target: { value: 'Our crew' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rename' }));
+    await rtlWaitFor(() => expect(crewApi.renameDailyReportCrew).toHaveBeenCalledWith('c1', 'Our crew'));
+  });
+
+  it('can\'t delete a crew that has reports (and says why); deletes an empty one after asking', async () => {
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Crew 1 options' }));
+    expect(screen.getByRole('menuitem', { name: /Delete crew/ })).toBeDisabled();
+    expect(screen.getByText('Only a crew with no reports can be deleted.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Night crew' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Night crew options' }));
+    const del = screen.getByRole('menuitem', { name: /Delete crew/ });
+    expect(del).toBeEnabled();
+    crewApi.deleteDailyReportCrew.mockResolvedValue(undefined);
+    fireEvent.click(del);
+    await rtlWaitFor(() => expect(crewApi.deleteDailyReportCrew).toHaveBeenCalledWith('c3'));
+    expect(crewApi.confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'Delete crew?', tone: 'danger' }));
+    // Its tab was open: the page goes back to the first crew.
+    await rtlWaitFor(() => expect(screen.getByTestId('search')).toHaveTextContent(/^$/));
+  });
+
+  it('can\'t delete the project\'s only crew', async () => {
+    crewApi.getDailyReportCrews.mockResolvedValue([crewRow()]);
+    getDailyReports.mockResolvedValue([]);
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Crew 1 options' }));
+    expect(screen.getByRole('menuitem', { name: /Delete crew/ })).toBeDisabled();
+    expect(screen.getByText('A project keeps at least one crew.')).toBeInTheDocument();
+  });
+
+  it('a crew added elsewhere shows up without a reload', async () => {
+    mount();
+    await screen.findByRole('tab', { name: 'Night crew' });
+    crewApi.getDailyReportCrews.mockResolvedValue([...CREWS, crewRow({ id: 'c9', name: 'Their crew', sortOrder: 9 })]);
+    act(() => { fakeSocket.fire('entity-changed', { type: 'dailyReportCrew', id: 'c9', projectId: 'p1', action: 'created', bySessionId: 'other' }); });
+    expect(await screen.findByRole('tab', { name: 'Their crew' }, { timeout: 2000 })).toBeInTheDocument();
   });
 });

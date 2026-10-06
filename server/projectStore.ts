@@ -354,6 +354,8 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     db.prepare('DELETE FROM rfis WHERE projectId = ?').run(id);
     // Daily reports' PDF attachments (migration 42).
     db.prepare('DELETE FROM daily_report_attachments WHERE dailyReportId IN (SELECT id FROM daily_reports WHERE projectId = ?)').run(id);
+    // Daily report crews (migration 45).
+    db.prepare('DELETE FROM daily_report_crews WHERE projectId = ?').run(id);
     // Punch rows (Phase 4c) — photos link to punch items, delete photos first.
     db.prepare('DELETE FROM punch_photos WHERE punchItemId IN (SELECT id FROM punch_items WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM punch_items WHERE projectId = ?').run(id);

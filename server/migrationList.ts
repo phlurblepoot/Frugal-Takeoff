@@ -1912,4 +1912,106 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 45,
+    name: 'daily-report-crews',
+    // DATA-TRANSFORMING (supervised). Daily reports become per crew: each
+    // project's Daily Reports page has named crew tabs, each its own set of
+    // reports, one per date per crew (spec
+    // docs/superpowers/specs/2026-10-06-daily-report-crews-design.md).
+    //   * daily_report_crews — one row per crew (name, tab order).
+    //   * daily_reports is REBUILT: SQLite cannot change the table-level
+    //     UNIQUE(projectId, reportDate) in place, so the table is recreated with
+    //     a crewId column and UNIQUE(projectId, crewId, reportDate), every row
+    //     is copied (same ids, so daily_report_photos / daily_report_attachments
+    //     and every files.sourceId / mail link that points at a report still
+    //     resolve), the old table dropped and the new one renamed into place.
+    //     Its indexes and triggers are read from sqlite_master first and
+    //     recreated afterwards.
+    //   * Every project that has reports gets one crew, "Crew 1", and all of
+    //     its reports move into it — including reports of a project that has
+    //     since been deleted (project delete never removed them), so no row is
+    //     lost to the new NOT NULL crewId.
+    // NON-DESTRUCTIVE: no report data changes; nothing references daily_reports
+    // by a declared FOREIGN KEY, so the drop cascades nowhere. The framework
+    // backs the database up first and the whole up() runs in one transaction,
+    // so a failure (e.g. the row-count check below) leaves the table as it was.
+    // Replay-safe: the crews table is IF NOT EXISTS, a project that already
+    // has a crew gets no second one, and a daily_reports that already has
+    // crewId is not rebuilt again.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS daily_report_crews (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          name TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_report_crews_project ON daily_report_crews (projectId);
+      `);
+      const oldCols = (db.prepare(`PRAGMA table_info(daily_reports)`).all() as { name: string }[]).map(c => c.name);
+      if (oldCols.includes('crewId')) return; // already rebuilt
+
+      // "Crew 1" for every project with reports that has no crew yet.
+      const now = Date.now();
+      const insCrew = db.prepare(`INSERT INTO daily_report_crews (id, projectId, name, sortOrder, createdAt, updatedAt)
+        VALUES (?, ?, 'Crew 1', 0, ?, ?)`);
+      const projectIds = (db.prepare(`SELECT DISTINCT projectId FROM daily_reports
+        WHERE projectId NOT IN (SELECT projectId FROM daily_report_crews) ORDER BY projectId`).all() as { projectId: string }[])
+        .map(r => r.projectId);
+      for (const pid of projectIds) insCrew.run(crypto.randomUUID(), pid, now, now);
+
+      // The rebuild. Indexes and triggers are captured before the drop takes
+      // them with it (sql IS NULL = the UNIQUE constraint's own autoindex,
+      // which the new table brings back in its new form).
+      const attached = db.prepare(`SELECT sql FROM sqlite_master
+        WHERE tbl_name = 'daily_reports' AND type IN ('index', 'trigger') AND sql IS NOT NULL`).all() as { sql: string }[];
+      db.exec(`
+        CREATE TABLE daily_reports_new (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          crewId TEXT NOT NULL,
+          reportDate TEXT NOT NULL,
+          startTime TEXT,
+          jobName TEXT NOT NULL DEFAULT '',
+          contractorName TEXT NOT NULL DEFAULT '',
+          weatherSummary TEXT NOT NULL DEFAULT '',
+          temperature TEXT NOT NULL DEFAULT '',
+          weatherHourly TEXT NOT NULL DEFAULT '[]',
+          manCounts TEXT NOT NULL DEFAULT '[]',
+          fieldNotes TEXT NOT NULL DEFAULT '',
+          issues TEXT NOT NULL DEFAULT '',
+          createdBy TEXT,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(projectId, crewId, reportDate)
+        );
+      `);
+      // Copy by name. A column the new table lacks would be lost, so it stops
+      // the migration instead (the transaction rolls back).
+      const newCols = (db.prepare(`PRAGMA table_info(daily_reports_new)`).all() as { name: string }[]).map(c => c.name);
+      const missing = oldCols.filter(c => !newCols.includes(c));
+      if (missing.length) throw new Error(`[migrations] 45: daily_reports has columns the rebuild would drop: ${missing.join(', ')}`);
+      const colList = oldCols.join(', ');
+      db.exec(`
+        INSERT INTO daily_reports_new (${colList}, crewId)
+          SELECT ${colList}, (SELECT c.id FROM daily_report_crews c WHERE c.projectId = daily_reports.projectId
+                              ORDER BY c.sortOrder, c.createdAt, c.id LIMIT 1)
+          FROM daily_reports;
+      `);
+      const count = (t: string) => (db.prepare(`SELECT COUNT(*) c FROM ${t}`).get() as { c: number }).c;
+      const before = count('daily_reports');
+      if (count('daily_reports_new') !== before) throw new Error('[migrations] 45: daily_reports row count changed during the rebuild');
+      db.exec(`
+        DROP TABLE daily_reports;
+        ALTER TABLE daily_reports_new RENAME TO daily_reports;
+      `);
+      for (const { sql } of attached) db.exec(sql);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_daily_reports_project ON daily_reports (projectId);');
+      console.log(`[migrations] 45: ${before} daily report(s) moved into "Crew 1" on ${projectIds.length} project(s)`);
+    },
+  },
 ];

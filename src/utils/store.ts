@@ -1920,8 +1920,17 @@ export const dismissRfiPendingReply = async (id: string): Promise<void> => {
 export interface DailyReportPhoto { id: string; fileId: string; sortOrder: number; }
 export interface ManCountLine { type: string; count: number; }
 export interface DailyWeatherHour { hour: string; tempF: number | null; condition: string; }
+// A crew is a named tab on a project's Daily Reports page — the company's own
+// crew or a sub's — and its own set of reports, one per date (migration 45).
+export interface DailyReportCrew {
+  id: string; projectId: string; name: string; sortOrder: number; createdAt: number; updatedAt: number;
+  reportCount: number; // a crew with reports can be renamed, not deleted
+}
 export interface DailyReport {
   id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
+  // The crew it was filed under. crewName is null only for a report whose
+  // crew is gone (a deleted project's).
+  crewId: string; crewName: string | null;
   // 'HH:MM' (24-hour); the weather covers it through 12 hours later. Null on
   // reports made before it existed (migration 44) — their weather is 6 AM–6 PM.
   startTime: string | null;
@@ -1932,7 +1941,8 @@ export interface DailyReport {
   attachments: PdfAttachment[]; // appended to the daily report PDF after the photos (migration 42)
 }
 export interface DailyReportListItem {
-  id: string; projectId: string; reportDate: string; jobName: string; contractorName: string; startTime: string | null;
+  id: string; projectId: string; crewId: string; crewName: string | null;
+  reportDate: string; jobName: string; contractorName: string; startTime: string | null;
   weatherSummary: string; temperature: string; manCounts: ManCountLine[];
   createdBy: string | null; createdAt: number; updatedAt: number; version: number; photoCount: number;
 }
@@ -1953,7 +1963,23 @@ export const getDailyReport = async (id: string): Promise<DailyReport> => {
   const res = await fetchWithRetry(`/api/daily-reports/${id}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const createDailyReport = async (projectId: string, input: { reportDate: string; jobName?: string; contractorName?: string }): Promise<{ id: string }> => {
+export const getDailyReportCrews = async (projectId: string): Promise<DailyReportCrew[]> => {
+  // Listing makes the project's first crew ("Crew 1") when it has none yet.
+  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-report-crews`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+// A blank or duplicate name, or deleting a crew that has reports (or the
+// last one), fails with the server's own explanation as the error message.
+export const createDailyReportCrew = async (projectId: string, name: string): Promise<DailyReportCrew> => {
+  const res = await dailyJson('POST', `/api/projects/${projectId}/daily-report-crews`, { name }); await handleResponse(res); return res.json();
+};
+export const renameDailyReportCrew = async (id: string, name: string): Promise<DailyReportCrew> => {
+  const res = await dailyJson('PUT', `/api/daily-report-crews/${id}`, { name }); await handleResponse(res); return res.json();
+};
+export const deleteDailyReportCrew = async (id: string): Promise<void> => {
+  const res = await dailyJson('DELETE', `/api/daily-report-crews/${id}`); await handleResponse(res);
+};
+export const createDailyReport = async (projectId: string, input: { crewId: string; reportDate: string; jobName?: string; contractorName?: string }): Promise<{ id: string }> => {
   const res = await dailyJson('POST', `/api/projects/${projectId}/daily-reports`, input);
   if (res.status === 409) {
     const b = await res.json().catch(() => ({} as any));

@@ -318,16 +318,37 @@ describe('GET /api/documents — source label resolution', () => {
     expect(row.source).toEqual({ type: 'takeoff-print', id: 'po-1', label: 'Printout.pdf', href: '/project/p1/takeoff' });
   });
 
-  it('resolves a dailyReport label (Daily Report — <date>) with an href to the project daily-reports list', async () => {
-    const dr = await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' });
+  // One date can hold a report per crew (migration 45): the crew names the
+  // report too, and the link opens that crew's tab.
+  it('resolves a dailyReport label (Daily Report — <date> — <crew>) with an href to its crew\'s tab', async () => {
+    const crewId = (await request(app).get('/api/projects/p1/daily-report-crews')).body[0].id;
+    const sub = (await request(app).post('/api/projects/p1/daily-report-crews').send({ name: 'Smith & Sons' })).body;
+    const dr = await request(app).post('/api/projects/p1/daily-reports').send({ crewId, reportDate: '2026-08-20' });
+    const subDr = await request(app).post('/api/projects/p1/daily-reports').send({ crewId: sub.id, reportDate: '2026-08-20' });
     const pdfFid = await upload('dr-pdf', { projectId: 'p1', kind: 'daily-report', sourceType: 'dailyReport', sourceId: dr.body.id, name: 'DailyReport.pdf' });
     const photoFid = await upload('dr-photo', { projectId: 'p1', kind: 'daily-report-photo', sourceType: 'dailyReport', sourceId: dr.body.id, name: 'photo.jpg' });
+    const subFid = await upload('dr-sub-pdf', { projectId: 'p1', kind: 'daily-report', sourceType: 'dailyReport', sourceId: subDr.body.id, name: 'DailyReport-sub.pdf' });
 
     const res = await request(app).get('/api/documents');
     const byId = Object.fromEntries(res.body.rows.map((r: any) => [r.id, r]));
 
-    expect(byId[pdfFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20', href: '/project/p1/daily-reports' });
-    expect(byId[photoFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20', href: '/project/p1/daily-reports' });
+    const href = `/project/p1/daily-reports?crew=${crewId}`;
+    expect(byId[pdfFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20 — Crew 1', href });
+    expect(byId[photoFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20 — Crew 1', href });
+    expect(byId[subFid].source).toEqual({
+      type: 'dailyReport', id: subDr.body.id, label: 'Daily Report — 2026-08-20 — Smith & Sons',
+      href: `/project/p1/daily-reports?crew=${sub.id}`,
+    });
+  });
+
+  it('a daily report whose crew is gone keeps its date label and links to the page', async () => {
+    const crewId = (await request(app).get('/api/projects/p1/daily-report-crews')).body[0].id;
+    const dr = await request(app).post('/api/projects/p1/daily-reports').send({ crewId, reportDate: '2026-08-20' });
+    const fid = await upload('dr-orphan', { projectId: 'p1', kind: 'daily-report', sourceType: 'dailyReport', sourceId: dr.body.id, name: 'DailyReport.pdf' });
+    db.prepare('DELETE FROM daily_report_crews WHERE id = ?').run(crewId);
+
+    const row = (await request(app).get('/api/documents')).body.rows.find((r: any) => r.id === fid);
+    expect(row.source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20', href: '/project/p1/daily-reports' });
   });
 
   it('resolves a payment attachment to what the payment paid, linking to that payment on the Payments tab', async () => {

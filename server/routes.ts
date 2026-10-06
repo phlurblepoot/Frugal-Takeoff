@@ -36,6 +36,9 @@ import {
 } from './rfiStore';
 import {
   getDailyReport, listDailyReports, createDailyReport, saveDailyReport, deleteDailyReport,
+  listCrews as listDailyCrews, createCrew as createDailyCrew, renameCrew as renameDailyCrew,
+  deleteCrew as deleteDailyCrew, getCrew as getDailyCrew, CrewConflictError as DailyCrewConflictError,
+  dailyReportActivityName,
   addPhoto as addDailyPhoto, removePhoto as removeDailyPhoto,
   addAttachment as addDailyAttachment, updateAttachment as updateDailyAttachment, removeAttachment as removeDailyAttachment,
   ValidationError as DailyValidationError, ConflictError as DailyConflictError,
@@ -997,6 +1000,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   // ── Daily Reports (any authenticated user — field-created, like RFIs) ──────
   const dailyErr = (e: unknown, res: express.Response) => {
     if (e instanceof DailyDateTakenError) return res.status(409).json({ error: 'date_taken', existingId: e.existingId });
+    if (e instanceof DailyCrewConflictError) return res.status(409).json({ error: e.message, code: e.code });
     if (e instanceof DailyNotFoundError) return res.status(404).json({ error: e.message });
     if (e instanceof DailyConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
     if (e instanceof DailyValidationError) return res.status(400).json({ error: e.message });
@@ -1004,13 +1008,46 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     return res.status(500).json({ error: 'Daily report operation failed' });
   };
 
+  // Crews: each is its own set of daily reports (spec
+  // docs/superpowers/specs/2026-10-06-daily-report-crews-design.md). Listing
+  // makes a project's first crew ("Crew 1") when it has none, so the page
+  // always has a tab to file under.
+  app.get('/api/projects/:id/daily-report-crews', authenticateToken, (req, res) => {
+    try { res.json(listDailyCrews(db, req.params.id)); } catch (e) { dailyErr(e, res); }
+  });
+  app.post('/api/projects/:id/daily-report-crews', authenticateToken, (req, res) => {
+    try {
+      const crew = createDailyCrew(db, req.params.id, req.body?.name);
+      deps.broadcastChange({ type: 'dailyReportCrew', id: crew.id, projectId: crew.projectId, action: 'created', ...requestMeta(req) });
+      res.json(crew);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.put('/api/daily-report-crews/:id', authenticateToken, (req, res) => {
+    try {
+      const crew = renameDailyCrew(db, req.params.id, req.body?.name);
+      deps.broadcastChange({ type: 'dailyReportCrew', id: crew.id, projectId: crew.projectId, action: 'updated', ...requestMeta(req) });
+      res.json(crew);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.delete('/api/daily-report-crews/:id', authenticateToken, (req, res) => {
+    try {
+      const before = getDailyCrew(db, req.params.id);
+      deleteDailyCrew(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'dailyReportCrew', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+
+  // ?crewId= narrows the list to one crew's reports; without it, every crew's.
   app.get('/api/projects/:id/daily-reports', authenticateToken, (req, res) => {
-    try { res.json(listDailyReports(db, req.params.id)); } catch (e) { dailyErr(e, res); }
+    const crewId = typeof req.query.crewId === 'string' && req.query.crewId ? req.query.crewId : undefined;
+    try { res.json(listDailyReports(db, req.params.id, crewId)); } catch (e) { dailyErr(e, res); }
   });
   app.post('/api/projects/:id/daily-reports', authenticateToken, (req, res) => {
     try {
       const r = createDailyReport(db, req.params.id, req.body, (req as any).user?.username);
-      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'daily_report_created', message: `Daily report ${req.body?.reportDate ?? ''} created` });
+      const created = getDailyReport(db, r.id);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'daily_report_created', message: `Daily report ${dailyReportActivityName(created)} created` });
       deps.broadcastChange({ type: 'dailyReport', id: r.id, projectId: req.params.id, version: 1, action: 'created', ...requestMeta(req) });
       res.json(r);
     } catch (e) { dailyErr(e, res); }
@@ -2167,13 +2204,15 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     const report = getDailyReport(db, req.params.id);
     if (!report) { res.status(404).json({ error: 'Daily report not found' }); return; }
     // Mirrors dailyReportPdf.ts's sanitizeForFileName + dailyReportFileName
-    // (client can't be imported server-side) — falls back to date-only when
-    // jobName is blank.
-    const sanitizedJobName = (report.jobName as string || '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
+    // (client can't be imported server-side): DailyReport-<job>-<crew>-<date>,
+    // each name part left out when blank. The crew is in both the file name
+    // and the subject — one date can have a report per crew.
+    const sanitize = (s: unknown) => (typeof s === 'string' ? s : '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
+    const nameParts = [sanitize(report.jobName), sanitize(report.crewName)].filter(Boolean);
     const r = await sendItem(req, res, {
       itemType: 'dailyReport', itemId: report.id,
-      primaryName: sanitizedJobName ? `DailyReport-${sanitizedJobName}-${report.reportDate}.pdf` : `DailyReport-${report.reportDate}.pdf`,
-      defaultSubject: `Daily Report — ${report.reportDate}${report.jobName ? ` — ${report.jobName}` : ''}`,
+      primaryName: `DailyReport-${[...nameParts, report.reportDate].join('-')}.pdf`,
+      defaultSubject: `Daily Report — ${report.reportDate}${report.crewName ? ` — ${report.crewName}` : ''}${report.jobName ? ` — ${report.jobName}` : ''}`,
       defaultBody: 'Please find the attached daily report.',
     });
     if (!r) return;

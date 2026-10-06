@@ -18,6 +18,12 @@ export const formatReportDate = (d: string): string => {
     .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
+// How the app names one report: since one date can hold a report per crew,
+// the crew goes with the date — "Daily Report — Aug 26, 2026 — Crew 1". A
+// report without a crew name (its crew is gone) is named by its date alone.
+export const dailyReportTitle = (r: { reportDate: string; crewName?: string | null }): string =>
+  `Daily Report — ${formatReportDate(r.reportDate)}${r.crewName ? ` — ${r.crewName}` : ''}`;
+
 // A report's start time ('HH:MM', 24-hour) as the app shows it: "7:00 AM".
 // Blank for none (a report made before start times existed); a malformed value
 // falls back to the raw string, as formatReportDate does.
