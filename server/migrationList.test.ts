@@ -1381,3 +1381,72 @@ describe('migration 45: daily-report-crews', () => {
     db.close();
   });
 });
+
+describe('migration 46: invoices-auto-paid', () => {
+  // A v45 database with invoices in every state the rule distinguishes.
+  const seedV45 = () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 45));
+    db.prepare(`INSERT INTO projects (id, name, createdAt) VALUES ('p1', 'Dania', 1)`).run();
+    const inv = db.prepare(`INSERT INTO invoices (id, projectId, number, status, version, createdAt, updatedAt) VALUES (?, 'p1', ?, ?, 3, 5, 6)`);
+    const line = db.prepare(`INSERT INTO invoice_lines (id, invoiceId, description, qty, unitPrice, sortOrder) VALUES (?, ?, 'x', ?, ?, 0)`);
+    const pay = db.prepare(`INSERT INTO payments (id, targetType, targetId, date, amount, createdAt) VALUES (?, ?, ?, 1, ?, 1)`);
+    // Paid in full, still 'sent' → marked paid. Three 0.1 lines = 30¢ exactly.
+    inv.run('full', '1001', 'sent');
+    ['a', 'b', 'c'].forEach(l => line.run(`full-${l}`, 'full', 1, 0.1));
+    pay.run('pf1', 'invoice', 'full', 0.1); pay.run('pf2', 'invoice', 'full', 0.2);
+    // Overpaid → paid.
+    inv.run('over', '1002', 'sent'); line.run('over-a', 'over', 2, 50); pay.run('po', 'invoice', 'over', 150);
+    // Partly paid by one cent → stays sent.
+    inv.run('part', '1003', 'sent'); line.run('part-a', 'part', 1, 100); pay.run('pp', 'invoice', 'part', 99.99);
+    // $0 invoice with a payment → stays sent (nothing to cover).
+    inv.run('zero', '1004', 'sent'); pay.run('pz', 'invoice', 'zero', 10);
+    // A fully paid draft is not touched by the backfill.
+    inv.run('draft', '1005', 'draft'); line.run('draft-a', 'draft', 1, 40); pay.run('pd', 'invoice', 'draft', 40);
+    // Already paid → untouched.
+    inv.run('paid', '1006', 'paid'); line.run('paid-a', 'paid', 1, 40);
+    // A pay application payment with the same id as an invoice never counts for it.
+    inv.run('payapp', '1007', 'sent'); line.run('payapp-a', 'payapp', 1, 40); pay.run('pa', 'payapp', 'payapp', 40);
+    return { db, dir };
+  };
+  const statuses = (db: any) => Object.fromEntries(
+    (db.prepare('SELECT id, status FROM invoices ORDER BY id').all() as { id: string; status: string }[]).map(r => [r.id, r.status]));
+
+  it('marks sent invoices whose payments cover a total over $0 paid, and nothing else', () => {
+    const { db, dir } = seedV45();
+    runMigrations(db, dir, migrations);
+    expect(statuses(db)).toEqual({
+      full: 'paid', over: 'paid', part: 'sent', zero: 'sent', draft: 'draft', paid: 'paid', payapp: 'sent',
+    });
+    db.close();
+  });
+
+  it('changes only the status: version, updatedAt, lines and payments are as they were', () => {
+    const { db, dir } = seedV45();
+    const others = (d: any) => ({
+      invoices: d.prepare('SELECT id, number, version, createdAt, updatedAt FROM invoices ORDER BY id').all(),
+      lines: d.prepare('SELECT * FROM invoice_lines ORDER BY id').all(),
+      payments: d.prepare('SELECT * FROM payments ORDER BY id').all(),
+    });
+    const before = others(db);
+    runMigrations(db, dir, migrations);
+    expect(others(db)).toEqual(before);
+    db.close();
+  });
+
+  it('replaying up() is a no-op, and a fresh install runs it cleanly', () => {
+    const { db, dir } = seedV45();
+    runMigrations(db, dir, migrations);
+    const after = statuses(db);
+    const m46 = migrations.find(m => m.version === 46)!;
+    expect(() => m46.up({ db, dataDir: dir })).not.toThrow();
+    expect(statuses(db)).toEqual(after);
+    db.close();
+
+    const fresh = openDb(':memory:');
+    expect(() => runMigrations(fresh, tmpDir(), migrations)).not.toThrow();
+    expect(fresh.prepare('SELECT MAX(version) v FROM schema_version').get()).toEqual({ v: 46 });
+    fresh.close();
+  });
+});

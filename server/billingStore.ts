@@ -83,6 +83,44 @@ function lineTotalsCents(db: Database.Database, invoiceId: string): number {
   return sumCents(lines);
 }
 
+// An invoice's status follows its payments (spec
+// docs/superpowers/specs/2026-10-06-reports-design.md): once they cover a
+// total over $0 a draft or sent invoice is 'paid', and a 'paid' invoice whose
+// balance opens up again (a payment deleted or reduced, its lines grown) goes
+// back to 'sent'. Any other status — a manual pick the numbers don't
+// contradict — is kept. A fully-paid draft turns 'paid' too: the customer has
+// paid it, and as a draft it would stay out of every billed figure.
+export function autoInvoiceStatus(status: string, totalCents: number, paidCents: number): string {
+  if ((status === 'draft' || status === 'sent') && totalCents > 0 && paidCents >= totalCents) return 'paid';
+  if (status === 'paid' && totalCents - paidCents > 0) return 'sent';
+  return status;
+}
+
+/** An invoice whose status a payment change moved (see syncInvoicePaidStatus). */
+export interface InvoiceStatusChange { invoiceId: string; status: string }
+
+// Applies autoInvoiceStatus to a stored invoice. Runs inside the caller's
+// transaction, after the payment change that may have moved the balance.
+// Returns the change when the status moved, else null (also for an unknown
+// invoice).
+//
+// version and updatedAt are deliberately left alone. A payment never bumps
+// the invoice's version, so neither does the status it implies: bumping it
+// would fail the next save of an invoice editor someone has open elsewhere
+// with a conflict over a change they can't see. saveInvoice resolves the
+// status it writes through the same rule, so the status that editor echoes
+// back can't overwrite this one. The PDF never prints the status (its PAID
+// stamp comes from the amounts), and the payment change already stamped
+// updatedAt where Paid/Balance moved.
+export function syncInvoicePaidStatus(db: Database.Database, invoiceId: string): InvoiceStatusChange | null {
+  const row = db.prepare('SELECT status FROM invoices WHERE id = ?').get(invoiceId) as { status: string } | undefined;
+  if (!row) return null;
+  const status = autoInvoiceStatus(row.status, lineTotalsCents(db, invoiceId), paidCentsFor(db, 'invoice', invoiceId));
+  if (status === row.status) return null;
+  db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run(status, invoiceId);
+  return { invoiceId, status };
+}
+
 function writeLines(db: Database.Database, invoiceId: string, lines: LineInput[]): void {
   db.prepare('DELETE FROM invoice_lines WHERE invoiceId = ?').run(invoiceId);
   const ins = db.prepare('INSERT INTO invoice_lines (id, invoiceId, description, qty, unitPrice, sortOrder) VALUES (?, ?, ?, ?, ?, ?)');
@@ -178,6 +216,13 @@ export function saveInvoice(db: Database.Database, id: string, input: InvoiceInp
     if (row.version !== input.version) throw new ConflictError(`Invoice changed since it was loaded (server v${row.version}, payload v${input.version})`);
     newVersion = row.version + 1;
 
+    // The status written follows the payments, as after a payment change
+    // (syncInvoicePaidStatus): new lines can settle the invoice or open its
+    // balance again. It also keeps a stale status out — the editor echoes the
+    // status it loaded, and a payment recorded since may have moved it without
+    // bumping the version this save was checked against.
+    const status = autoInvoiceStatus(input.status ?? 'draft', sumCents(lines), paidCentsFor(db, 'invoice', id));
+
     // notes is internal-only — never printed on the invoice PDF or included in
     // invoice emails (Nathan's ruling) — so a save that only touches notes must
     // not flip the generated-PDF "up to date" freshness chip the way an edit to
@@ -189,16 +234,16 @@ export function saveInvoice(db: Database.Database, id: string, input: InvoiceInp
     const contentChanged =
       (input.number ?? null) !== row.number ||
       (input.date ?? null) !== row.date ||
-      (input.status ?? 'draft') !== row.status ||
+      status !== row.status ||
       (input.terms ?? null) !== row.terms ||
       lineContentKey(lines) !== lineContentKey(oldLines);
 
     if (contentChanged) {
       db.prepare('UPDATE invoices SET number = ?, date = ?, status = ?, terms = ?, notes = ?, version = ?, updatedAt = ? WHERE id = ?')
-        .run(input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, notes, newVersion, Date.now(), id);
+        .run(input.number ?? null, input.date ?? null, status, input.terms ?? null, notes, newVersion, Date.now(), id);
     } else {
       db.prepare('UPDATE invoices SET number = ?, date = ?, status = ?, terms = ?, notes = ?, version = ? WHERE id = ?')
-        .run(input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, notes, newVersion, id);
+        .run(input.number ?? null, input.date ?? null, status, input.terms ?? null, notes, newVersion, id);
     }
     writeLines(db, id, lines);
   });
@@ -273,7 +318,11 @@ export function deleteInvoice(db: Database.Database, id: string): void {
 interface PaymentInput { date?: number | null; amount?: number; method?: string | null; note?: string | null; }
 
 // A payment targets an invoice OR an AIA pay application (polymorphic, migration 13).
-export function recordPayment(db: Database.Database, targetType: string, targetId: string, input: PaymentInput): { id: string } {
+// invoiceStatusChange: the paid invoice's new status when this payment
+// settled it (syncInvoicePaidStatus), else null — routes broadcast it.
+export function recordPayment(db: Database.Database, targetType: string, targetId: string, input: PaymentInput): {
+  id: string; invoiceStatusChange: InvoiceStatusChange | null;
+} {
   if (!(PAYMENT_TARGET_TYPES as readonly string[]).includes(targetType)) {
     throw new ValidationError(`Invalid payment target type: ${targetType}`);
   }
@@ -283,13 +332,15 @@ export function recordPayment(db: Database.Database, targetType: string, targetI
   if (!Number.isFinite(input.amount) || (input.amount as number) <= 0) throw new ValidationError('Payment amount must be a positive number');
   const id = crypto.randomUUID();
   const now = Date.now();
+  let invoiceStatusChange: InvoiceStatusChange | null = null;
   const tx = db.transaction(() => {
     db.prepare('INSERT INTO payments (id, targetType, targetId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(id, targetType, targetId, input.date ?? now, input.amount, input.method ?? null, input.note ?? null, now);
     touchPaymentTarget(db, targetType, targetId, now);
+    if (targetType === 'invoice') invoiceStatusChange = syncInvoicePaidStatus(db, targetId);
   });
   tx();
-  return { id };
+  return { id, invoiceStatusChange };
 }
 
 // The invoice PDF and the pay-app G702 both print Paid-to-date and Balance, so
@@ -304,7 +355,10 @@ function touchPaymentTarget(db: Database.Database, targetType: string, targetId:
   db.prepare(`UPDATE ${table} SET updatedAt = ? WHERE id = ?`).run(now, targetId);
 }
 
-export function deletePayment(db: Database.Database, id: string): void {
+// Returns the paid invoice's status change when deleting the payment reopened
+// its balance (a 'paid' invoice back to 'sent'), else null.
+export function deletePayment(db: Database.Database, id: string): InvoiceStatusChange | null {
+  let invoiceStatusChange: InvoiceStatusChange | null = null;
   const tx = db.transaction(() => {
     // Read the target before the row goes away — the deletion changes the same
     // Paid/Balance figures the insert does.
@@ -313,8 +367,10 @@ export function deletePayment(db: Database.Database, id: string): void {
     db.prepare('DELETE FROM payment_attachments WHERE paymentId = ?').run(id);
     db.prepare('DELETE FROM payments WHERE id = ?').run(id);
     if (row) touchPaymentTarget(db, row.targetType, row.targetId, Date.now());
+    if (row?.targetType === 'invoice') invoiceStatusChange = syncInvoicePaidStatus(db, row.targetId);
   });
   tx();
+  return invoiceStatusChange;
 }
 
 // Edits a recorded payment's date, amount, method and note; what it paid
@@ -327,7 +383,11 @@ export function deletePayment(db: Database.Database, id: string): void {
 // only an amount change stamps the target out of date the way a record or a
 // delete does. A date, method or note fix leaves its PDF current (the same
 // reasoning as saveInvoice's notes-only exemption).
-export function updatePayment(db: Database.Database, id: string, input: PaymentInput): void {
+//
+// An amount change can settle the paid invoice or reopen its balance; the
+// status change that follows (syncInvoicePaidStatus) is returned, else null.
+export function updatePayment(db: Database.Database, id: string, input: PaymentInput): InvoiceStatusChange | null {
+  let invoiceStatusChange: InvoiceStatusChange | null = null;
   const tx = db.transaction(() => {
     const row = db.prepare('SELECT targetType, targetId, date, amount, method, note FROM payments WHERE id = ?').get(id) as
       { targetType: string; targetId: string; date: number | null; amount: number; method: string | null; note: string | null } | undefined;
@@ -340,9 +400,13 @@ export function updatePayment(db: Database.Database, id: string, input: PaymentI
     const note = input.note === undefined ? row.note : normalizeNotes(input.note);
     db.prepare('UPDATE payments SET date = ?, amount = ?, method = ?, note = ? WHERE id = ?')
       .run(input.date ?? row.date, amount, method, note, id);
-    if (toCents(amount) !== toCents(row.amount)) touchPaymentTarget(db, row.targetType, row.targetId, Date.now());
+    if (toCents(amount) !== toCents(row.amount)) {
+      touchPaymentTarget(db, row.targetType, row.targetId, Date.now());
+      if (row.targetType === 'invoice') invoiceStatusChange = syncInvoicePaidStatus(db, row.targetId);
+    }
   });
   tx();
+  return invoiceStatusChange;
 }
 
 // What a payment paid, in words: 'Invoice 1001' / 'Application #3'. Expects
@@ -445,7 +509,9 @@ export function removePaymentAttachment(db: Database.Database, paymentId: string
 }
 
 // Status-only change (draft→sent→paid or back). Version-checked like saveInvoice
-// but leaves lines untouched.
+// but leaves lines untouched. This is the manual pick, so it is not run through
+// autoInvoiceStatus: a hand-set status stands until the next payment change or
+// line edit applies the rule.
 export function setInvoiceStatus(db: Database.Database, id: string, status: string): { version: number; status: string } {
   if (!(INVOICE_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid invoice status: ${status}`);
   let out = { version: 0, status };

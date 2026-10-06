@@ -2014,4 +2014,39 @@ export const migrations: Migration[] = [
       console.log(`[migrations] 45: ${before} daily report(s) moved into "Crew 1" on ${projectIds.length} project(s)`);
     },
   },
+  {
+    version: 46,
+    name: 'invoices-auto-paid',
+    // DATA-TRANSFORMING (supervised). Invoices now turn 'paid' by themselves
+    // once their payments cover the total (billingStore.syncInvoicePaidStatus,
+    // spec docs/superpowers/specs/2026-10-06-reports-design.md). This marks the
+    // ones that already were: every 'sent' invoice with a total over $0 whose
+    // payments reach it. Totals use the store's cents maths, inlined so a later
+    // store change can't alter what this migration did: each line's qty ×
+    // unitPrice rounded to cents before summing (sumCents), each payment rounded
+    // to cents (paidCentsFor).
+    // Only the status changes. version and updatedAt stay as they are, as they
+    // do when a payment moves the status, so no open editor conflicts and no
+    // stored PDF reads out of date (the PDF never prints the status). Drafts,
+    // invoices already 'paid', and partly paid or $0 invoices are untouched.
+    // Replay-safe: a second run finds nothing left to mark.
+    up({ db }) {
+      const cents = (dollars: unknown): number => Math.round((Number(dollars) || 0) * 100);
+      const sent = db.prepare(`SELECT id FROM invoices WHERE status = 'sent'`).all() as { id: string }[];
+      const linesOf = db.prepare('SELECT qty, unitPrice FROM invoice_lines WHERE invoiceId = ?');
+      const paymentsOf = db.prepare(`SELECT amount FROM payments WHERE targetType = 'invoice' AND targetId = ?`);
+      const markPaid = db.prepare(`UPDATE invoices SET status = 'paid' WHERE id = ?`);
+      let marked = 0;
+      for (const { id } of sent) {
+        const totalCents = (linesOf.all(id) as { qty: number; unitPrice: number }[])
+          .reduce((acc, l) => acc + cents((Number(l.qty) || 0) * (Number(l.unitPrice) || 0)), 0);
+        if (totalCents <= 0) continue;
+        const paidCents = (paymentsOf.all(id) as { amount: number }[]).reduce((acc, p) => acc + cents(p.amount), 0);
+        if (paidCents < totalCents) continue;
+        markPaid.run(id);
+        marked++;
+      }
+      console.log(`[migrations] 46: ${marked} fully paid invoice(s) marked paid`);
+    },
+  },
 ];

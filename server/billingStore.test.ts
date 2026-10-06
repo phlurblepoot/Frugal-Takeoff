@@ -17,7 +17,7 @@ import {
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus,
   deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
   addChangeOrderAttachment, updateChangeOrderAttachment, removeChangeOrderAttachment,
-  listBilledDocuments,
+  listBilledDocuments, autoInvoiceStatus, syncInvoicePaidStatus,
 } from './billingStore';
 import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp, lockSov, SovLockedError, deletePayApp } from './aiaStore';
 
@@ -483,6 +483,134 @@ describe('payment detail, edits and attachments (migration 43)', () => {
     expect(attachmentRows(third.id)).toBe(0);
     // The photo itself is still a document — only the links went.
     expect(db.prepare('SELECT id FROM files WHERE id = ?').get('a')).toBeTruthy();
+  });
+});
+
+// Invoices are marked paid automatically (spec
+// docs/superpowers/specs/2026-10-06-reports-design.md): paid once payments
+// cover the total, back to sent when a balance opens up again.
+describe('automatic paid status', () => {
+  const row = (id: string) => db.prepare('SELECT status, version, updatedAt FROM invoices WHERE id = ?').get(id) as
+    { status: string; version: number; updatedAt: number };
+  const sentInvoice = (unitPrice = 100) => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', status: 'sent', lines: [{ description: 'A', qty: 1, unitPrice }] });
+    return id;
+  };
+
+  it('autoInvoiceStatus: covered in full → paid; a paid one with a balance → sent; anything else kept', () => {
+    expect(autoInvoiceStatus('sent', 10000, 10000)).toBe('paid');
+    expect(autoInvoiceStatus('sent', 10000, 12000)).toBe('paid'); // overpaid
+    expect(autoInvoiceStatus('draft', 10000, 10000)).toBe('paid');
+    expect(autoInvoiceStatus('sent', 10000, 9999)).toBe('sent');
+    expect(autoInvoiceStatus('paid', 10000, 9999)).toBe('sent');
+    expect(autoInvoiceStatus('paid', 10000, 10000)).toBe('paid');
+    // A $0 invoice is never "covered": its status is left as it is.
+    expect(autoInvoiceStatus('sent', 0, 0)).toBe('sent');
+    expect(autoInvoiceStatus('sent', 0, 500)).toBe('sent');
+    expect(autoInvoiceStatus('paid', 0, 0)).toBe('paid');
+    expect(autoInvoiceStatus('draft', 10000, 5000)).toBe('draft');
+  });
+
+  it('recording a payment that covers the total marks the invoice paid, and says so', () => {
+    const id = sentInvoice();
+    const r = recordPayment(db, 'invoice', id, { amount: 100 });
+    expect(r.invoiceStatusChange).toEqual({ invoiceId: id, status: 'paid' });
+    expect(getInvoice(db, id)).toMatchObject({ status: 'paid', balanceCents: 0 });
+  });
+
+  it('a partial payment leaves it sent; the one that completes it marks it paid (cents, no float drift)', () => {
+    const { id } = createInvoice(db, 'p1', { status: 'sent', lines: [
+      { description: 'a', qty: 1, unitPrice: 0.1 }, { description: 'b', qty: 1, unitPrice: 0.2 },
+    ] }); // 30 cents
+    expect(recordPayment(db, 'invoice', id, { amount: 0.1 }).invoiceStatusChange).toBeNull();
+    expect(row(id).status).toBe('sent');
+    expect(recordPayment(db, 'invoice', id, { amount: 0.2 }).invoiceStatusChange).toEqual({ invoiceId: id, status: 'paid' });
+    expect(row(id).status).toBe('paid');
+  });
+
+  it('deleting a payment puts a paid invoice back to sent', () => {
+    const id = sentInvoice();
+    recordPayment(db, 'invoice', id, { amount: 60 });
+    const last = recordPayment(db, 'invoice', id, { amount: 40 });
+    expect(row(id).status).toBe('paid');
+    expect(deletePayment(db, last.id)).toEqual({ invoiceId: id, status: 'sent' });
+    expect(row(id).status).toBe('sent');
+    expect(deletePayment(db, 'no-such-payment')).toBeNull();
+  });
+
+  it('reducing a payment puts it back to sent; raising it again marks it paid; a note edit changes nothing', () => {
+    const id = sentInvoice();
+    const pay = recordPayment(db, 'invoice', id, { amount: 100 });
+    expect(updatePayment(db, pay.id, { note: 'check #1042' })).toBeNull();
+    expect(row(id).status).toBe('paid');
+    expect(updatePayment(db, pay.id, { amount: 99.99 })).toEqual({ invoiceId: id, status: 'sent' });
+    expect(row(id).status).toBe('sent');
+    expect(updatePayment(db, pay.id, { amount: 100 })).toEqual({ invoiceId: id, status: 'paid' });
+    expect(row(id).status).toBe('paid');
+  });
+
+  it('a save that grows the lines past what was paid puts it back to sent; shrinking them to the payments marks it paid', () => {
+    const id = sentInvoice();
+    recordPayment(db, 'invoice', id, { amount: 100 });
+    saveInvoice(db, id, { ...getInvoice(db, id)!, lines: [{ description: 'A', qty: 1, unitPrice: 100 }, { description: 'Extra', qty: 1, unitPrice: 25 }] });
+    expect(getInvoice(db, id)).toMatchObject({ status: 'sent', balanceCents: 2500 });
+    saveInvoice(db, id, { ...getInvoice(db, id)!, lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
+    expect(getInvoice(db, id)).toMatchObject({ status: 'paid', balanceCents: 0 });
+  });
+
+  it('a fully paid draft is marked paid too; a partly paid draft stays a draft', () => {
+    const { id } = createInvoice(db, 'p1', { lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
+    recordPayment(db, 'invoice', id, { amount: 50 });
+    expect(row(id).status).toBe('draft');
+    recordPayment(db, 'invoice', id, { amount: 50 });
+    expect(row(id).status).toBe('paid');
+  });
+
+  it('a manual status pick stands until the next payment or line change', () => {
+    const id = sentInvoice();
+    recordPayment(db, 'invoice', id, { amount: 40 });
+    setInvoiceStatus(db, id, 'paid'); // marked paid by hand with $60 still owing
+    expect(row(id).status).toBe('paid');
+    recordPayment(db, 'invoice', id, { amount: 10 }); // the rule applies again
+    expect(row(id).status).toBe('sent');
+  });
+
+  it('pay application payments never touch invoice statuses', () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 1, 'finalized', 1, 1)").run();
+    expect(recordPayment(db, 'payapp', 'app1', { amount: 500 }).invoiceStatusChange).toBeNull();
+  });
+
+  // The automatic change doesn't bump version, so an invoice editor open
+  // elsewhere can still save — and what it echoes back can't undo the change.
+  it('leaves version and updatedAt alone, so an open editor still saves, without writing its stale status back', async () => {
+    const id = sentInvoice();
+    const loaded = getInvoice(db, id)!; // an editor opens the invoice while it is 'sent'
+    await new Promise(r => setTimeout(r, 2));
+    const pay = recordPayment(db, 'invoice', id, { amount: 100 });
+    const afterPayment = row(id);
+    expect(afterPayment.status).toBe('paid');
+    expect(afterPayment.version).toBe(loaded.version);
+
+    // A notes-only save from that editor: still version-checked OK, and the
+    // 'sent' it carries is resolved back to 'paid' — nothing PDF-relevant moved.
+    const saved = saveInvoice(db, id, { ...loaded, notes: 'Thanked them' });
+    expect(saved.version).toBe(loaded.version + 1);
+    expect(row(id)).toMatchObject({ status: 'paid', updatedAt: afterPayment.updatedAt });
+
+    // The other way round: a payment deleted under an editor that loaded 'paid'.
+    const reloaded = getInvoice(db, id)!;
+    deletePayment(db, pay.id);
+    expect(row(id)).toMatchObject({ status: 'sent', version: reloaded.version });
+    saveInvoice(db, id, { ...reloaded, terms: 'Net 15' });
+    expect(row(id).status).toBe('sent');
+  });
+
+  it('syncInvoicePaidStatus is a no-op for an unknown invoice and when nothing moved', () => {
+    expect(syncInvoicePaidStatus(db, 'nope')).toBeNull();
+    const id = sentInvoice();
+    expect(syncInvoicePaidStatus(db, id)).toBeNull();
+    db.prepare(`INSERT INTO payments (id, targetType, targetId, date, amount, createdAt) VALUES ('raw', 'invoice', ?, 1, 100, 1)`).run(id);
+    expect(syncInvoicePaidStatus(db, id)).toEqual({ invoiceId: id, status: 'paid' });
   });
 });
 

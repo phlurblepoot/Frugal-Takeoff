@@ -10,7 +10,7 @@ import { migrations } from './migrationList';
 import { createInvoice, setInvoiceStatus, recordPayment } from './billingStore';
 import { createSovLine, savePayAppLines } from './aiaStore';
 import { logActivity } from './activity';
-import { dashboardAttention, dashboardMoney, projectHappenings } from './dashboardStore';
+import { dashboardAttention, dashboardMoney, projectHappenings, ageDays, agingBucket } from './dashboardStore';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -216,6 +216,19 @@ describe('dashboardMoney', () => {
 
     const money = dashboardMoney(d);
     expect(money.aging).toEqual({ current: 10000, days31to60: 20000, days61plus: 30000 });
+  });
+});
+
+// Shared with the Reports page's open-invoices report.
+describe('ageDays / agingBucket', () => {
+  it('counts whole days, never negative', () => {
+    expect(ageDays(0, DAY - 1)).toBe(0);
+    expect(ageDays(0, 30 * DAY + 5)).toBe(30);
+    expect(ageDays(5 * DAY, 0)).toBe(0); // a future-dated document is current
+  });
+  it('buckets 0–30 / 31–60 / 61+ days', () => {
+    expect([0, 30, 31, 60, 61, 400].map(agingBucket))
+      .toEqual(['current', 'current', 'days31to60', 'days31to60', 'days61plus', 'days61plus']);
   });
 });
 

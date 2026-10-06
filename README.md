@@ -23,6 +23,7 @@ A self-hosted construction takeoff and bid-management application. Import PDF pl
   - [Checklists](#checklists)
   - [Sharing](#sharing)
   - [Notifications](#notifications)
+  - [Reports](#reports)
   - [Real-time collaboration](#real-time-collaboration)
   - [Bid pipeline and email](#bid-pipeline-and-email)
 - [Settings](#settings)
@@ -64,6 +65,7 @@ Everything runs on your own server — there is no SaaS dependency, no external 
 | **Sharing**                | Share any document, several documents under one link, or plan pages with a read-only link that lasts 7, 30 or 90 days, or never; stop sharing any time. Recipients don't need an account. |
 | **Bid pipeline**           | The Projects list is a lifecycle board — Bidding, In Progress, and Archive as tabs, each with its own sort (bid due date, last updated, name, date added) and a "Recently opened" shortcut — so nothing needs to be re-triaged by hand as a project moves from bid to job to close-out.       |
 | **Mail**                   | A full mailbox inside the app — each person connects Google Workspace, Microsoft 365, or any IMAP/SMTP host, and sends and replies from their own address, including straight from proposals, invoices, RFIs, and other project documents. Replies to a sent RFI show up as a pending answer to accept or dismiss. |
+| **Reports**                | Billing reports across every project, by customer and project (admins only): open invoices with AR aging, payments received over any dates, change orders by status, and retainage held — each downloadable as Excel. Invoices mark themselves paid once their payments cover them. |
 | **Collaboration**          | Real-time cursors, presence, and per-page notes via Socket.io.                                                                                                   |
 | **Notifications**          | A bell for @mentions, tasks and RFIs, live in the app, and optionally as notifications on your phone or computer.                                                  |
 | **Users & permissions**    | JWT auth with bcrypt hashing, admin-managed users, per-user login attempt rate limiting with real-IP detection behind Cloudflare.                                |
@@ -235,6 +237,17 @@ Share URLs use the **Public Host URL** configured under Settings, so the link is
 The **bell** in the sidebar, next to who's online, rings when someone @mentions you in a document comment, assigns you a task or an RFI, or when a GC answers an RFI you sent or own. Clicking one opens what it's about.
 
 Each person can also get them as **phone notifications**, turned on per device under **Settings → User Preferences → Phone notifications** (on iPhone, from the app added to the Home Screen). See [docs/onlyoffice-setup.md §9](docs/onlyoffice-setup.md#9-phone-notifications).
+
+### Reports
+
+**Reports** in the sidebar (admins only — billing is admin-only everywhere) covers every project at once. Filter by customer and project; archived projects are included unless you untick **Include archived projects**. **Download Excel** saves the report on screen, as filtered.
+
+- **Open invoices** — every sent invoice and finalized AIA pay application that still has a balance, with days outstanding counted from its date and the dashboard's aging buckets (0–30, 31–60, 61+ days), oldest first, with totals per bucket.
+- **Payments received** — payments in a date range (this month by default; presets or any dates), with what each paid, method, note and the total. Payment attachments stay on the payment.
+- **Change orders** — every change order with its status, amount and schedule impact, and totals per status; click **Sent** to see the ones waiting on approval.
+- **Retainage** — per project, the latest finalized pay application's contract sum, work completed and stored, and the retainage held and released, as its G702 computes them.
+
+An invoice is marked **Paid** by itself once its payments cover the total, and goes back to **Sent** if a balance opens up again (a payment deleted or lowered, or its lines grow). Clicking an invoice's status still sets it by hand.
 
 ### Real-time collaboration
 

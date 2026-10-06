@@ -17,7 +17,7 @@ import {
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus, deleteChangeOrder,
   addChangeOrderPhoto, removeChangeOrderPhoto,
   addChangeOrderAttachment, updateChangeOrderAttachment, removeChangeOrderAttachment,
-  billingSummary,
+  billingSummary, type InvoiceStatusChange,
   ValidationError as BillingValidationError, ConflictError as BillingConflictError, NotFoundError as BillingNotFoundError,
 } from './billingStore';
 import {
@@ -76,6 +76,7 @@ import { listDocuments, listedDocumentIds, patchDocument, deleteDocument, Docume
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import { registerProposalRoutes } from './proposalRoutes';
 import { registerDocumentLibraryRoutes } from './documentLibraryRoutes';
+import { registerReportRoutes } from './reportRoutes';
 import { LIBRARY_KINDS, SIGNATURE_KIND, mayReadLibraryFile } from './documentLibrary';
 import type { OnlyofficeServices } from './onlyoffice/services';
 import type { Notifier } from './notifications';
@@ -378,12 +379,20 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.get('/api/projects/:id/payments', authenticateToken, requireAdmin, (req, res) => {
     try { res.json(listProjectPayments(db, req.params.id)); } catch (e) { billingErr(e, res); }
   });
+  // A payment that settles an invoice, or reopens a paid one, moved its status
+  // (billingStore.syncInvoicePaidStatus). That change leaves the invoice's
+  // version alone, so the event carries none: every open invoice screen
+  // refetches, and an open editor refreshes (or flags it, mid-edit).
+  const broadcastInvoiceStatus = (req: express.Request, change: InvoiceStatusChange | null, projectId: string | null) => {
+    if (change && projectId) deps.broadcastChange({ type: 'invoice', id: change.invoiceId, projectId, action: 'updated', ...requestMeta(req) });
+  };
   app.post('/api/projects/:id/payments', authenticateToken, requireAdmin, (req, res) => {
     try {
       const r = recordPayment(db, req.body?.targetType, req.body?.targetId, req.body);
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'payment_recorded', message: `Payment of $${Number(req.body?.amount ?? 0).toFixed(2)} recorded` });
       deps.broadcastChange({ type: 'payment', id: r.id, projectId: req.params.id, action: 'created', ...requestMeta(req) });
-      res.json(r);
+      broadcastInvoiceStatus(req, r.invoiceStatusChange, req.params.id);
+      res.json({ id: r.id });
     } catch (e) { billingErr(e, res); }
   });
   // payments are polymorphic (invoice|payapp) and carry no projectId column
@@ -403,16 +412,19 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.put('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
     try {
       const { date, amount, method, note } = req.body ?? {};
-      updatePayment(db, req.params.id, { date, amount, method, note });
-      broadcastPayment(req, req.params.id, paymentProjectId(db, req.params.id), 'updated');
+      const statusChange = updatePayment(db, req.params.id, { date, amount, method, note });
+      const projectId = paymentProjectId(db, req.params.id);
+      broadcastPayment(req, req.params.id, projectId, 'updated');
+      broadcastInvoiceStatus(req, statusChange, projectId);
       res.json({ success: true });
     } catch (e) { billingErr(e, res); }
   });
   app.delete('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
     try {
       const projectId = paymentProjectId(db, req.params.id);
-      deletePayment(db, req.params.id);
+      const statusChange = deletePayment(db, req.params.id);
       broadcastPayment(req, req.params.id, projectId, 'deleted');
+      broadcastInvoiceStatus(req, statusChange, projectId);
       res.json({ success: true });
     } catch (e) { billingErr(e, res); }
   });
@@ -1963,6 +1975,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   registerProposalRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
   registerDocumentLibraryRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
+  registerReportRoutes(app, { db, authenticateToken, requireAdmin });
 }
 
 // ── Item send routes ─────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Menu, PanelLeftClose, Search, FolderKanban, ListTodo, Clock,
   FileEdit, Settings, LogOut, Sun, Moon,
-  FolderOpen, LayoutDashboard, Users, Mail,
+  FolderOpen, LayoutDashboard, Users, Mail, BarChart3,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useMailUnread } from '../../pages/mail/useMailUnread';
@@ -20,6 +20,9 @@ interface NavEntry {
   Icon: React.FC<{ size?: number; className?: string }>;
   path: string;
   match: (pathname: string) => boolean;
+  // Shown to admins only (billing is admin-only everywhere) — same flag as
+  // ProjectSection.adminOnly on the project tab bar.
+  adminOnly?: boolean;
 }
 
 const WORKSPACE_NAV: NavEntry[] = [
@@ -30,6 +33,7 @@ const WORKSPACE_NAV: NavEntry[] = [
   { id: 'documents', label: 'Documents', Icon: FolderOpen, path: '/documents', match: p => p.startsWith('/documents') },
   { id: 'mail', label: 'Mail', Icon: Mail, path: '/mail', match: p => p.startsWith('/mail') },
   { id: 'time', label: 'Time', Icon: Clock, path: '/time', match: p => p.startsWith('/time') },
+  { id: 'reports', label: 'Reports', Icon: BarChart3, path: '/reports', match: p => p.startsWith('/reports'), adminOnly: true },
 ];
 
 const TOOLS_NAV: NavEntry[] = [
@@ -112,6 +116,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
   if (isBareRoute(location.pathname) || !localStorage.getItem('token')) return null;
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = user.role === 'admin';
+  const visible = (items: NavEntry[]) => items.filter(item => !item.adminOnly || isAdmin);
   const expanded = state === 'expanded';
 
   const handleLogout = () => {
@@ -175,7 +181,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
         />
         <SectionLabel show={expanded}>Workspace</SectionLabel>
         <div className="space-y-0.5">
-          {WORKSPACE_NAV.map(item => (
+          {visible(WORKSPACE_NAV).map(item => (
             <NavRow
               key={item.id}
               label={item.label}
@@ -190,7 +196,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
         </div>
         <SectionLabel show={expanded}>Tools</SectionLabel>
         <div className="space-y-0.5">
-          {TOOLS_NAV.map(item => (
+          {visible(TOOLS_NAV).map(item => (
             <NavRow
               key={item.id}
               label={item.label}

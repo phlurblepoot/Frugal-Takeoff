@@ -222,6 +222,48 @@ describe('route mutations broadcast entity-changed', () => {
     c.close();
   });
 
+  // A payment that settles an invoice marks it paid (and deleting it puts it
+  // back to sent); the invoice's own screens hear about it. The automatic
+  // change leaves the version alone, so the event carries none.
+  it('a payment that moves an invoice\'s status also broadcasts the invoice, without a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p10c', name: 'P10c', pages: [], takeoffs: [] }).expect(200);
+    const inv = await request(app).post('/api/projects/p10c/invoices')
+      .send({ number: 'INV-10c', status: 'sent', lines: [{ description: 'work', qty: 1, unitPrice: 100 }] }).expect(200);
+    const c = await connectedClient();
+
+    let evts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 2);
+    const pay = await request(app).post('/api/projects/p10c/payments')
+      .send({ targetType: 'invoice', targetId: inv.body.id, amount: 100 }).expect(200);
+    expect(pay.body).toEqual({ id: expect.any(String) });
+    let [paymentEvt, invoiceEvt] = await evts;
+    expect(paymentEvt).toMatchObject({ type: 'payment', id: pay.body.id, action: 'created' });
+    expect(invoiceEvt).toMatchObject({ type: 'invoice', id: inv.body.id, projectId: 'p10c', action: 'updated' });
+    expect(invoiceEvt.version).toBeUndefined();
+    expect((await request(app).get(`/api/invoices/${inv.body.id}`)).body.status).toBe('paid');
+
+    evts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 2);
+    await request(app).put(`/api/payments/${pay.body.id}`).send({ amount: 60 }).expect(200);
+    [paymentEvt, invoiceEvt] = await evts;
+    expect(paymentEvt).toMatchObject({ type: 'payment', action: 'updated' });
+    expect(invoiceEvt).toMatchObject({ type: 'invoice', id: inv.body.id, projectId: 'p10c', action: 'updated' });
+    expect((await request(app).get(`/api/invoices/${inv.body.id}`)).body.status).toBe('sent');
+
+    // A note edit moves no status: only its payment event goes out (then the
+    // amount edit that pays it again sends both).
+    const threeEvts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 3);
+    await request(app).put(`/api/payments/${pay.body.id}`).send({ note: 'check 1042' }).expect(200);
+    await request(app).put(`/api/payments/${pay.body.id}`).send({ amount: 100 }).expect(200);
+    expect((await threeEvts).map(e => e.type)).toEqual(['payment', 'payment', 'invoice']);
+
+    evts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 2);
+    await request(app).delete(`/api/payments/${pay.body.id}`).expect(200);
+    [paymentEvt, invoiceEvt] = await evts;
+    expect(paymentEvt).toMatchObject({ type: 'payment', action: 'deleted', projectId: 'p10c' });
+    expect(invoiceEvt).toMatchObject({ type: 'invoice', id: inv.body.id, projectId: 'p10c', action: 'updated' });
+    expect((await request(app).get(`/api/invoices/${inv.body.id}`)).body.status).toBe('sent');
+    c.close();
+  });
+
   it('POST /api/projects/:id/change-orders broadcasts changeOrder created', async () => {
     await request(app).post('/api/projects').send({ id: 'p11', name: 'P11', pages: [], takeoffs: [] }).expect(200);
     const c = await connectedClient();

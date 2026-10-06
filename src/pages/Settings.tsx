@@ -28,6 +28,20 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.7.0',
+    date: 'October 6, 2026',
+    changes: [
+      'New Reports page (admins only), in the sidebar and the command palette: billing reports across all your projects, filtered by customer and project. Archived projects are included — money owed on a closed-out job is still owed — and unticking "Include archived projects" leaves them out. Download Excel saves the report exactly as filtered; the spreadsheet\'s filter buttons sort it further.',
+      'Open invoices: every sent invoice and finalized pay application that still has a balance, whatever its status says, with its customer, project, date, days outstanding (counted from the invoice or application date) and the dashboard\'s aging buckets (0–30, 31–60 and 61+ days) — oldest first, with totals and a subtotal per bucket. With archived projects left out, the totals match the dashboard\'s Outstanding and Aging receivables.',
+      'Payments received: the payments in a date range — this month to start with, or last month, this quarter, year to date, last year, all time or any dates you pick — with each one\'s date, customer, project, what it paid, method, note and amount, and the total. Payment photos and PDFs are not part of it; they stay on the payment.',
+      'Change orders: every change order by project with its number, title, status, date, amount and schedule impact, and a total for each status. Click a status — Sent is "waiting on approval" — or pick one to see only those. Older change orders marked Pending count as drafts.',
+      'Retainage: for each project with a finalized pay application, the latest one\'s contract sum to date, work completed and stored to date, and the retainage held and released so far, worked out the same way as its G702.',
+      'Invoices are now marked Paid by themselves once their payments cover the total, and go back to Sent if a balance opens up again — a payment is deleted or lowered, or the invoice\'s lines grow. A draft invoice that is paid in full is marked Paid too. Clicking the status still changes it by hand; a status set by hand stays until the next payment or line change. Anyone with the invoice open elsewhere sees the change.',
+      'Invoices you already have that are paid in full but still say Sent are marked Paid when you update.',
+      'Note for self-hosters: this update includes a small data-transforming migration (46) that marks sent invoices whose payments already cover their total as paid (only the status changes) — back up before pulling this update.',
+    ],
+  },
+  {
     version: '4.6.0',
     date: 'October 6, 2026',
     changes: [
