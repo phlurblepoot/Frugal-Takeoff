@@ -123,7 +123,7 @@ test('email-mode printout of a 60MB plan set lands under the 18MB target', async
   const rows = (await docsRes.json()).rows as { id: string }[];
   expect(rows.length).toBeGreaterThan(0);
 
-  const head = await request.head(`/api/images/${rows[0].id}/raw`);
+  const head = await request.head(`/api/images/${rows[0].id}/raw`, { headers: auth });
   expect(head.ok()).toBeTruthy();
   const size = Number(head.headers()['content-length']);
   expect(size).toBeLessThanOrEqual(18 * 1024 * 1024);

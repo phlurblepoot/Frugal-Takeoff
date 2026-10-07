@@ -1,6 +1,6 @@
 // src/components/shell/Sidebar.test.tsx
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider } from '../../context/ThemeContext';
 import { NotesProvider } from '../../context/NotesContext';
@@ -167,5 +167,22 @@ describe('Sidebar — company mode', () => {
     expect(screen.queryByTitle('Collapse')).toBeNull();
     expect(screen.queryByTitle('Expand navigation')).toBeNull();
     expect(screen.queryByTitle('Hide sidebar')).toBeNull();
+  });
+
+  // Photo and file links sign in by the media cookie (server/auth.ts), so
+  // signing out has the server clear it as well as forgetting the token.
+  it('Logout clears the media cookie and the token', () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true, status: 200 }) as Response);
+    vi.stubGlobal('fetch', fetchSpy);
+    // jsdom can't follow Logout's move to /login and prints "Not implemented:
+    // navigation"; harmless here.
+    try {
+      renderAt('/dashboard');
+      fireEvent.click(screen.getByRole('button', { name: /Logout/ }));
+      expect(fetchSpy).toHaveBeenCalledWith('/api/auth/logout', { method: 'POST', keepalive: true });
+      expect(localStorage.getItem('token')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

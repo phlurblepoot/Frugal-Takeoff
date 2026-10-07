@@ -11,6 +11,7 @@ import { useMailUnread } from '../../pages/mail/useMailUnread';
 import { SidebarPresence } from './SidebarPresence';
 import { NotificationBell } from './NotificationBell';
 import { isBareRoute } from '../../utils/locationInfo';
+import { endMediaSession } from '../../utils/store';
 
 export type SidebarState = 'expanded' | 'collapsed' | 'hidden';
 
@@ -121,6 +122,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
   const expanded = state === 'expanded';
 
   const handleLogout = () => {
+    endMediaSession();
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     window.location.href = '/login';

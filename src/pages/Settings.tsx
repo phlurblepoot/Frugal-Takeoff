@@ -28,6 +28,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.1.9',
+    date: 'October 7, 2026',
+    changes: [
+      'Security: photos, PDFs and other files can no longer be opened by anyone who has (or guesses) their link without signing in. Every photo, plan page, PDF and download now needs a signed-in account, the same as the rest of the app. Your browser keeps a sign-in cookie just for loading pictures and files, set when you sign in and removed when you click Logout. If you were already signed in before this update it is set for you as the app opens, so nothing shows broken and you don\'t need to sign in again.',
+      'Security: admin-only files stay admin-only through their links too. Invoices, pay applications, change orders, proposals and payment photos and PDFs (check images) already didn\'t show to anyone but an admin in the app; opening one by its link now answers "not found" for anyone else. A signature still opens only for the person it belongs to.',
+      'Security: photos and files are no longer marked as shareable for Cloudflare or any other shared cache to keep. Only your own browser keeps a copy. Share links you send to people without an account work as before.',
+      'Security: an uploaded or emailed file can no longer run code inside the app. Opening an SVG drawing, a web page (.html) or any other file that isn\'t a photo, PDF, audio or video straight from its link — an upload, a shared file, or a mail attachment — now shows it with scripts turned off, so a booby-trapped file can\'t act as you. Photos and PDFs open exactly as before.',
+      'Note for self-hosters: no settings to change and no database migration. Behind Cloudflare the new sign-in cookie is marked secure automatically. If you use a different reverse proxy, make sure it sends X-Forwarded-Proto along with X-Forwarded-For. If you set Cloudflare to cache everything, including /api, purge its cache once after updating so no copy cached under the old setting is served.',
+    ],
+  },
+  {
     version: '4.1.8',
     date: 'October 6, 2026',
     changes: [

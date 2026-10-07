@@ -21,6 +21,8 @@ import { upsertFolders } from './mail/sync/engine';
 import { stageUpload } from './mail/uploads';
 import type { MailContext } from './mail/context';
 import type { EntityChangedEvent } from './realtime/changeFeed';
+import { putBuffer } from './files';
+import { MEDIA_COOKIE } from './auth';
 
 let db: Database.Database;
 let dir: string;
@@ -112,7 +114,7 @@ describe('images compat routes', () => {
 
   it('GET /api/images/:id/raw streams decoded bytes with mime', async () => {
     await request(app).post('/api/images').send({ id: 'i1', data: PNG });
-    const res = await request(app).get('/api/images/i1/raw');
+    const res = await request(app).get('/api/images/i1/raw').set('Authorization', 'Bearer good-token');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('image/png');
     expect(res.body.toString()).toBe('pngbytes');
@@ -130,7 +132,7 @@ describe('images compat routes', () => {
 
   it('404s for unknown ids', async () => {
     expect((await request(app).get('/api/images/nope')).status).toBe(404);
-    expect((await request(app).get('/api/images/nope/raw')).status).toBe(404);
+    expect((await request(app).get('/api/images/nope/raw?token=good-token')).status).toBe(404);
   });
 });
 
@@ -162,6 +164,153 @@ describe('GET /api/files/:id/content streaming', () => {
   it('rejects missing/bad tokens', async () => {
     expect((await request(app).get('/api/files/f1/content')).status).toBe(401);
     expect((await request(app).get('/api/files/f1/content?token=bad')).status).toBe(401);
+  });
+});
+
+// Photo and file links (spec docs/superpowers/specs/2026-10-07-file-link-security-design.md):
+// /api/images/:id/raw, /thumb and /api/files/:id/content each ask who is
+// signed in — the Authorization header, ?token= or the media cookie — and
+// apply one per-file rule: a signature is its owner's, billing documents are
+// admins'. Without a Document Server a thumb sends the browser on to /raw, so
+// those requests follow one redirect.
+describe('file links', () => {
+  const viewers: Record<string, { id: string; username: string; role: string }> = {
+    'admin-token': { id: 'u-admin', username: 'boss', role: 'admin' },
+    'crew-token': { id: 'u-crew', username: 'crew', role: 'user' },
+    'other-token': { id: 'u-other', username: 'other', role: 'user' },
+  };
+  const LINKS = {
+    raw: (id: string) => `/api/images/${id}/raw`,
+    thumb: (id: string) => `/api/images/${id}/thumb`,
+    content: (id: string) => `/api/files/${id}/content`,
+  };
+  let media: express.Express;
+
+  beforeEach(async () => {
+    media = express();
+    media.use(express.json());
+    registerDataRoutes(media, {
+      db,
+      dataDir: dir,
+      dbFile: path.join(dir, 'app.db'),
+      // The real thing reads the Authorization header only (server/auth.ts).
+      authenticateToken: (req: any, res: any, next: any) => {
+        const user = viewers[String(req.headers.authorization ?? '').split(' ')[1]];
+        if (!user) return res.status(401).json({ error: 'Authentication required' });
+        req.user = user;
+        next();
+      },
+      requireAdmin: (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' })),
+      verifyToken: (token: string) => viewers[token] ?? null,
+      broadcastChange: () => {},
+    });
+    const upload = (id: string, kind: string, mime: string) => request(app).post(`/api/files/${id}?kind=${kind}&name=${id}`)
+      .set('Content-Type', mime).send(Buffer.from(`${id} bytes`));
+    await upload('photo', 'issue-photo', 'image/jpeg');
+    await upload('doc', 'document', 'application/pdf');
+    await upload('inv', 'invoice', 'application/pdf');
+    await upload('check', 'payment-attachment', 'image/jpeg');
+    putBuffer(db, dir, 'sig', Buffer.from('sig bytes'), 'image/png', { kind: 'signature', name: 'Signature.png', createdBy: 'u-crew' });
+  });
+
+  /** A link's status for one viewer, signed in by the media cookie. */
+  const statusFor = async (link: string, token: string) =>
+    (await request(media).get(link).set('Cookie', `${MEDIA_COOKIE}=${token}`).redirects(1)).status;
+
+  it('never let an uploaded SVG or HTML file run script on the app\'s origin', async () => {
+    const upload = (id: string, mime: string, body: string) => request(app).post(`/api/files/${id}?kind=document&name=${id}`)
+      .set('Content-Type', mime).send(Buffer.from(body));
+    await upload('evil-svg', 'image/svg+xml', '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    await upload('evil-html', 'text/html', '<script>alert(localStorage.token)</script>');
+    for (const link of [LINKS.raw, LINKS.content]) {
+      for (const id of ['evil-svg', 'evil-html']) {
+        const res = await request(media).get(link(id)).set('Authorization', 'Bearer crew-token');
+        expect(res.status, `${link(id)}`).toBe(200);
+        expect(res.headers['x-content-type-options']).toBe('nosniff');
+        expect(res.headers['content-security-policy']).toMatch(/^sandbox;/);
+      }
+      // A photo or a PDF opens normally (a sandboxed PDF wouldn't open at all).
+      for (const id of ['photo', 'doc']) {
+        const res = await request(media).get(link(id)).set('Authorization', 'Bearer crew-token');
+        expect(res.headers['x-content-type-options']).toBe('nosniff');
+        expect(res.headers['content-security-policy']).toBeUndefined();
+      }
+    }
+  });
+
+  it('refuse anyone not signed in, on every link', async () => {
+    for (const link of Object.values(LINKS)) {
+      expect((await request(media).get(link('photo'))).status).toBe(401);
+      expect((await request(media).get(link('photo')).set('Authorization', 'Bearer nope')).status).toBe(401);
+      expect((await request(media).get(`${link('photo')}?token=nope`)).status).toBe(401);
+      expect((await request(media).get(link('photo')).set('Cookie', `${MEDIA_COOKIE}=nope`)).status).toBe(401);
+      // Some other cookie is no sign-in either.
+      expect((await request(media).get(link('photo')).set('Cookie', 'other=crew-token')).status).toBe(401);
+    }
+  });
+
+  it('sign in by the Authorization header, ?token= or the media cookie', async () => {
+    for (const link of Object.values(LINKS)) {
+      const ways = [
+        request(media).get(link('photo')).set('Authorization', 'Bearer crew-token'),
+        request(media).get(`${link('photo')}?token=crew-token`),
+        request(media).get(link('photo')).set('Cookie', `theme=dark; ${MEDIA_COOKIE}=crew-token`),
+      ];
+      for (const way of ways) {
+        const res = await way.redirects(1);
+        expect(res.status).toBe(200);
+        expect(res.body.toString()).toBe('photo bytes');
+      }
+    }
+  });
+
+  it('keep billing documents to admins: anyone else gets a 404 on every link, as if they were not there', async () => {
+    for (const link of Object.values(LINKS)) {
+      for (const id of ['inv', 'check']) {
+        expect(await statusFor(link(id), 'crew-token')).toBe(404);
+        expect(await statusFor(link(id), 'admin-token')).toBe(200);
+      }
+      for (const id of ['photo', 'doc']) {
+        expect(await statusFor(link(id), 'crew-token')).toBe(200);
+        expect(await statusFor(link(id), 'admin-token')).toBe(200);
+      }
+    }
+    // The JSON read the editors use follows the same rule.
+    const json = (id: string, token: string) => request(media).get(`/api/images/${id}`).set('Authorization', `Bearer ${token}`);
+    expect((await json('inv', 'crew-token')).status).toBe(404);
+    expect((await json('check', 'crew-token')).status).toBe(404);
+    expect((await json('inv', 'admin-token')).status).toBe(200);
+    expect((await json('photo', 'crew-token')).status).toBe(200);
+  });
+
+  it('show a signature to its owner alone', async () => {
+    for (const link of Object.values(LINKS)) {
+      expect(await statusFor(link('sig'), 'crew-token')).toBe(200);
+      expect(await statusFor(link('sig'), 'other-token')).toBe(404);
+      expect(await statusFor(link('sig'), 'admin-token')).toBe(404);
+    }
+    expect((await request(media).get('/api/images/sig').set('Authorization', 'Bearer other-token')).status).toBe(404);
+  });
+
+  it('are cached privately, never by Cloudflare or another shared cache', async () => {
+    const raw = await request(media).get(LINKS.raw('photo')).set('Cookie', `${MEDIA_COOKIE}=crew-token`);
+    expect(raw.headers['cache-control']).toBe('private, max-age=31536000');
+    // Content is replaced in place by a new version, so it is never reused unchecked.
+    const content = await request(media).get(LINKS.content('doc')).set('Cookie', `${MEDIA_COOKIE}=crew-token`);
+    expect(content.headers['cache-control']).toBe('private, no-cache');
+    const range = await request(media).get(LINKS.content('doc')).set('Cookie', `${MEDIA_COOKIE}=crew-token`).set('Range', 'bytes=0-2');
+    expect([range.status, range.headers['cache-control']]).toEqual([206, 'private, no-cache']);
+  });
+
+  it("send a thumb's browser on to the original with the same sign-in, ?v= and all", async () => {
+    const viaCookie = await request(media).get(`${LINKS.thumb('photo')}?v=3`).set('Cookie', `${MEDIA_COOKIE}=crew-token`);
+    expect([viaCookie.status, viaCookie.headers.location]).toEqual([302, '/api/images/photo/raw']);
+    const original = await request(media).get(viaCookie.headers.location).set('Cookie', `${MEDIA_COOKIE}=crew-token`);
+    expect([original.status, original.body.toString()]).toEqual([200, 'photo bytes']);
+    // A ?token= has no cookie to fall back on, so it goes along.
+    const viaQuery = await request(media).get(`${LINKS.thumb('photo')}?token=crew-token`);
+    expect(viaQuery.headers.location).toBe('/api/images/photo/raw?token=crew-token');
+    expect((await request(media).get(viaQuery.headers.location)).status).toBe(200);
   });
 });
 

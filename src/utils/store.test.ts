@@ -4,6 +4,7 @@ import {
   saveBinaryFile, uploadProjectFile, persistGeneratedDocument,
   restoreSnapshot, RestoreRunningError,
   computeSovSeedFromEstimate,
+  startMediaSession, endMediaSession,
 } from './store';
 import type { Project } from '../types';
 
@@ -46,6 +47,58 @@ describe('computeSovSeedFromEstimate', () => {
       }],
     } as unknown as Project;
     expect(computeSovSeedFromEstimate(project)).toEqual([{ description: 'Trim', scheduledValueCents: 70000 }]);
+  });
+});
+
+// The media cookie (spec docs/superpowers/specs/2026-10-07-file-link-security-design.md):
+// photo and file links sign in by it, so a session from before it existed
+// trades its token for one before the app's first image renders.
+describe('media session', () => {
+  const answer = (status: number) => ({ ok: status < 400, status }) as Response;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  it('trades the stored token for the media cookie', async () => {
+    localStorage.setItem('token', 'tok');
+    const spy = vi.fn(async () => answer(200));
+    vi.stubGlobal('fetch', spy);
+    await startMediaSession();
+    expect(spy).toHaveBeenCalledWith('/api/auth/media-session', { method: 'POST', headers: { Authorization: 'Bearer tok' } });
+  });
+
+  it('asks nothing when no one is signed in', async () => {
+    const spy = vi.fn(async () => answer(200));
+    vi.stubGlobal('fetch', spy);
+    await startMediaSession();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('lets the app start anyway when the server refuses, is unreachable or never answers', async () => {
+    localStorage.setItem('token', 'tok');
+    vi.stubGlobal('fetch', vi.fn(async () => answer(401)));
+    await expect(startMediaSession()).resolves.toBeUndefined();
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    await expect(startMediaSession()).resolves.toBeUndefined();
+
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    let started = false;
+    void startMediaSession(3000).then(() => { started = true; });
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(started).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(started).toBe(true);
+  });
+
+  it('signing out has the server clear the cookie, even as the page navigates away', () => {
+    const spy = vi.fn(async () => answer(200));
+    vi.stubGlobal('fetch', spy);
+    endMediaSession();
+    expect(spy).toHaveBeenCalledWith('/api/auth/logout', { method: 'POST', keepalive: true });
   });
 });
 

@@ -15,6 +15,31 @@ export const getAuthHeaders = () => {
   };
 };
 
+// Photo and file links (<img src>, pdf.js) can't send the Authorization header,
+// so the server signs them in by an HttpOnly media cookie carrying the same
+// token (server/auth.ts). Signing in sets it; a session from before it
+// existed (only the token in localStorage) trades the token for it as the app
+// starts. Resolves once that is done, refused or offline, or after `waitMs`
+// whatever the server is doing — never rejects.
+const MEDIA_SESSION_WAIT_MS = 3000;
+export const startMediaSession = (waitMs = MEDIA_SESSION_WAIT_MS): Promise<void> => {
+  const token = localStorage.getItem('token');
+  if (!token) return Promise.resolve();
+  const traded = fetch('/api/auth/media-session', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  }).then(() => {}, () => {});
+  return Promise.race([traded, new Promise<void>(resolve => setTimeout(resolve, waitMs))]);
+};
+
+/** Signing out: the server clears the media cookie (keepalive, so it survives
+ *  the page navigating away). The caller forgets the token itself. */
+export const endMediaSession = (): void => {
+  try {
+    void fetch('/api/auth/logout', { method: 'POST', keepalive: true }).catch(() => {});
+  } catch { /* nothing to clear without a network */ }
+};
+
 export const getImageUrl = (id: string) => {
   return `/api/images/${id}/raw`;
 };

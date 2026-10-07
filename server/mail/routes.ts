@@ -21,6 +21,7 @@ import { AuthExpiredError, ProviderNotFoundError } from './providers/types';
 import { getFakeProvider } from './providers/fakeRegistry';
 import type { Seeded } from './providers/fake';
 import type { AttachmentViewer } from '../onlyoffice/viewers';
+import { setUntrustedContentHeaders } from '../untrustedContent';
 
 export interface BodyPayload { html: string; text: string; blockedRemoteImages: number; attachments: AttachmentMeta[] }
 export interface MailRouteDeps {
@@ -716,7 +717,8 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       const metas: AttachmentMeta[] = JSON.parse(m.attachmentsJson || '[]');
       const { att } = await getAttachmentFresh(m, wantedAttachment(metas, attId));
       res.setHeader('Content-Type', att.mime || 'application/octet-stream');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
+      // An attachment is whatever a stranger emailed: never script on our origin.
+      setUntrustedContentHeaders(res, att.mime || 'application/octet-stream');
       if (att.size) res.setHeader('Content-Length', String(att.size));
       res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${(att.name || 'attachment').replace(/["\r\n]/g, '')}"`);
       att.stream.on('error', err => { console.error('[mail] attachment stream failed', err); res.destroy(); });

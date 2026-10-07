@@ -8,7 +8,6 @@ import path from "path";
 import dotenv from "dotenv";
 import type Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import rateLimit from "express-rate-limit";
@@ -25,8 +24,8 @@ import { PushService } from './server/push';
 import { createAttachmentViewer } from './server/onlyoffice/viewers';
 import { registerPushRoutes } from './server/pushRoutes';
 import { registerShareRoutes } from './server/shareRoutes';
+import { registerAuthRoutes, tokenAuth } from './server/auth';
 import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
-import { normalizeTokenPayload } from './server/realtime/verifyPayload';
 import { loadMailCrypto } from './server/mail/crypto';
 import type { MailContext } from './server/mail/context';
 import type { MailCrypto } from './server/mail/crypto';
@@ -172,12 +171,10 @@ async function startServer() {
 
   const broadcastChange = createChangeFeed(io);
 
-  // One token verifier, shared by realtime, the data routes and the mail routes
-  // so a token means the same thing everywhere.
-  const verifyToken = (token: string) => {
-    try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); }
-    catch { return null; }
-  };
+  // verifyToken: one token verifier, shared by realtime, the data, mail and
+  // media routes. authenticateToken: every other signed-in route (the
+  // Authorization header only). Both in server/auth.ts.
+  const { verifyToken, authenticateToken } = tokenAuth(JWT_SECRET);
 
   const realtime = registerRealtime(io, {
     verifyToken,
@@ -219,24 +216,6 @@ async function startServer() {
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
-
-  // Auth Middleware
-  const authenticateToken = (req: any, res: any, next: any) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (!token) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-      if (err) {
-        return res.status(401).json({ error: 'Invalid or expired token' });
-      }
-      req.user = user;
-      next();
-    });
-  };
 
   const requireAdmin = (req: any, res: any, next: any) => {
     if (req.user?.role !== 'admin') {
@@ -280,26 +259,8 @@ async function startServer() {
     legacyHeaders: false,
   });
 
-  // Auth Routes
-  app.post('/api/auth/login', loginLimiter, (req, res) => {
-    const { username, password } = req.body;
-    try {
-      const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as any;
-      if (!user) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-      }
-
-      const validPassword = bcrypt.compareSync(password, user.password);
-      if (!validPassword) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-      }
-
-      const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
-      res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
-    } catch (error) {
-      res.status(500).json({ error: 'Login failed' });
-    }
-  });
+  // Auth Routes: sign-in, sign-out and the media cookie (server/auth.ts).
+  registerAuthRoutes(app, { db, jwtSecret: JWT_SECRET, verifyToken, loginLimiter });
 
   app.get('/api/auth/me', authenticateToken, (req: any, res: any) => {
     res.json({ user: req.user });

@@ -522,7 +522,7 @@ test('document previews: hover shows a thumbnail card, click opens the viewer mo
   const rowThumb = photoRow.getByTestId('file-thumb').locator('img');
   await expect(rowThumb).toHaveAttribute('src', new RegExp(`/api/images/${seeded.issuePhotoFileId}/thumb\\?v=`));
   await expect.poll(() => rowThumb.evaluate((img: HTMLImageElement) => img.complete ? img.naturalWidth : 0)).toBeGreaterThan(0);
-  const shrunk = await request.get(`/api/images/${seeded.issuePhotoFileId}/thumb`);
+  const shrunk = await request.get(`/api/images/${seeded.issuePhotoFileId}/thumb`, { headers: { Authorization: `Bearer ${apiToken.token}` } });
   expect(shrunk.headers()['content-type']).toBe('image/webp');
 
   // (a) Hover the image row: the card appears (past the 350ms delay) showing

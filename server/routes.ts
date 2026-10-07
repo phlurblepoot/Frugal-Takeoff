@@ -6,7 +6,7 @@ import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
   listProjectSummaries, patchProject, ValidationError, ConflictError, NotFoundError,
 } from './projectStore';
-import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile, isDirectUploadKind } from './files';
+import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile, isDirectUploadKind, type FileMeta } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
 import { logActivity, listActivity } from './activity';
 import {
@@ -77,7 +77,10 @@ import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import { registerProposalRoutes } from './proposalRoutes';
 import { registerDocumentLibraryRoutes } from './documentLibraryRoutes';
 import { registerReportRoutes } from './reportRoutes';
-import { LIBRARY_KINDS, SIGNATURE_KIND, mayReadLibraryFile } from './documentLibrary';
+import { LIBRARY_KINDS, mayReadLibraryFile } from './documentLibrary';
+import { isAdminOnlyKind } from './onlyoffice/editorRoutes';
+import { mediaViewer, type MediaViewer } from './auth';
+import { setUntrustedContentHeaders } from './untrustedContent';
 import type { OnlyofficeServices } from './onlyoffice/services';
 import type { Notifier } from './notifications';
 import { getProposal } from './proposalStore';
@@ -1338,9 +1341,19 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   // ── Images (legacy compat) + files ────────────────────────────────────────
 
+  // Who may have a file's bytes: one rule for every route that sends them
+  // (spec docs/superpowers/specs/2026-10-07-file-link-security-design.md). A
+  // signature is its owner's alone (ONLYOFFICE Phase 3); billing documents and
+  // templates are admins' only, as everywhere else in the app; anything else
+  // is for anyone signed in. A file someone may not have 404s, like the rest
+  // of the app's hidden files.
+  const mayViewFile = (meta: FileMeta, viewer: MediaViewer) =>
+    mayReadLibraryFile(meta, viewer) && (viewer.role === 'admin' || !isAdminOnlyKind(meta.kind));
+
   app.get('/api/images/:id', authenticateToken, (req, res) => {
     try {
-      const data = getDataUrlString(db, dataDir, req.params.id);
+      const meta = getMeta(db, req.params.id);
+      const data = meta && mayViewFile(meta, (req as any).user ?? {}) ? getDataUrlString(db, dataDir, req.params.id) : null;
       if (data == null) return res.status(404).json({ error: 'Image not found' });
       res.json({ data });
     } catch (e) {
@@ -1348,17 +1361,21 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
-  // Public (used in <img src> / pdf.js URLs) — kept public deliberately.
+  // The URL in <img src> and pdf.js loads, which can't send the Authorization
+  // header: signed in by the media cookie (server/auth.ts), ?token= or the
+  // header. Cached privately: the browser may keep its copy, but Cloudflare
+  // and any other shared cache must never keep or serve one.
   app.get('/api/images/:id/raw', (req, res) => {
     try {
+      const viewer = mediaViewer(req, verifyToken);
+      if (!viewer) return res.status(401).send('Authentication required');
       const meta = getMeta(db, req.params.id);
       const st = statFile(dataDir, req.params.id);
-      // No login here (plain <img> tags), so a signature, which only its owner
-      // may read, is never served this way (ONLYOFFICE Phase 3).
-      if (!meta || !st || meta.kind === SIGNATURE_KIND) return res.status(404).send('Image not found');
+      if (!meta || !st || !mayViewFile(meta, viewer)) return res.status(404).send('Image not found');
       res.set('Content-Type', meta.mime);
+      setUntrustedContentHeaders(res, meta.mime);
       res.set('Content-Length', String(st.size));
-      res.set('Cache-Control', 'public, max-age=31536000');
+      res.set('Cache-Control', 'private, max-age=31536000');
       fsSync.createReadStream(pathFor(dataDir, req.params.id)).pipe(res);
     } catch (e) {
       res.status(500).send('Failed to fetch image');
@@ -1366,17 +1383,23 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
 
   // A photo shrunk for tiles and lists: tens of KB instead of the several-MB
-  // original (server/onlyoffice/thumbnails.ts). No login, like /raw, and never
-  // a signature. Anything it can't shrink (not a photo, a format the server
-  // can't read) sends the browser to the original instead.
+  // original (server/onlyoffice/thumbnails.ts). Signed in and cached like
+  // /raw. Anything it can't shrink (not a photo, a format the server can't
+  // read) sends the browser to the original instead: the cookie and header go
+  // along by themselves, a ?token= is passed on.
   app.get('/api/images/:id/thumb', async (req, res) => {
     try {
+      const viewer = mediaViewer(req, verifyToken);
+      if (!viewer) return res.status(401).send('Authentication required');
       const meta = getMeta(db, req.params.id);
-      if (!meta || meta.kind === SIGNATURE_KIND) return res.status(404).send('Image not found');
+      if (!meta || !mayViewFile(meta, viewer)) return res.status(404).send('Image not found');
       const thumb = await deps.onlyoffice?.thumbnails.photo(meta.id) ?? null;
-      if (!thumb) return res.redirect(302, `/api/images/${encodeURIComponent(meta.id)}/raw`);
+      if (!thumb) {
+        const token = typeof req.query.token === 'string' && req.query.token ? `?token=${encodeURIComponent(req.query.token)}` : '';
+        return res.redirect(302, `/api/images/${encodeURIComponent(meta.id)}/raw${token}`);
+      }
       res.set('Content-Type', 'image/webp');
-      res.set('Cache-Control', 'public, max-age=31536000');
+      res.set('Cache-Control', 'private, max-age=31536000');
       res.sendFile(thumb);
     } catch (e) {
       res.status(500).send('Failed to fetch image');
@@ -1457,24 +1480,25 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   );
 
-  // Streaming read with HTTP Range support. Auth via Authorization header or
-  // ?token= (media elements and pdf.js can't always set headers).
+  // Streaming read with HTTP Range support. Signed in like /api/images/:id/raw:
+  // the Authorization header, ?token= or the media cookie (media elements and
+  // pdf.js can't always set headers).
   app.get('/api/files/:id/content', (req, res) => {
     try {
-      const header = req.headers['authorization'];
-      const bearer = header && header.split(' ')[1];
-      const token = bearer || String(req.query.token || '');
-      const viewer = token ? verifyToken(token) : null;
+      const viewer = mediaViewer(req, verifyToken);
       if (!viewer) return res.status(401).json({ error: 'Authentication required' });
 
       const meta = getMeta(db, req.params.id);
       const st = statFile(dataDir, req.params.id);
-      // A signature is its owner's alone (ONLYOFFICE Phase 3).
-      if (!meta || !st || !mayReadLibraryFile(meta, viewer as { id?: unknown })) return res.status(404).json({ error: 'File not found' });
+      if (!meta || !st || !mayViewFile(meta, viewer)) return res.status(404).json({ error: 'File not found' });
 
       const filePath = pathFor(dataDir, req.params.id);
       res.set('Accept-Ranges', 'bytes');
       res.set('Content-Type', meta.mime);
+      setUntrustedContentHeaders(res, meta.mime);
+      // Never in a shared cache, and always fresh: a new version replaces the
+      // content under the same id.
+      res.set('Cache-Control', 'private, no-cache');
 
       const range = req.headers.range;
       if (range) {

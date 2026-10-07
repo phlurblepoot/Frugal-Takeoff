@@ -21,7 +21,7 @@ import {
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
-  formatBytes, getRestoreDriveSnapshots, getRestoreSources, getSetupStateStrict, restoreDriveStartUrl,
+  endMediaSession, formatBytes, getRestoreDriveSnapshots, getRestoreSources, getSetupStateStrict, restoreDriveStartUrl,
   RestoreRunningError, restoreSnapshot, uploadRestoreZip, type BackupSnapshot,
 } from '../utils/store';
 
@@ -223,6 +223,7 @@ export const RestorePage: React.FC = () => {
           clearInterval(timer);
           // These were the fresh-install admin's, and that account no longer
           // exists on the restored database.
+          endMediaSession();
           localStorage.removeItem('token');
           localStorage.removeItem('user');
           setPhase('done');
