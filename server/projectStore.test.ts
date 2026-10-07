@@ -9,9 +9,11 @@ import { migrations } from './migrationList';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
   patchProject, normalizeProjectStatus, listProjectSummaries,
-  ValidationError, ConflictError,
+  projectDataSummary, visibleDataSummary,
+  ValidationError, ConflictError, ProjectHasDataError,
 } from './projectStore';
-import { putBuffer } from './files';
+import { putBuffer, saveNewVersion, setFileFlags } from './files';
+import { listCrews } from './dailyReportStore';
 import { readFileContent } from './fileStore';
 import { createInvoice, setInvoiceStatus, recordPayment } from './billingStore';
 import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
@@ -85,6 +87,12 @@ const seedLegacyAndNormalize = (blob: any, migrationCap?: number) => {
   }
   const set = migrationCap == null ? migrations : migrations.filter(m => m.version <= migrationCap);
   runMigrations(db, dir, set); // applies migration 5 (and, by default, everything after it)
+};
+
+// A project with nothing in it, on the full (latest) schema.
+const seedEmpty = (id: string) => {
+  runMigrations(db, dir, migrations);
+  createProject(db, { id, name: 'Empty', pages: [], takeoffs: [] });
 };
 
 describe('migration 5 + loadProject round-trip', () => {
@@ -286,18 +294,37 @@ describe('createProject / listProjects / deleteProject', () => {
     expect(loadProject(db, 'b')).toBeNull();
   });
 
-  it('delete removes all child rows and project-owned files', () => {
+  it('delete refuses a project with plan pages and measurements, and keeps all of it', () => {
     seedLegacyAndNormalize(LEGACY_PROJECT);
-    deleteProject(db, dir, 'proj1');
-    expect(loadProject(db, 'proj1')).toBeNull();
-    for (const t of ['pages', 'measurements', 'takeoffs', 'plan_sets']) {
-      expect((db.prepare(`SELECT COUNT(*) as c FROM ${t} WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
+    expect(() => deleteProject(db, dir, 'proj1')).toThrow(ProjectHasDataError);
+    expect(loadProject(db, 'proj1')).not.toBeNull();
+    for (const t of ['pages', 'measurements', 'takeoffs', 'plan_sets', 'files']) {
+      expect((db.prepare(`SELECT COUNT(*) as c FROM ${t} WHERE projectId = 'proj1'`).get() as any).c, t).toBeGreaterThan(0);
     }
-    expect((db.prepare(`SELECT COUNT(*) as c FROM files WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
+  });
+
+  it('delete clears an empty project and its scaffolding', () => {
+    seedEmpty('proj1');
+    // Scaffolding a project picks up before anything is in it.
+    createProject(db, { id: 'scaf', name: 'S', pages: [], takeoffs: [] }); // not touched
+    saveProject(db, 'proj1', {
+      id: 'proj1', name: 'Empty', version: 1, pages: [],
+      planSets: [{ id: 'ps1', name: 'Rev A' }], takeoffs: [{ id: 't1', name: 'Drywall', type: 'area' }],
+    });
+    listCrews(db, 'proj1'); // the Daily Reports page makes "Crew 1" just by opening
+    db.prepare(`INSERT INTO aia_sov_locks (projectId, lockedAt, lockedByUserId, reason) VALUES ('proj1', 1, NULL, 'manual')`).run();
+
+    deleteProject(db, dir, 'proj1');
+
+    expect(loadProject(db, 'proj1')).toBeNull();
+    for (const t of ['takeoffs', 'plan_sets', 'daily_report_crews', 'aia_sov_locks']) {
+      expect((db.prepare(`SELECT COUNT(*) as c FROM ${t} WHERE projectId = 'proj1'`).get() as any).c, t).toBe(0);
+    }
+    expect(loadProject(db, 'scaf')).not.toBeNull();
   });
 
   it('delete spares task photos — a task outlives the project it merely refers to', () => {
-    seedLegacyAndNormalize(LEGACY_PROJECT);
+    seedEmpty('proj1');
     db.prepare('INSERT INTO tasks (id, title, projectId, createdAt) VALUES (?, ?, ?, ?)')
       .run('task1', 'Order material', 'proj1', 1);
     // migration 23 attributes task photos to their task's project, which put
@@ -306,44 +333,166 @@ describe('createProject / listProjects / deleteProject', () => {
     db.prepare('INSERT INTO task_photos (id, taskId, fileId, createdAt) VALUES (?, ?, ?, ?)')
       .run('tp1', 'task1', 'tphoto1', 1);
 
+    // A task (and its photo) isn't project data, so it doesn't stop the delete.
     deleteProject(db, dir, 'proj1');
 
+    expect(loadProject(db, 'proj1')).toBeNull();
     expect(db.prepare(`SELECT COUNT(*) as c FROM tasks WHERE id = 'task1'`).get()).toEqual({ c: 1 });
     expect(db.prepare(`SELECT COUNT(*) as c FROM task_photos WHERE id = 'tp1'`).get()).toEqual({ c: 1 });
     expect(db.prepare(`SELECT COUNT(*) as c FROM files WHERE id = 'tphoto1'`).get()).toEqual({ c: 1 });
     expect(readFileContent(dir, 'tphoto1')!.toString()).toBe('photobytes'); // bytes survive too
-    // every other project-owned file still went
-    expect((db.prepare(`SELECT COUNT(*) as c FROM files WHERE projectId = 'proj1' AND kind != 'task-photo'`).get() as any).c).toBe(0);
   });
 
-  it('delete cascades AIA billing rows', () => {
-    seedLegacyAndNormalize(LEGACY_PROJECT);
+  it('delete refuses a project with AIA billing, and keeps it', () => {
+    seedEmpty('proj1');
     db.prepare(`INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, sortOrder, version, createdAt) VALUES ('sov1', 'proj1', 'Line', 100000, 0, 1, 1)`).run();
     db.prepare(`INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'proj1', 1, 'draft', 1, 1)`).run();
     db.prepare(`INSERT INTO aia_pay_app_lines (id, payAppId, sovLineId, percentComplete, storedMaterialsCents, createdAt) VALUES ('pl1', 'app1', 'sov1', 50, 0, 1)`).run();
-    deleteProject(db, dir, 'proj1');
-    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_sov_lines WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
-    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_pay_apps WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
-    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_pay_app_lines WHERE id = 'pl1'`).get() as any).c).toBe(0);
+    let err: unknown;
+    try { deleteProject(db, dir, 'proj1'); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(ProjectHasDataError);
+    expect((err as ProjectHasDataError).summary).toEqual({ payApps: 1, sovLines: 1 });
+    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_sov_lines WHERE projectId = 'proj1'`).get() as any).c).toBe(1);
+    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_pay_apps WHERE projectId = 'proj1'`).get() as any).c).toBe(1);
+    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_pay_app_lines WHERE id = 'pl1'`).get() as any).c).toBe(1);
   });
 
-  it('delete removes the SOV lock row too', () => {
-    seedLegacyAndNormalize(LEGACY_PROJECT);
-    db.prepare(
-      `INSERT INTO aia_sov_locks (projectId, lockedAt, lockedByUserId, reason) VALUES ('proj1', 1, NULL, 'manual')`
-    ).run();
-    deleteProject(db, dir, 'proj1');
-    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_sov_locks WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
-  });
-
-  it('delete cascades polymorphic payments for both invoices and pay-apps', () => {
-    seedLegacyAndNormalize(LEGACY_PROJECT);
+  it('delete refuses a project with payments on its invoices and pay apps, and keeps them', () => {
+    seedEmpty('proj1');
     db.prepare(`INSERT INTO invoices (id, projectId, status, version, createdAt) VALUES ('inv1', 'proj1', 'draft', 1, 1)`).run();
     db.prepare(`INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'proj1', 1, 'draft', 1, 1)`).run();
     db.prepare(`INSERT INTO payments (id, targetType, targetId, amount, createdAt) VALUES ('payi', 'invoice', 'inv1', 10, 1)`).run();
     db.prepare(`INSERT INTO payments (id, targetType, targetId, amount, createdAt) VALUES ('paya', 'payapp', 'app1', 20, 1)`).run();
-    deleteProject(db, dir, 'proj1');
-    expect((db.prepare(`SELECT COUNT(*) as c FROM payments`).get() as any).c).toBe(0);
+    expect(() => deleteProject(db, dir, 'proj1')).toThrow(ProjectHasDataError);
+    expect((db.prepare(`SELECT COUNT(*) as c FROM payments`).get() as any).c).toBe(2);
+  });
+});
+
+// Only a project with nothing in it can be deleted (spec
+// docs/superpowers/specs/2026-10-07-project-delete-guard-design.md).
+describe('projectDataSummary', () => {
+  // One seeder per kind of data; each makes just that kind (payments need the
+  // invoice they pay).
+  const SEED: Record<string, (id: string) => void> = {
+    documents: id => { putBuffer(db, dir, `doc-${id}`, Buffer.from('%PDF'), 'application/pdf', { projectId: id, kind: 'document' }); },
+    planPages: id => { db.prepare('INSERT INTO pages (id, projectId) VALUES (?, ?)').run(`pg-${id}`, id); },
+    measurements: id => { db.prepare(`INSERT INTO measurements (id, pageId, projectId, type, points) VALUES (?, 'nopage', ?, 'count', '[]')`).run(`m-${id}`, id); },
+    proposals: id => { db.prepare('INSERT INTO proposals (id, projectId, number, createdAt, updatedAt) VALUES (?, ?, 1, 1, 1)').run(`pr-${id}`, id); },
+    invoices: id => { db.prepare(`INSERT INTO invoices (id, projectId, status, version, createdAt) VALUES (?, ?, 'draft', 1, 1)`).run(`inv-${id}`, id); },
+    payments: id => {
+      db.prepare(`INSERT INTO invoices (id, projectId, status, version, createdAt) VALUES (?, ?, 'sent', 1, 1)`).run(`inv-paid-${id}`, id);
+      db.prepare(`INSERT INTO payments (id, targetType, targetId, amount, createdAt) VALUES (?, 'invoice', ?, 10, 1)`).run(`pay-${id}`, `inv-paid-${id}`);
+    },
+    changeOrders: id => { db.prepare(`INSERT INTO change_orders (id, projectId, createdAt) VALUES (?, ?, 1)`).run(`co-${id}`, id); },
+    payApps: id => { db.prepare(`INSERT INTO aia_pay_apps (id, projectId, number, createdAt) VALUES (?, ?, 1, 1)`).run(`app-${id}`, id); },
+    sovLines: id => { db.prepare('INSERT INTO aia_sov_lines (id, projectId, createdAt) VALUES (?, ?, 1)').run(`sov-${id}`, id); },
+    rfis: id => { db.prepare('INSERT INTO rfis (id, projectId, number, createdAt) VALUES (?, ?, 1, 1)').run(`rfi-${id}`, id); },
+    issues: id => { db.prepare('INSERT INTO issues (id, projectId, number, createdAt) VALUES (?, ?, 1, 1)').run(`iss-${id}`, id); },
+    punchItems: id => { db.prepare('INSERT INTO punch_items (id, projectId, createdAt) VALUES (?, ?, 1)').run(`pi-${id}`, id); },
+    dailyReports: id => {
+      const crewId = listCrews(db, id)[0].id;
+      db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES (?, ?, ?, '2026-10-01', 1, 1)`).run(`dr-${id}`, id, crewId);
+    },
+    timeEntries: id => { db.prepare(`INSERT INTO time_entries (id, userId, projectId, clockIn, createdAt) VALUES (?, 'u1', ?, 1, 1)`).run(`te-${id}`, id); },
+    notes: id => {
+      const board = { id: `n-${id}`, projectId: id, elements: [{ id: 'e1', type: 'text', x: 0, y: 0, content: 'Call the GC' }], viewport: { x: 0, y: 0, zoom: 1 } };
+      db.prepare('INSERT INTO notes (id, projectId, data, createdAt, updatedAt) VALUES (?, ?, ?, 1, 1)').run(board.id, id, JSON.stringify(board));
+    },
+    linkedEmails: id => {
+      db.prepare(`INSERT INTO mail_thread_links (id, threadKey, itemType, itemId, projectId, linkedByUserId, createdAt) VALUES (?, 'thread-1', 'project', ?, ?, 'u1', '2026-10-01')`)
+        .run(`ml-${id}`, id, id);
+    },
+  };
+
+  beforeEach(() => runMigrations(db, dir, migrations));
+
+  it('an empty project has no data and deletes', () => {
+    createProject(db, { id: 'p', name: 'Mistake', pages: [], takeoffs: [] });
+    expect(projectDataSummary(db, 'p')).toEqual({ hasData: false, summary: {} });
+    deleteProject(db, dir, 'p');
+    expect(loadProject(db, 'p')).toBeNull();
+  });
+
+  it('counts every kind of data, and only the kinds the project has', () => {
+    createProject(db, { id: 'p', name: 'Job', pages: [], takeoffs: [] });
+    for (const seed of Object.values(SEED)) seed('p');
+    SEED.issues('p2'); // another project's data stays out of it
+    db.prepare(`INSERT INTO issues (id, projectId, number, createdAt) VALUES ('iss-second', 'p', 2, 1)`).run();
+    const { hasData, summary } = projectDataSummary(db, 'p');
+    expect(hasData).toBe(true);
+    expect(summary).toEqual({
+      documents: 1, planPages: 1, measurements: 1, proposals: 1, invoices: 2, payments: 1,
+      changeOrders: 1, payApps: 1, sovLines: 1, rfis: 1, issues: 2, punchItems: 1,
+      dailyReports: 1, timeEntries: 1, notes: 1, linkedEmails: 1,
+    });
+  });
+
+  it.each(Object.keys(SEED))('%s alone stops the delete, and nothing is removed', kind => {
+    createProject(db, { id: 'p', name: 'Job', pages: [], takeoffs: [{ id: 't1', name: 'Drywall' }] });
+    SEED[kind]('p');
+    let err: unknown;
+    try { deleteProject(db, dir, 'p'); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(ProjectHasDataError);
+    expect((err as ProjectHasDataError).summary[kind]).toBeGreaterThan(0);
+    expect(loadProject(db, 'p')).not.toBeNull();
+    expect((db.prepare(`SELECT COUNT(*) as c FROM takeoffs WHERE projectId = 'p'`).get() as any).c).toBe(1);
+  });
+
+  it('scaffolding is not data: empty takeoffs and plan sets, the auto crew, an empty notes board, the SOV lock, activity, tasks', () => {
+    createProject(db, {
+      id: 'p', name: 'Job', pages: [], planSets: [{ id: 'ps1', name: 'Rev A' }],
+      takeoffs: [{ id: 't1', name: 'Drywall', type: 'area', costPerUnit: 2 }, { id: 't2', name: 'Paint' }],
+    });
+    listCrews(db, 'p');
+    db.prepare(`INSERT INTO notes (id, projectId, data, createdAt, updatedAt) VALUES ('n1', 'p', ?, 1, 1)`)
+      .run(JSON.stringify({ id: 'n1', projectId: 'p', elements: [], viewport: { x: 40, y: 10, zoom: 2 } }));
+    db.prepare(`INSERT INTO aia_sov_locks (projectId, lockedAt, lockedByUserId, reason) VALUES ('p', 1, NULL, 'manual')`).run();
+    db.prepare(`INSERT INTO activity (id, projectId, type, message, createdAt) VALUES ('a1', 'p', 'project_created', 'Project "Job" created', 1)`).run();
+    db.prepare(`INSERT INTO tasks (id, title, projectId, createdAt) VALUES ('task1', 'Order material', 'p', 1)`).run();
+    putBuffer(db, dir, 'tphoto1', Buffer.from('jpg'), 'image/jpeg', { projectId: 'p', kind: 'task-photo' });
+    expect(projectDataSummary(db, 'p')).toEqual({ hasData: false, summary: {} });
+  });
+
+  it('a crew with a report counts — through its report', () => {
+    createProject(db, { id: 'p', name: 'Job', pages: [], takeoffs: [] });
+    SEED.dailyReports('p');
+    expect(projectDataSummary(db, 'p').summary).toEqual({ dailyReports: 1 });
+  });
+
+  it('documents: archived ones count, a document and its old versions count once, page images count as plan pages', () => {
+    createProject(db, { id: 'p', name: 'Job', pages: [], takeoffs: [] });
+    putBuffer(db, dir, 'spec', Buffer.from('v1'), 'application/pdf', { projectId: 'p', kind: 'document' });
+    saveNewVersion(db, dir, 'spec', Buffer.from('v2'), 'application/pdf');
+    putBuffer(db, dir, 'old', Buffer.from('x'), 'application/pdf', { projectId: 'p', kind: 'document' });
+    setFileFlags(db, 'old', { archived: true });
+    expect(projectDataSummary(db, 'p').summary).toEqual({ documents: 2 });
+
+    // A plan page's image and thumbnail are the page, not two more documents;
+    // its source PDF is a document.
+    putBuffer(db, dir, 'img1', Buffer.from('png'), 'image/png', { projectId: 'p', kind: 'plan' });
+    putBuffer(db, dir, 'th1', Buffer.from('png'), 'image/png', { projectId: 'p', kind: 'plan' });
+    putBuffer(db, dir, 'plans', Buffer.from('%PDF'), 'application/pdf', { projectId: 'p', kind: 'plan-source' });
+    db.prepare(`INSERT INTO pages (id, projectId, imageId, thumbnailId, sourcePdfFileId) VALUES ('pg1', 'p', 'img1', 'th1', 'plans')`).run();
+    expect(projectDataSummary(db, 'p').summary).toEqual({ documents: 3, planPages: 1 });
+
+    // A page image whose page is gone still goes with a delete — it counts.
+    db.prepare(`DELETE FROM pages WHERE id = 'pg1'`).run();
+    expect(projectDataSummary(db, 'p').summary).toEqual({ documents: 5 });
+  });
+
+  it('only notes with something on the board count, one per item', () => {
+    createProject(db, { id: 'p', name: 'Job', pages: [], takeoffs: [] });
+    db.prepare(`INSERT INTO notes (id, projectId, data, createdAt, updatedAt) VALUES ('n1', 'p', ?, 1, 1)`)
+      .run(JSON.stringify({ elements: [{ id: 'a' }, { id: 'b' }] }));
+    db.prepare(`INSERT INTO notes (id, projectId, data, createdAt, updatedAt) VALUES ('n2', 'p', 'not json', 1, 1)`).run();
+    expect(projectDataSummary(db, 'p').summary).toEqual({ notes: 2 });
+  });
+
+  it('shows others how much there is without naming admin-only kinds', () => {
+    const summary = { documents: 3, invoices: 2, payments: 1, proposals: 1, changeOrders: 1, payApps: 1, sovLines: 4, timeEntries: 2, rfis: 1 };
+    expect(visibleDataSummary(summary, true)).toBe(summary);
+    expect(visibleDataSummary(summary, false)).toEqual({ documents: 3, rfis: 1, otherRecords: 12 });
+    expect(visibleDataSummary({ documents: 1 }, false)).toEqual({ documents: 1 });
   });
 });
 

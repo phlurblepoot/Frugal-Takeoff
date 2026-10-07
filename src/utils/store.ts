@@ -241,8 +241,35 @@ export const getAllProjects = async (): Promise<Project[]> => {
   return await res.json();
 };
 
+/** What a project holds, by kind — only the kinds it has any of, e.g.
+ *  { documents: 12, invoices: 2 } (server/projectStore.ts projectDataSummary).
+ *  Someone who isn't an admin gets billing, proposals and time folded into
+ *  `otherRecords`. */
+export type ProjectDataSummary = Record<string, number>;
+
+/** Thrown for the server's 409 `project_has_data`: the project has documents
+ *  or records, so it can only be archived (spec 2026-10-07-project-delete-guard). */
+export class ProjectHasDataError extends Error {
+  constructor(public summary: ProjectDataSummary) {
+    super('This project has documents or records. Archive it instead.');
+    this.name = 'ProjectHasDataError';
+  }
+}
+
+/** Whether a project may be deleted (only one with nothing in it may), and
+ *  what's in it — so a page can offer Archive instead of a doomed Delete. */
+export const getProjectDeleteCheck = async (id: string): Promise<{ canDelete: boolean; summary: ProjectDataSummary }> => {
+  const res = await fetchWithRetry(`/api/projects/${encodeURIComponent(id)}/delete-check`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return await res.json();
+};
+
 export const deleteProject = async (id: string): Promise<void> => {
   const res = await fetch('/api/projects/' + id, { method: 'DELETE', headers: getAuthHeaders() });
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    if (body?.error === 'project_has_data') throw new ProjectHasDataError(body.summary ?? {});
+  }
   await handleResponse(res);
 };
 

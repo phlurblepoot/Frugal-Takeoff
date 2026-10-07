@@ -8,6 +8,17 @@ export class ValidationError extends Error {}
 export class ConflictError extends Error {}
 export class NotFoundError extends Error {}
 
+/** How much of each kind of data a project holds — only the kinds it has any
+ *  of, e.g. { documents: 12, invoices: 2 }. */
+export type ProjectDataSummary = Record<string, number>;
+
+export const PROJECT_HAS_DATA_MESSAGE = 'This project has documents or records. Archive it instead.';
+
+/** deleteProject's refusal: the project holds data, so it can only be archived. */
+export class ProjectHasDataError extends Error {
+  constructor(public summary: ProjectDataSummary) { super(PROJECT_HAS_DATA_MESSAGE); }
+}
+
 // Project lifecycle stages (spec 2026-08-16: two-stage collapse). Archiving
 // and lost-bid tracking are independent meta flags, not stages.
 export const PROJECT_STATUSES = ['bidding', 'in_progress'] as const;
@@ -321,22 +332,96 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
   });
 }
 
-// Explicit user action — the one place project-owned files are deleted.
+// A project's payments: polymorphic (invoice OR AIA pay app), so they hang off
+// both. Takes the project id twice.
+const PROJECT_PAYMENTS = "(targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)) OR (targetType = 'payapp' AND targetId IN (SELECT id FROM aia_pay_apps WHERE projectId = ?))";
+
+// Everything a person made or uploaded under a project, by kind (spec
+// docs/superpowers/specs/2026-10-07-project-delete-guard-design.md). A project
+// with any of it can only be archived. Each query takes the project id as @id.
+// Child rows (lines, photos, attachments) need no query of their own: they
+// can't exist without the parent counted here. Scaffolding doesn't count —
+// takeoff lists and plan sets with nothing measured or uploaded, a crew with
+// no reports (the Daily Reports page makes "Crew 1" just by opening), a
+// notes board with nothing on it, the SOV lock, activity rows. Tasks don't
+// count either: they live on the company task list and outlive the project
+// they merely refer to (deleteProject spares them and their photos).
+const PROJECT_DATA_QUERIES: [string, string][] = [
+  // Every file the delete would remove — uploads, generated documents,
+  // photos, plan PDFs, archived documents — counting a document and its old
+  // versions once. Page images are counted as plan pages instead.
+  ['documents', `SELECT COUNT(DISTINCT COALESCE(parentFileId, id)) AS c FROM files
+    WHERE projectId = @id AND kind != 'task-photo'
+      AND id NOT IN (SELECT imageId FROM pages WHERE projectId = @id AND imageId IS NOT NULL
+                     UNION SELECT thumbnailId FROM pages WHERE projectId = @id AND thumbnailId IS NOT NULL)`],
+  ['planPages', 'SELECT COUNT(*) AS c FROM pages WHERE projectId = @id'],
+  ['measurements', 'SELECT COUNT(*) AS c FROM measurements WHERE projectId = @id'],
+  ['proposals', 'SELECT COUNT(*) AS c FROM proposals WHERE projectId = @id'],
+  ['invoices', 'SELECT COUNT(*) AS c FROM invoices WHERE projectId = @id'],
+  ['payments', `SELECT COUNT(*) AS c FROM payments WHERE ${PROJECT_PAYMENTS.replace(/\?/g, '@id')}`],
+  ['changeOrders', 'SELECT COUNT(*) AS c FROM change_orders WHERE projectId = @id'],
+  ['payApps', 'SELECT COUNT(*) AS c FROM aia_pay_apps WHERE projectId = @id'],
+  ['sovLines', 'SELECT COUNT(*) AS c FROM aia_sov_lines WHERE projectId = @id'],
+  ['rfis', 'SELECT COUNT(*) AS c FROM rfis WHERE projectId = @id'],
+  ['issues', 'SELECT COUNT(*) AS c FROM issues WHERE projectId = @id'],
+  ['punchItems', 'SELECT COUNT(*) AS c FROM punch_items WHERE projectId = @id'],
+  ['dailyReports', 'SELECT COUNT(*) AS c FROM daily_reports WHERE projectId = @id'],
+  ['timeEntries', 'SELECT COUNT(*) AS c FROM time_entries WHERE projectId = @id'],
+  // The notes board saves on every pan and zoom, so a row alone means nothing;
+  // what's on the board does.
+  ['notes', `SELECT COALESCE(SUM(json_array_length(data, '$.elements')), 0) AS c FROM notes
+    WHERE projectId = @id AND json_valid(data)`],
+  ['linkedEmails', 'SELECT COUNT(DISTINCT threadKey) AS c FROM mail_thread_links WHERE projectId = @id'],
+];
+
+export function projectDataSummary(db: Database.Database, id: string): { hasData: boolean; summary: ProjectDataSummary } {
+  const summary: ProjectDataSummary = {};
+  for (const [kind, sql] of PROJECT_DATA_QUERIES) {
+    const c = (db.prepare(sql).get({ id }) as { c: number }).c;
+    if (c > 0) summary[kind] = c;
+  }
+  return { hasData: Object.keys(summary).length > 0, summary };
+}
+
+// Kinds only admins see elsewhere (billing, proposals, everyone's time) —
+// someone else is told they exist, not how many of each.
+const ADMIN_ONLY_DATA_KINDS = ['proposals', 'invoices', 'payments', 'changeOrders', 'payApps', 'sovLines', 'timeEntries'];
+
+export function visibleDataSummary(summary: ProjectDataSummary, isAdmin: boolean): ProjectDataSummary {
+  if (isAdmin) return summary;
+  const out: ProjectDataSummary = {};
+  let otherRecords = 0;
+  for (const [kind, c] of Object.entries(summary)) {
+    if (ADMIN_ONLY_DATA_KINDS.includes(kind)) otherRecords += c;
+    else out[kind] = c;
+  }
+  if (otherRecords > 0) out.otherRecords = otherRecords;
+  return out;
+}
+
+// Explicit user action — the one place project-owned files are deleted. Only
+// a project with nothing in it may go (ProjectHasDataError otherwise; archive
+// it instead), so in practice this clears scaffolding; the sweep below stays
+// whole so nothing is ever left behind.
 export function deleteProject(db: Database.Database, dataDir: string, id: string): void {
   // Task photos are the one exception to the project-owned sweep: tasks (and
   // their photos) outlive the project they merely REFER to, and they always
   // have — before migration 23 gave them a projectId they were invisible to
   // this query. Keeping them excluded preserves that behavior exactly.
   const OWNED = `projectId = ? AND kind != 'task-photo'`;
-  const fileIds = (db.prepare(`SELECT id FROM files WHERE ${OWNED}`).all(id) as { id: string }[]).map(r => r.id);
+  let fileIds: string[] = [];
   const tx = db.transaction(() => {
+    // Checked inside the transaction, so nothing can land between the check
+    // and the delete.
+    const { hasData, summary } = projectDataSummary(db, id);
+    if (hasData) throw new ProjectHasDataError(summary);
+    fileIds = (db.prepare(`SELECT id FROM files WHERE ${OWNED}`).all(id) as { id: string }[]).map(r => r.id);
     for (const t of ['measurements', 'pages', 'takeoffs', 'plan_sets']) {
       db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
     }
     // Billing rows (Phase 4a/7b) — payments are polymorphic (invoice OR payapp),
     // so remove them up front for BOTH targets before invoices/pay-apps vanish,
     // and their attachment rows (migration 43) before the payments.
-    const PROJECT_PAYMENTS = "(targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)) OR (targetType = 'payapp' AND targetId IN (SELECT id FROM aia_pay_apps WHERE projectId = ?))";
     db.prepare(`DELETE FROM payment_attachments WHERE paymentId IN (SELECT id FROM payments WHERE ${PROJECT_PAYMENTS})`).run(id, id);
     db.prepare(`DELETE FROM payments WHERE ${PROJECT_PAYMENTS}`).run(id, id);
     db.prepare('DELETE FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').run(id);

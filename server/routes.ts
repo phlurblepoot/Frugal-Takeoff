@@ -4,7 +4,8 @@ import fsSync from 'fs';
 import type Database from 'better-sqlite3';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
-  listProjectSummaries, patchProject, ValidationError, ConflictError, NotFoundError,
+  listProjectSummaries, patchProject, projectDataSummary, visibleDataSummary,
+  ValidationError, ConflictError, NotFoundError, ProjectHasDataError, PROJECT_HAS_DATA_MESSAGE,
 } from './projectStore';
 import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile, isDirectUploadKind, type FileMeta } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
@@ -233,6 +234,22 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
+  // Only a project with nothing in it can be deleted; one with documents or
+  // records is archived instead (spec 2026-10-07-project-delete-guard). The
+  // page asks first so it can offer Archive rather than a doomed Delete.
+  app.get('/api/projects/:id/delete-check', authenticateToken, (req, res) => {
+    try {
+      if (!db.prepare('SELECT 1 FROM projects WHERE id = ?').get(req.params.id)) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+      const { hasData, summary } = projectDataSummary(db, req.params.id);
+      res.json({ canDelete: !hasData, summary: visibleDataSummary(summary, (req as any).user?.role === 'admin') });
+    } catch (e) {
+      console.error('Error checking project for delete:', e);
+      res.status(500).json({ error: 'Failed to check project' });
+    }
+  });
+
   app.delete('/api/projects/:id', authenticateToken, (req, res) => {
     try {
       const name = (db.prepare('SELECT name FROM projects WHERE id = ?').get(req.params.id) as any)?.name;
@@ -247,6 +264,12 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       });
       res.json({ success: true });
     } catch (e) {
+      if (e instanceof ProjectHasDataError) {
+        return res.status(409).json({
+          error: 'project_has_data', message: PROJECT_HAS_DATA_MESSAGE,
+          summary: visibleDataSummary(e.summary, (req as any).user?.role === 'admin'),
+        });
+      }
       console.error('Error deleting project:', e);
       res.status(500).json({ error: 'Failed to delete project' });
     }

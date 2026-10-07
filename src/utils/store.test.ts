@@ -5,6 +5,7 @@ import {
   restoreSnapshot, RestoreRunningError,
   computeSovSeedFromEstimate,
   startMediaSession, endMediaSession,
+  deleteProject, getProjectDeleteCheck, ProjectHasDataError,
 } from './store';
 import type { Project } from '../types';
 
@@ -221,5 +222,35 @@ describe('restoreSnapshot', () => {
       ok: false, status: 409, json: async () => ({ error: 'A restore is already running', code: 'restore_running' }),
     }) as unknown as Response));
     await expect(restoreSnapshot({ source: 'local', snapshotId: '20260912-020000' })).rejects.toBeInstanceOf(RestoreRunningError);
+  });
+});
+
+// Only a project with nothing in it can be deleted (spec
+// docs/superpowers/specs/2026-10-07-project-delete-guard-design.md).
+describe('project delete guard', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('turns the server 409 project_has_data into ProjectHasDataError carrying what is in it', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false, status: 409,
+      json: async () => ({ error: 'project_has_data', message: 'This project has documents or records. Archive it instead.', summary: { documents: 12, invoices: 2 } }),
+    }) as unknown as Response));
+    const err = await deleteProject('p1').catch(e => e);
+    expect(err).toBeInstanceOf(ProjectHasDataError);
+    expect(err.summary).toEqual({ documents: 12, invoices: 2 });
+  });
+
+  it('deletes an empty project as before', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true }) }) as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(deleteProject('p1')).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/p1', expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('asks the server beforehand', async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({ ok: true, status: 200, json: async () => ({ canDelete: false, summary: { rfis: 1 } }) }) as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await getProjectDeleteCheck('p1')).toEqual({ canDelete: false, summary: { rfis: 1 } });
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/projects/p1/delete-check');
   });
 });

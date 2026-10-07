@@ -90,16 +90,12 @@ describe('projects routes', () => {
 
   it('GET list returns aggregates newest-first; DELETE removes', async () => {
     await request(app).post('/api/projects').send(PROJECT);
-    await request(app).post('/api/projects').send({
-      ...PROJECT,
-      id: 'p2',
-      createdAt: 2,
-      pages: [{ id: 'pg2', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
-    });
+    // Nothing in it yet (no plan pages), so it can be deleted.
+    await request(app).post('/api/projects').send({ ...PROJECT, id: 'p2', createdAt: 2, pages: [] });
     const list = await request(app).get('/api/projects');
     expect(list.body.map((p: any) => p.id)).toEqual(['p2', 'p1']);
-    await request(app).delete('/api/projects/p1');
-    expect((await request(app).get('/api/projects/p1')).status).toBe(404);
+    await request(app).delete('/api/projects/p2').expect(200);
+    expect((await request(app).get('/api/projects/p2')).status).toBe(404);
   });
 });
 
@@ -700,61 +696,157 @@ describe('file versions over HTTP', () => {
   });
 });
 
-// The drafts API went with the old PDF editor (ONLYOFFICE Phase 1), but rows
-// it left behind still belong to their project's files.
-describe('deleteProject drafts cascade', () => {
-  it('removes leftover editor drafts for its files', async () => {
+// Only a project with nothing in it can be deleted; one with documents or
+// records is archived instead (spec
+// docs/superpowers/specs/2026-10-07-project-delete-guard-design.md).
+describe('DELETE /api/projects/:id — only an empty project', () => {
+  const EMPTY = { ...PROJECT, pages: [] };
+  const HAS_DATA = 'This project has documents or records. Archive it instead.';
+  const count = (sql: string, ...args: unknown[]) => (db.prepare(sql).get(...args) as { c: number }).c;
+
+  // An app whose every request is someone who isn't an admin, sharing the db.
+  const memberApp = () => {
+    const m = express();
+    m.use(express.json());
+    registerDataRoutes(m, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'user' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+      broadcastChange: () => {},
+    });
+    return m;
+  };
+
+  it('deletes an empty project as before: its scaffolding goes, the delete is logged and broadcast', async () => {
+    const events: EntityChangedEvent[] = [];
+    const a = express();
+    a.use(express.json());
+    registerDataRoutes(a, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: (e: EntityChangedEvent) => { events.push(e); },
+    });
+    await request(a).post('/api/projects').send({
+      ...EMPTY, planSets: [{ id: 'ps1', name: 'Rev A' }], takeoffs: [{ id: 't1', name: 'Drywall', type: 'area' }],
+    }).expect(200);
+    const crewId = await firstCrew(); // opening Daily Reports makes "Crew 1"
+
+    expect((await request(a).get('/api/projects/p1/delete-check')).body).toEqual({ canDelete: true, summary: {} });
+    await request(a).delete('/api/projects/p1').expect(200, { success: true });
+
+    expect((await request(a).get('/api/projects/p1')).status).toBe(404);
+    expect(count('SELECT COUNT(*) c FROM takeoffs WHERE projectId = ?', 'p1')).toBe(0);
+    expect(count('SELECT COUNT(*) c FROM plan_sets WHERE projectId = ?', 'p1')).toBe(0);
+    expect(count('SELECT COUNT(*) c FROM daily_report_crews WHERE id = ?', crewId)).toBe(0);
+    expect(count(`SELECT COUNT(*) c FROM activity WHERE type = 'project_deleted' AND message = 'Project "Test Project" deleted'`)).toBe(1);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'project', id: 'p1', action: 'deleted' }));
+  });
+
+  it('refuses a project with a document: 409 project_has_data with what is in it, and nothing is removed', async () => {
+    const events: EntityChangedEvent[] = [];
+    const a = express();
+    a.use(express.json());
+    registerDataRoutes(a, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: (e: EntityChangedEvent) => { events.push(e); },
+    });
+    await request(a).post('/api/projects').send(EMPTY);
+    await request(a).post('/api/files/df1?projectId=p1&kind=document&name=D.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
+    events.length = 0;
+
+    const res = await request(a).delete('/api/projects/p1');
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'project_has_data', message: HAS_DATA, summary: { documents: 1 } });
+    expect((await request(a).get('/api/projects/p1')).status).toBe(200);
+    expect((await request(a).get('/api/files/df1/content?token=good-token')).status).not.toBe(404);
+    expect(count('SELECT COUNT(*) c FROM files WHERE id = ?', 'df1')).toBe(1);
+    expect(count(`SELECT COUNT(*) c FROM activity WHERE type = 'project_deleted'`)).toBe(0);
+    expect(events.filter(e => e.action === 'deleted')).toEqual([]);
+  });
+
+  it('delete-check says so beforehand; an unknown project is a 404', async () => {
+    await request(app).post('/api/projects').send(PROJECT); // one plan page
+    await request(app).post('/api/projects/p1/issues').send({ title: 'Crack' });
+    expect((await request(app).get('/api/projects/p1/delete-check')).body)
+      .toEqual({ canDelete: false, summary: { planPages: 1, issues: 1 } });
+    expect((await request(app).get('/api/projects/nope/delete-check')).status).toBe(404);
+  });
+
+  it('archiving does not make a project with data deletable', async () => {
     await request(app).post('/api/projects').send(PROJECT);
+    await request(app).patch('/api/projects/p1').send({ version: 1, archived: true }).expect(200);
+    expect((await request(app).delete('/api/projects/p1')).status).toBe(409);
+    expect((await request(app).get('/api/projects/p1')).body.archived).toBe(true);
+  });
+
+  it('anyone signed in may still delete an empty project; others see admin-only kinds only as a count', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
+    await request(app).post('/api/projects').send({ ...EMPTY, id: 'p2', createdAt: 2 });
+    await request(app).post('/api/projects/p2/invoices').send({ number: 'INV-1', lines: [] });
+    await request(app).post('/api/projects/p2/change-orders').send({ number: 'CO-1' });
+    await request(app).post('/api/projects/p2/rfis').send({ title: 'Which finish?' });
+    const m = memberApp();
+
+    expect((await request(m).get('/api/projects/p2/delete-check')).body)
+      .toEqual({ canDelete: false, summary: { rfis: 1, otherRecords: 2 } });
+    expect((await request(m).delete('/api/projects/p2')).body)
+      .toEqual({ error: 'project_has_data', message: HAS_DATA, summary: { rfis: 1, otherRecords: 2 } });
+    // An admin is told exactly.
+    expect((await request(app).delete('/api/projects/p2')).body.summary).toEqual({ invoices: 1, changeOrders: 1, rfis: 1 });
+
+    await request(m).delete('/api/projects/p1').expect(200);
+    expect((await request(app).get('/api/projects/p1')).status).toBe(404);
+  });
+
+  // The old cascade cases: each of these used to be wiped by a delete; now
+  // each one stops it, and every row is still there afterwards.
+  it('refuses a project with leftover editor drafts on its files, and keeps them', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
     await request(app).post('/api/files/df1?projectId=p1&kind=document&name=D.pdf')
       .set('Content-Type', 'application/pdf').send(Buffer.from('x'));
     db.prepare(`INSERT INTO drafts (userId, fileId, kind, data, updatedAt) VALUES ('u1', 'df1', 'pdf', '{}', 1)`).run();
-    await request(app).delete('/api/projects/p1');
-    expect(db.prepare('SELECT COUNT(*) c FROM drafts WHERE fileId = ?').get('df1')).toEqual({ c: 0 });
+    expect((await request(app).delete('/api/projects/p1')).status).toBe(409);
+    expect(db.prepare('SELECT COUNT(*) c FROM drafts WHERE fileId = ?').get('df1')).toEqual({ c: 1 });
   });
-});
 
-describe('deleteProject billing cascade', () => {
-  it('removes invoices, lines, payments, change orders for the project', async () => {
-    await request(app).post('/api/projects').send(PROJECT); // id p1
+  it('refuses a project with invoices, payments and change orders, and keeps them', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
     const inv = await request(app).post('/api/projects/p1/invoices')
       .send({ number: 'INV-1', date: 1, terms: 'Net 30', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] });
-    const invoiceId = inv.body.id;
-    await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: invoiceId, date: 1, amount: 50, method: 'check' });
+    await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: inv.body.id, date: 1, amount: 50, method: 'check' });
     await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', description: 'Extra', lumpSumAmount: 200 });
-    await request(app).delete('/api/projects/p1');
-    // all billing rows gone
-    for (const sql of [
-      'SELECT COUNT(*) c FROM invoices WHERE projectId = ?',
-      'SELECT COUNT(*) c FROM change_orders WHERE projectId = ?',
-    ]) {
-      expect((db.prepare(sql).get('p1') as any).c).toBe(0);
-    }
-    expect((db.prepare("SELECT COUNT(*) c FROM payments WHERE targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)").get('p1') as any).c).toBe(0);
-    expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').get('p1') as any).c).toBe(0);
+    const res = await request(app).delete('/api/projects/p1');
+    expect(res.status).toBe(409);
+    expect(res.body.summary).toEqual({ invoices: 1, payments: 1, changeOrders: 1 });
+    expect(count('SELECT COUNT(*) c FROM invoices WHERE projectId = ?', 'p1')).toBe(1);
+    expect(count('SELECT COUNT(*) c FROM invoice_lines WHERE invoiceId = ?', inv.body.id)).toBe(1);
+    expect(count('SELECT COUNT(*) c FROM payments WHERE targetId = ?', inv.body.id)).toBe(1);
+    expect(count('SELECT COUNT(*) c FROM change_orders WHERE projectId = ?', 'p1')).toBe(1);
   });
-});
 
-describe('deleteProject payment attachments cascade', () => {
-  it('removes the attachment rows of payments on its invoices and pay applications', async () => {
-    await request(app).post('/api/projects').send(PROJECT); // id p1
+  it('refuses a project with payments on a pay application, and keeps their attachments', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
     await request(app).post('/api/files/chk1?projectId=p1&kind=payment-attachment&name=Check.jpg')
       .set('Content-Type', 'image/jpeg').send(Buffer.from('jpg'));
-    const inv = (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [] })).body.id;
     const payApp = (await request(app).post('/api/projects/p1/aia/pay-apps').send({})).body.id;
-    const onInv = (await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: inv, amount: 10 })).body.id;
     const onApp = (await request(app).post('/api/projects/p1/payments').send({ targetType: 'payapp', targetId: payApp, amount: 20 })).body.id;
-    await request(app).post(`/api/payments/${onInv}/attachments`).send({ fileId: 'chk1' }).expect(200);
     await request(app).post(`/api/payments/${onApp}/attachments`).send({ fileId: 'chk1' }).expect(200);
-
-    await request(app).delete('/api/projects/p1').expect(200);
-    expect(db.prepare('SELECT COUNT(*) c FROM payment_attachments').get()).toEqual({ c: 0 });
-    expect(db.prepare('SELECT COUNT(*) c FROM payments').get()).toEqual({ c: 0 });
+    const res = await request(app).delete('/api/projects/p1');
+    expect(res.status).toBe(409);
+    expect(res.body.summary).toEqual({ documents: 1, payApps: 1, payments: 1 });
+    expect(db.prepare('SELECT COUNT(*) c FROM payment_attachments').get()).toEqual({ c: 1 });
+    expect(db.prepare('SELECT COUNT(*) c FROM payments').get()).toEqual({ c: 1 });
   });
-});
 
-describe('deleteProject attachments cascade', () => {
-  it('removes the PDF attachment rows of its change orders, issues, RFIs and daily reports', async () => {
-    await request(app).post('/api/projects').send(PROJECT); // id p1
+  it('refuses a project with change orders, issues, RFIs and daily reports, and keeps their attachments', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
     await request(app).post('/api/files/spec1?projectId=p1&kind=document&name=Spec.pdf')
       .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
     const co = (await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1' })).body.id;
@@ -767,15 +859,29 @@ describe('deleteProject attachments cascade', () => {
     await request(app).post(`/api/rfis/${rfi}/attachments`).send({ fileId: 'spec1' }).expect(200);
     await request(app).post(`/api/daily-reports/${dr}/attachments`).send({ fileId: 'spec1' }).expect(200);
 
-    await request(app).delete('/api/projects/p1').expect(200);
+    const res = await request(app).delete('/api/projects/p1');
+    expect(res.status).toBe(409);
+    expect(res.body.summary).toEqual({ documents: 1, changeOrders: 1, rfis: 1, issues: 1, dailyReports: 1 });
     for (const [table, owner, id] of [
       ['change_order_attachments', 'changeOrderId', co], ['issue_attachments', 'issueId', iss],
       ['rfi_attachments', 'rfiId', rfi], ['daily_report_attachments', 'dailyReportId', dr],
     ]) {
-      expect(db.prepare(`SELECT COUNT(*) c FROM ${table} WHERE ${owner} = ?`).get(id), table).toEqual({ c: 0 });
+      expect(db.prepare(`SELECT COUNT(*) c FROM ${table} WHERE ${owner} = ?`).get(id), table).toEqual({ c: 1 });
     }
-    // ...and its daily report crews (migration 45).
-    expect(db.prepare('SELECT COUNT(*) c FROM daily_report_crews WHERE id = ?').get(crewId)).toEqual({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) c FROM daily_report_crews WHERE id = ?').get(crewId)).toEqual({ c: 1 });
+  });
+
+  it('refuses a project with issue and RFI photos, and keeps them', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
+    const iss = await request(app).post('/api/projects/p1/issues').send({ title: 'Crack', description: 'Wall crack' });
+    const rfi = await request(app).post('/api/projects/p1/rfis').send({ title: 'Detail question', question: 'Which finish?' });
+    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
+    await request(app).post(`/api/issues/${iss.body.id}/photos`).send({ fileId: 'ph1' });
+    await request(app).post(`/api/rfis/${rfi.body.id}/photos`).send({ fileId: 'ph1' });
+    expect((await request(app).delete('/api/projects/p1')).status).toBe(409);
+    expect(count('SELECT COUNT(*) c FROM issue_photos WHERE issueId = ?', iss.body.id)).toBe(1);
+    expect(count('SELECT COUNT(*) c FROM rfi_photos WHERE rfiId = ?', rfi.body.id)).toBe(1);
   });
 });
 
@@ -1306,32 +1412,6 @@ describe('AIA billing routes (admin-gated)', () => {
     expect(get.body.architect).toBe('AOR Inc');
     // survives a project reload
     expect(loadProject(db, 'p1').aiaSettings.retainagePercent).toBe(5);
-  });
-});
-
-describe('deleteProject issues cascade', () => {
-  it('removes issues and issue_photos for the project', async () => {
-    await request(app).post('/api/projects').send(PROJECT); // id p1
-    const iss = await request(app).post('/api/projects/p1/issues').send({ title: 'Crack', description: 'Wall crack' });
-    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg')
-      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
-    await request(app).post(`/api/issues/${iss.body.id}/photos`).send({ fileId: 'ph1' });
-    await request(app).delete('/api/projects/p1');
-    expect((db.prepare('SELECT COUNT(*) c FROM issues WHERE projectId = ?').get('p1') as any).c).toBe(0);
-    expect((db.prepare('SELECT COUNT(*) c FROM issue_photos WHERE issueId IN (SELECT id FROM issues WHERE projectId = ?)').get('p1') as any).c).toBe(0);
-  });
-});
-
-describe('deleteProject rfis cascade', () => {
-  it('removes rfis and rfi_photos for the project', async () => {
-    await request(app).post('/api/projects').send(PROJECT); // id p1
-    const rfi = await request(app).post('/api/projects/p1/rfis').send({ title: 'Detail question', question: 'Which finish?' });
-    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg')
-      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
-    await request(app).post(`/api/rfis/${rfi.body.id}/photos`).send({ fileId: 'ph1' });
-    await request(app).delete('/api/projects/p1');
-    expect((db.prepare('SELECT COUNT(*) c FROM rfis WHERE projectId = ?').get('p1') as any).c).toBe(0);
-    expect((db.prepare('SELECT COUNT(*) c FROM rfi_photos WHERE rfiId IN (SELECT id FROM rfis WHERE projectId = ?)').get('p1') as any).c).toBe(0);
   });
 });
 

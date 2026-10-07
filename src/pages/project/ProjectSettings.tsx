@@ -9,12 +9,19 @@
 // could swap the page out from under a typing user. Local edits keep the form
 // dirty, which also holds off remote-refresh clobbering (banner instead).
 // Stage reuses ProjectStageControl; archive matches ProjectsPage's
-// patchProject({ archived }) toggle; delete matches deleteProject + confirm.
+// patchProject({ archived }) toggle; delete matches deleteProject + confirm,
+// and is offered only for a project with nothing in it — one with documents
+// or records says why, with the Archive row right above it (spec
+// 2026-10-07-project-delete-guard).
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Settings as SettingsIcon, ShieldAlert, ThumbsDown, Trash2, Archive, ArchiveRestore } from 'lucide-react';
 import { Project, Customer, CustomerRoleEmails } from '../../types';
-import { getProject, saveProject, deleteProject, patchProject, ConflictError, getCustomers } from '../../utils/store';
+import {
+  getProject, saveProject, deleteProject, patchProject, ConflictError, getCustomers,
+  getProjectDeleteCheck, ProjectHasDataError, type ProjectDataSummary,
+} from '../../utils/store';
+import { projectDeleteBlockedReason } from '../../utils/projectDelete';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import { ProjectStageControl } from '../../components/ProjectStageControl';
 import { RoleEmailsEditor } from '../../components/RoleEmailsEditor';
@@ -54,6 +61,11 @@ export const ProjectSettings: React.FC = () => {
   // Project-specific contact email overrides
   const [contactEmails, setContactEmails] = useState<CustomerRoleEmails>({});
 
+  // What's in the project, for the Delete row: undefined while asking, null
+  // if the ask failed (Delete stays offered; the server still refuses one
+  // with data).
+  const [deleteCheck, setDeleteCheck] = useState<{ canDelete: boolean; summary: ProjectDataSummary } | null | undefined>(undefined);
+
   useEffect(() => {
     getCustomers()
       .then(setCustomers)
@@ -77,6 +89,9 @@ export const ProjectSettings: React.FC = () => {
       })
       .catch(() => setProject(null))
       .finally(() => setLoading(false));
+    getProjectDeleteCheck(projectId)
+      .then(setDeleteCheck)
+      .catch(() => setDeleteCheck(null));
   };
   useEffect(reload, [projectId, admin]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -255,11 +270,27 @@ export const ProjectSettings: React.FC = () => {
       await deleteProject(project.id);
       toast('Project deleted', { type: 'success' });
       navigate('/projects');
-    } catch {
-      toast('Failed to delete project', { type: 'error' });
+    } catch (e) {
       setBusy(false);
+      if (!(e instanceof ProjectHasDataError)) {
+        toast('Failed to delete project', { type: 'error' });
+        return;
+      }
+      // Something landed in it since the page asked (someone uploaded,
+      // say): the row now says why, and Archive is offered right here.
+      setDeleteCheck({ canDelete: false, summary: e.summary });
+      const reason = projectDeleteBlockedReason(e.summary);
+      if (isArchived) {
+        toast(`This project can't be deleted. ${reason}`, { type: 'warning' });
+      } else if (await confirm({ title: "Can't delete this project", message: reason, confirmLabel: 'Archive' })) {
+        await toggleArchive();
+      }
     }
   };
+
+  // Only a project with nothing in it can be deleted.
+  const deleteBlocked = deleteCheck ? !deleteCheck.canDelete : false;
+  const deleteBlockedReason = deleteCheck && !deleteCheck.canDelete ? projectDeleteBlockedReason(deleteCheck.summary) : '';
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 md:px-8 space-y-6">
@@ -364,12 +395,18 @@ export const ProjectSettings: React.FC = () => {
             </div>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-edge pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-edge pt-4" data-testid="delete-project-row">
             <div>
               <p className="text-sm font-medium text-ink">Delete project</p>
-              <p className="text-xs text-ink-faint">Permanently remove this project and all of its data.</p>
+              {deleteBlocked ? (
+                <p className="text-xs text-ink-faint" data-testid="delete-blocked-reason">{deleteBlockedReason}</p>
+              ) : (
+                <p className="text-xs text-ink-faint">Permanently remove this project. Only a project with nothing in it can be deleted.</p>
+              )}
             </div>
-            <Button variant="danger" onClick={handleDelete} disabled={busy}>
+            {/* A blocked project's way out is the Archive row just above. */}
+            <Button variant="danger" onClick={handleDelete} disabled={busy || deleteBlocked || deleteCheck === undefined}
+              title={deleteBlocked ? deleteBlockedReason : undefined}>
               <Trash2 size={14} />Delete
             </Button>
           </div>

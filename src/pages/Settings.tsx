@@ -28,6 +28,15 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.1.10',
+    date: 'October 7, 2026',
+    changes: [
+      'A project that has anything in it can no longer be deleted, only archived. That means documents, plan pages, measurements, proposals, invoices, payments, change orders, pay applications, RFIs, issues, punch items, daily reports, time, notes or linked emails. Only a project with nothing in it, such as one made by mistake, can still be deleted. Who can delete is unchanged.',
+      'Clicking the trash can on the Projects page now checks the project first. If it has anything in it, the box says what (for example "Has 12 documents and 2 invoices — archive it instead.") and offers Archive in place of Delete. An empty project deletes as before: type "delete" to confirm. The same goes for Delete in a project\'s Settings: the reason shows under it, with Archive just above.',
+      'An archived project keeps everything and can be restored anytime from the Archive tab.',
+    ],
+  },
+  {
     version: '4.1.9',
     date: 'October 7, 2026',
     changes: [
