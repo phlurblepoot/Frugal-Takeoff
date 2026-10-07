@@ -16,6 +16,7 @@ import {
 } from '../../utils/store';
 import type { ProjectThreadRow } from '../../pages/mail/types';
 import { formatMoney } from '../../utils/money';
+import { billingDay, formatDay } from '../../utils/billingDates';
 import { ProjectStatusPill, LostBadge } from '../../components/ui';
 import { ReplyFlagChip } from '../../components/documents/ReplyFlagChip';
 import { CountUp } from '../../components/motion/CountUp';
@@ -216,7 +217,9 @@ const AttentionRow: React.FC<{ item: CustomerAttentionItem; customerId: string }
   const isOverdue = item.type === 'overdue_task' || (item.type === 'bid_due' && !!item.overdue);
   const Icon = item.type === 'overdue_task' ? CheckSquare : item.type === 'bid_due' ? Calendar : DollarSign;
   const iconTone = isOverdue ? 'text-red-600 dark:text-red-400' : item.type === 'outstanding_invoice' ? 'text-amber-600 dark:text-amber-400' : 'text-ink-faint';
-  const dateLabel = fmtDate(item.date);
+  // An invoice or pay app date is the day it was picked (utils/billingDates).
+  const invoiceDay = item.type === 'outstanding_invoice' ? billingDay(item.date) : null;
+  const dateLabel = invoiceDay ? formatDay(invoiceDay) : fmtDate(item.date);
 
   return (
     <li>

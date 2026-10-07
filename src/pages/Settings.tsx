@@ -28,6 +28,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.1.8',
+    date: 'October 6, 2026',
+    changes: [
+      'Fix: billing dates no longer show a day early. In US time zones a date picked as October 1 on an invoice, change order or payment showed as September 30 — on the Payments tab, in the invoice and pay application editors\' payment lists, on the Change Orders tab, on invoice and change order PDFs, on a customer\'s Billing tab and Payments and Needs attention cards, and on the dashboard\'s Recent payments card. Pay application "Period to" and "Application date" showed a day early on the Applications list too. Every one of them now shows the day that was picked, and opening an editor never moves its date. Nothing stored changes, so dates already entered are fixed as well.',
+      'Recording a payment now fills in today\'s date for you (change it if the payment came in on another day), and a new pay application starts on today\'s date on your own calendar — late in the evening it used to start on tomorrow\'s.',
+    ],
+  },
+  {
     version: '4.1.7',
     date: 'October 6, 2026',
     changes: [

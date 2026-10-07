@@ -12,6 +12,7 @@ import type Database from 'better-sqlite3';
 import { listBilledDocuments, listChangeOrders, toCents, CHANGE_ORDER_STATUSES } from './billingStore';
 import { listPayAppRows, computeG702, retainageReleasedCents, type RetainageMode } from './aiaStore';
 import { billedDocDateMs, ageDays, agingBucket, type AgingBucket } from './dashboardStore';
+import { billingDay } from '../src/utils/billingDates';
 
 export class ValidationError extends Error {}
 
@@ -63,16 +64,12 @@ const rowProject = (p: ScopeProject): RowProject => ({
   projectId: p.id, projectName: p.name, customerId: p.customerId, customerName: p.customerName, archived: p.archived,
 });
 
-// A stored date as the calendar day it stands for. Invoice, change order and
-// payment dates are epoch ms of the day picked in the editor (UTC midnight,
-// `new Date('YYYY-MM-DD')`), read back the way the editors read them
-// (toISOString); a pay app's applicationDate is already 'YYYY-MM-DD'.
-function dayOf(date: string | number | null | undefined): string | null {
-  if (date == null || date === '') return null;
-  if (typeof date === 'string') return date;
-  const d = new Date(date);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
-}
+// A stored date as the calendar day it stands for, by billing's one rule
+// (src/utils/billingDates.ts): invoice, change order and payment dates are
+// epoch ms of the day picked in the editor (UTC midnight, `new Date('YYYY-MM-DD')`),
+// read back as that day; a payment stamped "now" is this server's local day;
+// a pay app's applicationDate is already 'YYYY-MM-DD'.
+const dayOf = billingDay;
 
 // What a document is called on every report: 'Invoice 1001' / 'Pay App #3'.
 function documentLabel(kind: 'invoice' | 'payapp', number: string | number | null | undefined): string {

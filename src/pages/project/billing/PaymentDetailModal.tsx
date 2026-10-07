@@ -13,6 +13,7 @@ import {
   addPaymentAttachment, deletePayment, formatBytes, getImageThumbUrl, getImageUrl, getPayment,
   removePaymentAttachment, updatePayment,
 } from '../../../utils/store';
+import { billingDay } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { Button, Field, Input, Modal, Select, Skeleton } from '../../../components/ui';
@@ -42,10 +43,10 @@ export const isImageAttachment = (a: { mime: string | null }) => !!a.mime?.start
 
 interface Draft { date: string; amount: string; method: string; note: string }
 
-// The date box holds a calendar day; a stored date may also carry a time of
-// day (one recorded without a date is stamped "now"), so an untouched box is
-// sent back as the stored timestamp, never re-parsed.
-const toDateInput = (ts: number | null) => (ts ? new Date(ts).toISOString().slice(0, 10) : '');
+// The date box holds a calendar day — the picked day, or the local day of one
+// stamped "now" when recorded without a date (utils/billingDates) — so an
+// untouched box is sent back as the stored timestamp, never re-parsed.
+const toDateInput = (ts: number | null) => billingDay(ts) ?? '';
 const draftFrom = (p: PaymentDetail): Draft => ({
   date: toDateInput(p.date), amount: String(p.amount), method: p.method ?? '', note: p.note ?? '',
 });

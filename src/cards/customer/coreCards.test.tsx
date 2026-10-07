@@ -7,6 +7,7 @@ import { ThemeProvider } from '../../context/ThemeContext';
 import type { CardContext, CardWidth } from '../types';
 import type { CustomerOverview } from '../../utils/store';
 import type { ProjectThreadRow } from '../../pages/mail/types';
+import { useTimeZone } from '../../test/timeZone';
 
 const { getCustomerOverview, getCustomerThreads } = vi.hoisted(() => ({
   getCustomerOverview: vi.fn(),
@@ -258,5 +259,23 @@ describe('cu-attention', () => {
   it('renders nothing when ctx has no customerId', () => {
     const { container } = mount('cu-attention', 1, { isAdmin: true });
     expect(container).toBeEmptyDOMElement();
+  });
+
+  describe('west of UTC', () => {
+    useTimeZone('America/Los_Angeles');
+
+    it('dates an outstanding invoice or pay app with the day that was picked', async () => {
+      getCustomerOverview.mockResolvedValue({
+        customer: baseCustomer, projects: [], taskCounts: { open: 0, overdue: 0 },
+        attention: [
+          { type: 'outstanding_invoice', label: 'Invoice #4', projectId: 'p2', balanceCents: 12_000, date: new Date('2026-10-01').getTime() },
+          { type: 'outstanding_invoice', label: 'Pay App #2', projectId: 'p2', balanceCents: 8_000, date: '2026-09-01' },
+        ],
+      } satisfies CustomerOverview);
+      mount('cu-attention', 1, { isAdmin: true, customerId: 'c1' });
+      const rows = await screen.findAllByTestId('customer-attention-row');
+      expect(rows[0]).toHaveTextContent(new Date(2026, 9, 1).toLocaleDateString());
+      expect(rows[1]).toHaveTextContent(new Date(2026, 8, 1).toLocaleDateString());
+    });
   });
 });

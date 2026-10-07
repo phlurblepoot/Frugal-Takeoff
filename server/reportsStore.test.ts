@@ -14,6 +14,7 @@ import { dashboardMoney } from './dashboardStore';
 import {
   openInvoicesReport, paymentsReport, changeOrdersReport, retainageReport, reportFilterOptions, ValidationError,
 } from './reportsStore';
+import { useTimeZone } from '../src/test/timeZone';
 
 const DAY = 24 * 60 * 60 * 1000;
 // Noon UTC, so day arithmetic below never straddles a date line.
@@ -143,6 +144,18 @@ describe('paymentsReport', () => {
     expect(all.totals).toEqual({ count: 4, amountCents: 10 + 20 + 25050 + 9900 });
     expect(paymentsReport(db, { projectId: 'p1' }).totals.amountCents).toBe(30); // 0.1 + 0.2, no float drift
     expect(paymentsReport(db, { customerId: 'c2' }).rows.every(x => x.targetType === 'payapp')).toBe(true);
+  });
+
+  describe('on a server west of UTC', () => {
+    useTimeZone('America/Los_Angeles');
+
+    it('keeps each picked day, and files a payment stamped "now" under the server\'s local day', () => {
+      const inv = sentInvoice('p2', '2001', 100, 30);
+      recordPayment(db, 'invoice', inv, { date: Date.UTC(2026, 9, 21, 3, 30), amount: 5 }); // Oct 20, 8:30pm in Los Angeles
+      expect(paymentsReport(db, { from: '2026-10-01', to: '2026-10-31' }).rows.map(x => [x.date, x.amountCents])).toEqual([
+        ['2026-10-31', 25050], ['2026-10-20', 500], ['2026-10-01', 20],
+      ]);
+    });
   });
 
   it('rejects a date that is not YYYY-MM-DD', () => {

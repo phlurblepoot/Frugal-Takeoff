@@ -8,6 +8,7 @@ import {
   uploadProjectFile, addPaymentAttachment,
 } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import { formatBillingDate, todayDay } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import {
@@ -35,7 +36,8 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
   const [payApps, setPayApps] = useState<AiaPayApp[]>([]);
   const [target, setTarget] = useState('');
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState('');
+  // Today on the local calendar, so a new payment is always a picked day.
+  const [date, setDate] = useState(todayDay);
   const [method, setMethod] = useState('check');
   const [note, setNote] = useState('');
   const [staged, setStaged] = useState<Staged[]>([]);
@@ -112,7 +114,7 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
       window.dispatchEvent(new CustomEvent('celebrate', { detail: { variant: 'pulse' } }));
       toast('Payment recorded', { type: 'success' });
       const toAttach = staged;
-      setTarget(''); setAmount(''); setDate(''); setMethod('check'); setNote(''); setStaged([]);
+      setTarget(''); setAmount(''); setDate(todayDay()); setMethod('check'); setNote(''); setStaged([]);
       if (toAttach.length) await attachStaged(paymentId, toAttach);
       reload();
       onChange?.();
@@ -214,7 +216,7 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
             <TBody>
               {payments.map(p => (
                 <TR key={p.id} interactive onClick={() => setOpenId(p.id)} data-testid={`payment-row-${p.id}`}>
-                  <TD className="text-ink-soft">{p.date ? new Date(p.date).toLocaleDateString() : '—'}</TD>
+                  <TD className="text-ink-soft">{formatBillingDate(p.date)}</TD>
                   <TD className="font-medium text-ink">{p.targetLabel || `${p.targetType} ${p.targetId}`}</TD>
                   <TD className="text-ink-soft">{paymentMethodLabel(p.method)}</TD>
                   <TD className="text-ink-soft max-w-[16rem] truncate" title={p.note || ''}>{p.note || '—'}</TD>

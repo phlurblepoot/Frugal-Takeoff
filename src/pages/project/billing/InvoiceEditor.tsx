@@ -7,6 +7,7 @@ import {
   addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
 } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import { billingDay, formatBillingDate } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
@@ -55,11 +56,11 @@ export const InvoiceEditor: React.FC<{
   const [number, setNumber] = useState(invoice.number ?? '');
   const [terms, setTerms] = useState(invoice.terms ?? '');
   const [notes, setNotes] = useState(invoice.notes ?? '');
-  const [date, setDate] = useState(invoice.date ? new Date(invoice.date).toISOString().slice(0, 10) : '');
+  const [date, setDate] = useState(billingDay(invoice.date) ?? '');
   const [lines, setLines] = useState<InvoiceLine[]>(invoice.lines.length ? invoice.lines : []);
   const [saving, setSaving] = useState(false);
 
-  const initialDate = invoice.date ? new Date(invoice.date).toISOString().slice(0, 10) : '';
+  const initialDate = billingDay(invoice.date) ?? '';
   const dirty =
     number !== (invoice.number ?? '') ||
     terms !== (invoice.terms ?? '') ||
@@ -288,7 +289,7 @@ export const InvoiceEditor: React.FC<{
             <TBody>
               {invoice.payments.map(p => (
                 <TR key={p.id}>
-                  <TD className="text-ink-soft">{p.date ? new Date(p.date).toLocaleDateString() : '—'}</TD>
+                  <TD className="text-ink-soft">{formatBillingDate(p.date)}</TD>
                   <TD className="text-ink-faint">{p.note || '—'}</TD>
                   <TD className="text-right tabular-nums text-ink-soft">{formatMoney(Math.round((Number(p.amount) || 0) * 100))}</TD>
                 </TR>

@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { ChangeOrder } from '../../../utils/store';
+import { useTimeZone } from '../../../test/timeZone';
 
 const h = vi.hoisted(() => ({
   getChangeOrder: vi.fn(),
@@ -315,5 +316,23 @@ describe('ChangeOrderEditor — PDF attachments', () => {
     const stored = h.persistGeneratedDocument.mock.calls[0][0] as Blob;
     expect(new Uint8Array(await stored.arrayBuffer())).toEqual(MERGED);
     expect(h.sendChangeOrder.mock.calls[0][1]).toMatchObject({ fileId: 'file-7' });
+  });
+});
+
+describe('ChangeOrderEditor — dates west of UTC', () => {
+  useTimeZone('America/Los_Angeles');
+
+  it('opens on the day that was picked, and saves a new one the way it always has', async () => {
+    mount(co({ date: new Date('2026-10-01').getTime() }));
+    expect(await screen.findByLabelText('Date')).toHaveValue('2026-10-01');
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-10-05' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save change order' }));
+    await waitFor(() => expect(h.saveChangeOrder).toHaveBeenCalledTimes(1));
+    expect(h.saveChangeOrder.mock.calls[0][1]).toMatchObject({ date: new Date('2026-10-05').getTime() });
+  });
+
+  it('opens an older date stamped with a time of day on its local day', async () => {
+    mount(co({ date: Date.UTC(2026, 9, 7, 3, 30) })); // Oct 6, 8:30pm in Los Angeles
+    expect(await screen.findByLabelText('Date')).toHaveValue('2026-10-06');
   });
 });

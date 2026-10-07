@@ -12,6 +12,7 @@ import {
   getCustomerOverview, getProjectsSummary, getTasks,
 } from '../../utils/store';
 import { formatMoney } from '../../utils/money';
+import { billingDay, formatDay } from '../../utils/billingDates';
 import { upcomingTaskItems } from '../../components/tasks/UpcomingTasksCard';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { CardShell } from '../CardShell';
@@ -35,16 +36,17 @@ const BILLING_TYPES: import('../../hooks/useLiveQuery').EntityType[] =
 
 // Ledger dates are epoch ms for invoices, 'YYYY-MM-DD' strings for pay apps
 // (see CustomerBillingLedgerEntry) — normalize to a comparable number for
-// both sorting and display.
+// sorting.
 function ledgerDateMs(v: string | number | null): number {
   if (v == null) return 0;
   return typeof v === 'number' ? v : new Date(v).getTime();
 }
 
+// Shown as the day it was picked (utils/billingDates), never shifted a day by
+// the viewer's timezone.
 function fmtLedgerDate(v: string | number | null): string | null {
-  if (v == null) return null;
-  const d = new Date(v);
-  return isNaN(d.getTime()) ? null : d.toLocaleDateString();
+  const day = billingDay(v);
+  return day && formatDay(day);
 }
 
 const kindLabel = (kind: 'invoice' | 'payapp'): string => (kind === 'invoice' ? 'Invoice' : 'Pay App');

@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { Invoice } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import { formatBillingDate } from '../../../utils/billingDates';
 import {
   LetterheadContext,
   drawLetterheadHeader,
@@ -73,7 +74,7 @@ export function buildInvoicePdf(ctx: InvoicePdfContext): Uint8Array {
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(60, 60, 60);
   let metaY = y;
   doc.text(`No: ${ctx.invoice.number ?? ''}`, W - M, metaY, { align: 'right' }); metaY += 14;
-  if (ctx.invoice.date) { doc.text(`Date: ${new Date(ctx.invoice.date).toLocaleDateString()}`, W - M, metaY, { align: 'right' }); metaY += 14; }
+  if (ctx.invoice.date) { doc.text(`Date: ${formatBillingDate(ctx.invoice.date)}`, W - M, metaY, { align: 'right' }); metaY += 14; }
   if (ctx.invoice.terms) { doc.text(`Terms: ${ctx.invoice.terms}`, W - M, metaY, { align: 'right' }); metaY += 14; }
 
   y = Math.max(y + 28, metaY) + 12;

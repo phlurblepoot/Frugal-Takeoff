@@ -8,6 +8,7 @@ import {
   addCOAttachment, updateCOAttachment, removeCOAttachment,
 } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import { billingDay } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
@@ -38,7 +39,7 @@ export const ChangeOrderEditor: React.FC<{
   const { toast } = useToast();
   const co = changeOrder;
   const [number, setNumber] = useState(co.number ?? '');
-  const [date, setDate] = useState(co.date ? new Date(co.date).toISOString().slice(0, 10) : '');
+  const [date, setDate] = useState(billingDay(co.date) ?? '');
   const [title, setTitle] = useState(co.title ?? '');
   const [description, setDescription] = useState(co.description ?? '');
   const [lines, setLines] = useState<ChangeOrderLine[]>(co.lines.length ? co.lines : []);
@@ -48,7 +49,7 @@ export const ChangeOrderEditor: React.FC<{
   );
   const [saving, setSaving] = useState(false);
 
-  const initialDate = co.date ? new Date(co.date).toISOString().slice(0, 10) : '';
+  const initialDate = billingDay(co.date) ?? '';
   // Numbers are compared by value, not by the string in the box: the server
   // hands back 500.5 for a typed "500.50", which a text compare would read as
   // an edit that never goes away.

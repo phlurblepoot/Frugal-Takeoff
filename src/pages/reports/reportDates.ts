@@ -1,7 +1,11 @@
 // src/pages/reports/reportDates.ts — the Payments received report's date
 // range: presets over the local calendar, and how a report shows a calendar
-// day. Report dates travel as 'YYYY-MM-DD' (server/reportsStore.ts dayOf), so
-// they are shown as that day, never shifted through a timezone.
+// day. Report dates travel as 'YYYY-MM-DD' (server/reportsStore.ts, through
+// billingDay), so they are shown as that day, never shifted through a
+// timezone. The day helpers are billing's own (utils/billingDates).
+import { formatDay, ymd } from '../../utils/billingDates';
+
+export { formatDay, parseDay, ymd } from '../../utils/billingDates';
 
 export type DatePreset = 'this-month' | 'last-month' | 'this-quarter' | 'year-to-date' | 'last-year' | 'all' | 'custom';
 
@@ -16,10 +20,6 @@ export const DATE_PRESETS: { value: DatePreset; label: string }[] = [
 ];
 
 export const DEFAULT_DATE_PRESET: DatePreset = 'this-month';
-
-/** A local Date as 'YYYY-MM-DD'. */
-export const ymd = (d: Date): string =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** The days a preset covers, both inclusive ('' = open). 'custom' has none of its own. */
 export function presetRange(preset: DatePreset, today: Date = new Date()): { from: string; to: string } {
@@ -38,17 +38,6 @@ export function presetRange(preset: DatePreset, today: Date = new Date()): { fro
     case 'custom': return { from: '', to: '' };
   }
 }
-
-const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-/** 'YYYY-MM-DD' as a local Date (midnight), or null. */
-export function parseDay(day: string | null | undefined): Date | null {
-  const m = day ? DAY_RE.exec(day) : null;
-  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
-}
-
-/** A report day in the viewer's date format; '—' when there is none. */
-export const formatDay = (day: string | null | undefined): string => parseDay(day)?.toLocaleDateString() ?? '—';
 
 /** "10/1/2026 – 10/31/2026", "From 10/1/2026", "Through 10/31/2026", "All dates". */
 export function rangeLabel(from: string, to: string): string {

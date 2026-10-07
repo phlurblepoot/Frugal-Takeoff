@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { invoiceRows, invoiceTotalsBlock, buildInvoicePdf } from './invoicePdf';
+import { useTimeZone } from '../../../test/timeZone';
 
 describe('invoice pdf data shaping', () => {
   it('invoiceRows maps lines to [desc, qty, unit, amount] display strings', () => {
@@ -38,5 +39,18 @@ describe('buildInvoicePdf — photo pages', () => {
       buildInvoicePdf({ invoice: baseInvoice(), projectName: 'Job', letterhead, photoDataUrls: [JPEG, JPEG, JPEG] }),
     );
     expect(withPhotos.getPageCount()).toBeGreaterThan(withoutPhotos.getPageCount());
+  });
+});
+
+// The strings jsPDF drew (its content streams are uncompressed).
+const pdfText = (bytes: Uint8Array): string[] =>
+  [...Buffer.from(bytes).toString('latin1').matchAll(/\(((?:\\.|[^()\\])*)\)\s*Tj/g)].map(m => m[1]);
+
+describe('buildInvoicePdf — date, west of UTC', () => {
+  useTimeZone('America/Los_Angeles');
+
+  it('prints the day that was picked, not the day before', () => {
+    const bytes = buildInvoicePdf({ invoice: baseInvoice({ date: new Date('2026-10-01').getTime() }), projectName: 'Job', letterhead });
+    expect(pdfText(bytes)).toContain(`Date: ${new Date(2026, 9, 1).toLocaleDateString()}`);
   });
 });

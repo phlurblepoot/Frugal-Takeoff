@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { HttpError, type PaymentDetail } from '../../../utils/store';
+import { useTimeZone } from '../../../test/timeZone';
 
 const h = vi.hoisted(() => ({
   getPayment: vi.fn(),
@@ -92,6 +93,26 @@ beforeEach(() => {
   h.removePaymentAttachment.mockResolvedValue(undefined);
   h.uploadProjectFile.mockResolvedValue({ fileId: 'up-1', versioned: false });
   h.confirm.mockResolvedValue(true);
+});
+
+describe('PaymentDetailModal — dates west of UTC', () => {
+  useTimeZone('America/Los_Angeles');
+
+  it('fills the date box with the day that was picked', async () => {
+    h.getPayment.mockResolvedValue(payment({ date: new Date('2026-10-01').getTime() }));
+    mount();
+    await screen.findByTestId('payment-target');
+    expect(screen.getByLabelText('Date')).toHaveValue('2026-10-01');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('fills it with the local day of a payment stamped "now" on a US evening', async () => {
+    h.getPayment.mockResolvedValue(payment({ date: Date.UTC(2026, 9, 7, 3, 30) })); // Oct 6, 8:30pm in Los Angeles
+    mount();
+    await screen.findByTestId('payment-target');
+    expect(screen.getByLabelText('Date')).toHaveValue('2026-10-06');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
 });
 
 describe('PaymentDetailModal — the payment', () => {

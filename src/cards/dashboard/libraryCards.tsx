@@ -19,6 +19,7 @@ import {
   getDocuments, clockIn,
 } from '../../utils/store';
 import { formatMoney } from '../../utils/money';
+import { formatBillingDate } from '../../utils/billingDates';
 import { formatCurrency } from '../../pages/project/proposal/proposalGenerator';
 import { expiryText } from '../../pages/project/proposal/proposalPresentation';
 import { normalizeProjectStatus, ProjectStatusPill, Button } from '../../components/ui';
@@ -209,7 +210,7 @@ const PaymentsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ width 
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium text-ink">{p.projectName}</span>
                 <span className="block truncate text-xs text-ink-faint">
-                  {new Date(p.date).toLocaleDateString()}{p.method ? ` · ${p.method}` : ''}
+                  {formatBillingDate(p.date)}{p.method ? ` · ${p.method}` : ''}
                 </span>
               </span>
               <span className="shrink-0 text-xs font-medium text-ink-soft">{formatMoney(p.amount)}</span>

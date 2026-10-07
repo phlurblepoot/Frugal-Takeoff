@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom';
 import { DollarSign } from 'lucide-react';
 import { CustomerBilling, CustomerBillingLedgerEntry } from '../../utils/store';
 import { formatMoney } from '../../utils/money';
+import { formatBillingDate } from '../../utils/billingDates';
 import { INVOICE_STATUS_META } from '../../components/ui/BillingPills';
 import { Card, CardBody, CardHeader, EmptyState, StatusPill, Table, TBody, TD, TH, THead, TR } from '../../components/ui';
 import type { PillTone } from '../../components/ui';
@@ -28,12 +29,6 @@ const LedgerStatusPill: React.FC<{ entry: CustomerBillingLedgerEntry }> = ({ ent
   const meta = entry.kind === 'invoice' ? INVOICE_STATUS_META : PAYAPP_STATUS_META;
   const m = meta[entry.status] ?? { label: entry.status, tone: 'slate' as PillTone };
   return <StatusPill tone={m.tone}>{m.label}</StatusPill>;
-};
-
-const fmtDate = (v: number | string | null): string | null => {
-  if (v == null) return null;
-  const d = new Date(v);
-  return isNaN(d.getTime()) ? null : d.toLocaleDateString();
 };
 
 export const CustomerBillingTab: React.FC<{ billing?: CustomerBilling }> = ({ billing }) => {
@@ -115,7 +110,7 @@ export const CustomerBillingTab: React.FC<{ billing?: CustomerBilling }> = ({ bi
                     </TD>
                     <TD className="text-ink-soft">{KIND_LABEL[e.kind]}</TD>
                     <TD className="text-ink-soft">{e.number}</TD>
-                    <TD className="text-ink-soft">{fmtDate(e.date) ?? '—'}</TD>
+                    <TD className="text-ink-soft">{formatBillingDate(e.date)}</TD>
                     <TD><LedgerStatusPill entry={e} /></TD>
                     <TD className="text-ink-soft">{formatMoney(e.totalCents)}</TD>
                     <TD className="text-ink-soft">{formatMoney(e.paidCents)}</TD>

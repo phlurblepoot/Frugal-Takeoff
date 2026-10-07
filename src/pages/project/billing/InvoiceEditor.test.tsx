@@ -8,7 +8,8 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import type { Invoice } from '../../../utils/store';
+import type { Invoice, Payment } from '../../../utils/store';
+import { useTimeZone } from '../../../test/timeZone';
 
 const h = vi.hoisted(() => ({
   getInvoice: vi.fn(),
@@ -326,5 +327,34 @@ describe('InvoiceEditor — photos + attachments', () => {
     expect(h.appendAttachedPdfs.mock.calls[0][0]).toBe(h.buildInvoicePdf.mock.results[0].value);
     expect(h.appendAttachedPdfs.mock.calls[0][1]).toEqual(attachments);
     await waitFor(() => expect(h.persistGeneratedDocument).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('InvoiceEditor — dates west of UTC', () => {
+  useTimeZone('America/Los_Angeles');
+
+  const payment = (id: string, date: number): Payment => ({
+    id, targetType: 'invoice', targetId: 'inv-1', date, amount: 50, method: 'check', note: null, createdAt: 1,
+  });
+
+  it('opens on the day that was picked, and lists its payments on their own days', async () => {
+    mount(invoice({
+      date: new Date('2026-10-01').getTime(),
+      payments: [
+        payment('pay-1', new Date('2026-10-15').getTime()),
+        payment('pay-2', Date.UTC(2026, 9, 21, 3, 30)), // stamped "now": Oct 20, 8:30pm in Los Angeles
+      ],
+    }));
+    expect(await screen.findByLabelText('Date')).toHaveValue('2026-10-01');
+    expect(screen.getByText(new Date(2026, 9, 15).toLocaleDateString())).toBeInTheDocument();
+    expect(screen.getByText(new Date(2026, 9, 20).toLocaleDateString())).toBeInTheDocument();
+  });
+
+  it('still stores a picked day the way it always has', async () => {
+    mount(invoice({ date: new Date('2026-10-01').getTime() }));
+    fireEvent.change(await screen.findByLabelText('Date'), { target: { value: '2026-10-05' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save invoice' }));
+    await waitFor(() => expect(h.saveInvoice).toHaveBeenCalledTimes(1));
+    expect(h.saveInvoice.mock.calls[0][1]).toMatchObject({ date: new Date('2026-10-05').getTime() });
   });
 });

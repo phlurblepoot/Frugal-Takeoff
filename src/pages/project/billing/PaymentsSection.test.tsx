@@ -3,10 +3,11 @@
 // filed under it once it exists; a row opens the payment's detail view (spec
 // docs/superpowers/specs/2026-10-06-payment-attachments-design.md).
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { Payment } from '../../../utils/store';
+import { useTimeZone } from '../../../test/timeZone';
 
 const h = vi.hoisted(() => ({
   getProjectPayments: vi.fn(),
@@ -237,5 +238,35 @@ describe('PaymentsSection — attaching while recording', () => {
       'Added 1 of 2 attachments — open the payment to add the rest', { type: 'warning' },
     ));
     expect(h.addPaymentAttachment).toHaveBeenCalledWith('new-pay', 'up-Receipt.pdf');
+  });
+});
+
+describe('PaymentsSection — dates west of UTC', () => {
+  useTimeZone('America/Los_Angeles');
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('shows a picked date as that day, and a payment stamped "now" as its local day', async () => {
+    h.getProjectPayments.mockResolvedValue([
+      pay({ date: new Date('2026-10-01').getTime() }),
+      pay({ id: 'pay-2', date: Date.UTC(2026, 9, 7, 3, 30) }), // Oct 6, 8:30pm in Los Angeles
+    ]);
+    mount();
+    const row1 = await screen.findByTestId('payment-row-pay-1');
+    expect(within(row1).getByText(new Date(2026, 9, 1).toLocaleDateString())).toBeInTheDocument();
+    expect(within(screen.getByTestId('payment-row-pay-2')).getByText(new Date(2026, 9, 6).toLocaleDateString())).toBeInTheDocument();
+  });
+
+  it('starts the date box at today on the local calendar and records that picked day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.UTC(2026, 9, 7, 3, 30)); // Oct 6, 8:30pm in Los Angeles — already Oct 7 in UTC
+    mount();
+    await screen.findByTestId('payment-row-pay-1');
+    expect(screen.getByLabelText('Date')).toHaveValue('2026-10-06');
+
+    fillForm();
+    fireEvent.click(screen.getByRole('button', { name: 'Record' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(h.recordPayment).toHaveBeenCalledWith('p1', 'invoice', 'inv-1', expect.objectContaining({ date: new Date('2026-10-06').getTime() }));
+    expect(screen.getByLabelText('Date')).toHaveValue('2026-10-06'); // ready for the next one
   });
 });
