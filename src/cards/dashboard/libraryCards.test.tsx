@@ -6,6 +6,7 @@ import React from 'react';
 import { ThemeProvider } from '../../context/ThemeContext';
 import type { CardContext, CardWidth } from '../types';
 import { startOfWeek } from '../../utils/time';
+import { useTimeZone } from '../../test/timeZone';
 
 const {
   getProjectsSummary, getOutstandingProposals, getMyTimeEntries, getDashboardMoney,
@@ -223,6 +224,21 @@ describe('dash-payments', () => {
 
   it('is registered adminOnly', () => {
     expect(defFor('dash-payments').adminOnly).toBe(true);
+  });
+
+  describe('west of UTC', () => {
+    useTimeZone('America/Los_Angeles');
+
+    it('dates a payment with the day that was picked', async () => {
+      getDashboardMoney.mockResolvedValue({
+        outstandingCents: 0, contractTotalCents: 0, billedCents: 0, paidCents: 0, draftPayAppCount: 0,
+        recentPayments: [{ id: 'pay1', amount: 25000, date: new Date('2026-10-01').getTime(), method: 'check', projectId: 'p1', projectName: 'Acme' }],
+        trend: [],
+      });
+      mount('dash-payments', 1);
+      await screen.findByText('Acme');
+      expect(screen.getByText(`${new Date(2026, 9, 1).toLocaleDateString()} · check`)).toBeInTheDocument();
+    });
   });
 });
 

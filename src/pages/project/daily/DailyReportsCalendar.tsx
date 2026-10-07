@@ -1,11 +1,14 @@
 // src/pages/project/daily/DailyReportsCalendar.tsx
 // Month calendar for a project's daily reports, styled after the Time
 // Keeping page's calendar (bg-raised card, accent-filled day cells, explicit
-// text colors) so it reads correctly in both light and dark mode: days with
-// a report fill with the accent color and open that report; empty days start
-// a new report dated to that cell. Weeks start Sunday, matching the Time
-// Keeping page. All date math stays in local time — `toISOString` would drift a day near
-// midnight in negative-offset timezones.
+// text colors) so it reads correctly in both light and dark mode. On a crew's
+// tab (one report per date): days with a report fill with the accent color and
+// open that report; empty days start a new report dated to that cell. On the
+// read-only All crews tab (no onCreate): a day lists every crew's report —
+// crew name and man count — each opening its own, and empty days do nothing.
+// Weeks start Sunday, matching the Time Keeping page. All date math stays in
+// local time — `toISOString` would drift a day near midnight in
+// negative-offset timezones.
 import React, { useState } from 'react';
 import { ChevronLeft, ChevronRight, Image as ImageIcon } from 'lucide-react';
 import { DailyReportListItem } from '../../../utils/store';
@@ -42,7 +45,9 @@ const MONTH_LABEL = (year: number, month: number) =>
 export interface DailyReportsCalendarProps {
   reports: DailyReportListItem[];
   onOpen: (id: string) => void;
-  onCreate: (dateStr: string) => void;
+  /** Starts a report on an empty day. Without it the calendar is the
+   *  read-only All crews view (several reports per day, one per crew). */
+  onCreate?: (dateStr: string) => void;
 }
 
 export const DailyReportsCalendar: React.FC<DailyReportsCalendarProps> = ({ reports, onOpen, onCreate }) => {
@@ -51,11 +56,12 @@ export const DailyReportsCalendar: React.FC<DailyReportsCalendarProps> = ({ repo
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
 
-  // Server enforces one report per date, so at most one match per dateStr —
-  // just take the first if that were ever violated.
-  const byDate = new Map<string, DailyReportListItem>();
+  // Every report of each date, in the order given (the server lists one
+  // date's reports in crew tab order). A crew's tab has at most one per date.
+  const byDate = new Map<string, DailyReportListItem[]>();
   for (const r of reports) {
-    if (!byDate.has(r.reportDate)) byDate.set(r.reportDate, r);
+    const list = byDate.get(r.reportDate);
+    if (list) list.push(r); else byDate.set(r.reportDate, [r]);
   }
 
   const goPrev = () => { const d = new Date(year, month - 1, 1); setYear(d.getFullYear()); setMonth(d.getMonth()); };
@@ -89,7 +95,8 @@ export const DailyReportsCalendar: React.FC<DailyReportsCalendarProps> = ({ repo
 
       <div className="grid grid-cols-7 gap-1">
         {cells.map(({ dateStr, inMonth }) => {
-          const report = byDate.get(dateStr);
+          if (!onCreate) return <AllCrewsDay key={dateStr} dateStr={dateStr} inMonth={inMonth} isToday={dateStr === todayStr} reports={byDate.get(dateStr) ?? []} onOpen={onOpen} />;
+          const report = byDate.get(dateStr)?.[0];
           const isToday = dateStr === todayStr;
           const day = Number(dateStr.slice(-2));
           const crew = report ? manCountTotal(report.manCounts) : 0;
@@ -130,3 +137,40 @@ export const DailyReportsCalendar: React.FC<DailyReportsCalendarProps> = ({ repo
     </div>
   );
 };
+
+// One day of the All crews calendar: the day number, then a chip per crew's
+// report — crew name, and on wider screens its man count — that opens it. A
+// div, not a button: each chip is its own button. Nothing to start here, so
+// an empty day is inert.
+const AllCrewsDay: React.FC<{
+  dateStr: string; inMonth: boolean; isToday: boolean;
+  reports: DailyReportListItem[]; onOpen: (id: string) => void;
+}> = ({ dateStr, inMonth, isToday, reports, onOpen }) => (
+  <div
+    data-testid={`daily-calendar-day-${dateStr}`}
+    data-report={reports.length ? 'true' : undefined}
+    className={`flex min-h-14 min-w-0 flex-col gap-0.5 rounded-lg border p-1 text-[11px] font-medium sm:min-h-20 ${
+      inMonth ? 'bg-raised text-ink' : 'bg-sunken/50 text-ink opacity-50'
+    } ${isToday ? 'border-accent-400 dark:border-accent-500' : 'border-transparent'}`}
+  >
+    <span className="text-center text-sm leading-none">{Number(dateStr.slice(-2))}</span>
+    {reports.map(r => {
+      const crew = manCountTotal(r.manCounts);
+      const name = r.crewName || 'Crew';
+      return (
+        <button
+          key={r.id}
+          type="button"
+          data-testid={`daily-calendar-entry-${r.id}`}
+          aria-label={`Open ${name}'s daily report for ${dateStr}`}
+          title={crew > 0 ? `${name} · ${crew} men` : name}
+          onClick={() => onOpen(r.id)}
+          className="w-full min-w-0 truncate rounded bg-accent-500 px-1 py-0.5 text-left text-[9px] leading-tight text-white transition-colors hover:bg-accent-600"
+        >
+          {name}
+          {crew > 0 && <span className="hidden sm:inline"> · {crew} men</span>}
+        </button>
+      );
+    })}
+  </div>
+);

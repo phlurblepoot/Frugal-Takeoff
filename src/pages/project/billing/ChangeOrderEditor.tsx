@@ -5,18 +5,22 @@ import {
   ChangeOrder, ChangeOrderLine,
   saveChangeOrder, getChangeOrder, setChangeOrderStatus, getSettings, sendChangeOrder,
   addCOPhoto, removeCOPhoto, fetchFileBlob,
+  addCOAttachment, updateCOAttachment, removeCOAttachment,
 } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import { billingDay } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
+import { PdfAttachmentsCard } from '../../../components/documents/PdfAttachmentsCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
 import { buildChangeOrderPdf } from './changeOrderPdf';
+import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 import { lineCents, draftTotalCents, lineContentKey } from './InvoiceEditor';
 
@@ -35,7 +39,7 @@ export const ChangeOrderEditor: React.FC<{
   const { toast } = useToast();
   const co = changeOrder;
   const [number, setNumber] = useState(co.number ?? '');
-  const [date, setDate] = useState(co.date ? new Date(co.date).toISOString().slice(0, 10) : '');
+  const [date, setDate] = useState(billingDay(co.date) ?? '');
   const [title, setTitle] = useState(co.title ?? '');
   const [description, setDescription] = useState(co.description ?? '');
   const [lines, setLines] = useState<ChangeOrderLine[]>(co.lines.length ? co.lines : []);
@@ -45,7 +49,7 @@ export const ChangeOrderEditor: React.FC<{
   );
   const [saving, setSaving] = useState(false);
 
-  const initialDate = co.date ? new Date(co.date).toISOString().slice(0, 10) : '';
+  const initialDate = billingDay(co.date) ?? '';
   // Numbers are compared by value, not by the string in the box: the server
   // hands back 500.5 for a typed "500.50", which a text compare would read as
   // an edit that never goes away.
@@ -125,7 +129,7 @@ export const ChangeOrderEditor: React.FC<{
   // re-read throws on purpose — the bar then reports the failure and keeps the
   // existing document, rather than quietly storing pre-save bytes and marking
   // them current.
-  const buildBytes = async (headerEmail?: string): Promise<Uint8Array> => {
+  const buildBytes = async (headerEmail?: string): Promise<Uint8Array | ArrayBuffer> => {
     const saved = await getChangeOrder(co.id);
     if (!saved) throw new Error('Change order not found');
     const settings = await getSettings();
@@ -158,7 +162,7 @@ export const ChangeOrderEditor: React.FC<{
         photoDataUrls.push(await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); }));
       } catch { /* skip */ }
     }
-    return buildChangeOrderPdf({
+    const bytes = buildChangeOrderPdf({
       changeOrder: saved,
       projectName,
       contractor,
@@ -176,6 +180,8 @@ export const ChangeOrderEditor: React.FC<{
       photoDataUrls,
       headerEmail: headerEmail || undefined,
     });
+    // Attached PDFs go last, after the photo pages, in attachment order.
+    return appendAttachedPdfs(bytes, saved.attachments);
   };
 
   const changeStatus = async (status: string) => {
@@ -285,6 +291,17 @@ export const ChangeOrderEditor: React.FC<{
         link={fileId => addCOPhoto(co.id, fileId)}
         onRemove={dropPhoto}
         onDone={onSaved}
+      />
+
+      <PdfAttachmentsCard
+        attachments={co.attachments}
+        projectId={projectId}
+        documentName="change order"
+        testId="change-order"
+        link={fileId => addCOAttachment(co.id, fileId)}
+        update={(fileId, patch) => updateCOAttachment(co.id, fileId, patch)}
+        remove={fileId => removeCOAttachment(co.id, fileId)}
+        onChanged={onSaved}
       />
     </Modal>
   );

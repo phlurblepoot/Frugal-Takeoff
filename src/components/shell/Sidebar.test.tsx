@@ -1,6 +1,6 @@
 // src/components/shell/Sidebar.test.tsx
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider } from '../../context/ThemeContext';
 import { NotesProvider } from '../../context/NotesContext';
@@ -147,10 +147,42 @@ describe('Sidebar — company mode', () => {
     expect(screen.getByTitle('Hide sidebar')).toBeInTheDocument();
   });
 
+  // Reports is billing, which is admin-only everywhere.
+  it('hides Reports from anyone but an admin', () => {
+    renderAt('/reports');
+    expect(screen.queryByRole('button', { name: /Reports/ })).toBeNull();
+  });
+
+  it('shows Reports to an admin, after Time, active on /reports', () => {
+    localStorage.setItem('user', JSON.stringify({ username: 'nathan', role: 'admin' }));
+    renderAt('/reports?tab=payments');
+    const reports = screen.getByRole('button', { name: /Reports/ });
+    expect(reports.className).toContain('glow-accent');
+    const labels = screen.getAllByRole('button').map(b => b.textContent?.trim());
+    expect(labels.indexOf('Reports')).toBe(labels.indexOf('Time') + 1);
+  });
+
   it('hides the size toggles when locked', () => {
     renderLockedAt('/dashboard');
     expect(screen.queryByTitle('Collapse')).toBeNull();
     expect(screen.queryByTitle('Expand navigation')).toBeNull();
     expect(screen.queryByTitle('Hide sidebar')).toBeNull();
+  });
+
+  // Photo and file links sign in by the media cookie (server/auth.ts), so
+  // signing out has the server clear it as well as forgetting the token.
+  it('Logout clears the media cookie and the token', () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true, status: 200 }) as Response);
+    vi.stubGlobal('fetch', fetchSpy);
+    // jsdom can't follow Logout's move to /login and prints "Not implemented:
+    // navigation"; harmless here.
+    try {
+      renderAt('/dashboard');
+      fireEvent.click(screen.getByRole('button', { name: /Logout/ }));
+      expect(fetchSpy).toHaveBeenCalledWith('/api/auth/logout', { method: 'POST', keepalive: true });
+      expect(localStorage.getItem('token')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

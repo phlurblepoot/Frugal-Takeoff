@@ -69,6 +69,19 @@ it('carryForwardFrom copies measurements with NEW ids + clones scaleConfig', () 
   expect(seed.scaleConfig).not.toBe(current.scaleConfig);
 });
 
+it('carryForwardFrom keeps each measurement\'s multiplier on the new revision', () => {
+  const current = page({
+    id: 'cur',
+    measurements: [
+      { id: 'm1', type: 'area', points: [], takeoffId: 't', multiplier: 4 } as any,
+      { id: 'm2', type: 'length', points: [], takeoffId: 't' } as any,
+    ],
+  });
+  const seed = carryForwardFrom(current, () => 'new');
+  expect(seed.measurements[0].multiplier).toBe(4);
+  expect(seed.measurements[1].multiplier).toBeUndefined();
+});
+
 it('effectiveSheetId prefers sheetId, then page number, then id', () => {
   expect(effectiveSheetId(page({ id: 'x', sheetId: 'S', pageNumber: 'A-101' }))).toBe('S');
   expect(effectiveSheetId(page({ id: 'x', pageNumber: 'A-101' }))).toBe('pn:a-101');

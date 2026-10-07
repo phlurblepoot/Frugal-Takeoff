@@ -8,7 +8,8 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import type { Invoice } from '../../../utils/store';
+import type { Invoice, Payment } from '../../../utils/store';
+import { useTimeZone } from '../../../test/timeZone';
 
 const h = vi.hoisted(() => ({
   getInvoice: vi.fn(),
@@ -17,7 +18,7 @@ const h = vi.hoisted(() => ({
   persistGeneratedDocument: vi.fn(),
   getDocumentBySource: vi.fn(),
   buildInvoicePdf: vi.fn(),
-  appendPdfAttachments: vi.fn(),
+  appendAttachedPdfs: vi.fn(),
   addInvoicePhoto: vi.fn(),
   removeInvoicePhoto: vi.fn(),
   addInvoiceAttachment: vi.fn(),
@@ -67,7 +68,8 @@ vi.mock('../../../components/FilePickerModal', () => ({
   },
 }));
 
-vi.mock('./invoicePdf', () => ({ buildInvoicePdf: h.buildInvoicePdf, appendPdfAttachments: h.appendPdfAttachments }));
+vi.mock('./invoicePdf', () => ({ buildInvoicePdf: h.buildInvoicePdf }));
+vi.mock('../../../utils/pdfAttachments', () => ({ appendAttachedPdfs: h.appendAttachedPdfs }));
 
 vi.mock('../../../pages/documents/DocumentViewerModal', () => ({
   DocumentViewerModal: () => <div data-testid="viewer" />,
@@ -145,8 +147,8 @@ beforeEach(() => {
   h.sendInvoice.mockResolvedValue(undefined);
   h.persistGeneratedDocument.mockResolvedValue({ fileId: 'file-9', versioned: true });
   h.getDocumentBySource.mockResolvedValue(null);
-  h.buildInvoicePdf.mockResolvedValue(new Uint8Array([1, 2, 3]));
-  h.appendPdfAttachments.mockImplementation(async (base: Uint8Array) => base);
+  h.buildInvoicePdf.mockReturnValue(new Uint8Array([1, 2, 3]));
+  h.appendAttachedPdfs.mockImplementation(async (base: Uint8Array) => base);
   h.pickerProps.last = null;
   h.addInvoicePhoto.mockResolvedValue(undefined);
   h.removeInvoicePhoto.mockResolvedValue(undefined);
@@ -311,17 +313,48 @@ describe('InvoiceEditor — photos + attachments', () => {
     await waitFor(() => expect(h.removeInvoicePhoto).toHaveBeenCalledWith('inv-1', 'f1'));
   });
 
-  it('builds the PDF with photo data URLs and merges attachment bytes when the saved invoice carries them', async () => {
-    h.getInvoice.mockResolvedValue({
-      ...SAVED,
-      photos: [{ id: 'ph1', fileId: 'f1', sortOrder: 0 }],
-      attachments: [{ id: 'at1', fileId: 'a1', sortOrder: 0, name: 'Warranty.pdf', mime: 'application/pdf', size: 2048 }],
-    });
+  it('builds the PDF with photo data URLs, then appends the saved invoice\'s attachments after them', async () => {
+    const attachments = [{ id: 'at1', fileId: 'a1', sortOrder: 0, name: 'Warranty.pdf', mime: 'application/pdf', size: 2048 }];
+    h.getInvoice.mockResolvedValue({ ...SAVED, photos: [{ id: 'ph1', fileId: 'f1', sortOrder: 0 }], attachments });
     mount();
     fireEvent.click(await screen.findByTestId('doc-generate'));
 
     await waitFor(() => expect(h.buildInvoicePdf).toHaveBeenCalledTimes(1));
     expect(h.buildInvoicePdf.mock.calls[0][0].photoDataUrls).toHaveLength(1);
-    await waitFor(() => expect(h.appendPdfAttachments).toHaveBeenCalledTimes(1));
+    // The invoice's own bytes (photo pages included) go in first; the saved
+    // record's attachments are appended to them.
+    await waitFor(() => expect(h.appendAttachedPdfs).toHaveBeenCalledTimes(1));
+    expect(h.appendAttachedPdfs.mock.calls[0][0]).toBe(h.buildInvoicePdf.mock.results[0].value);
+    expect(h.appendAttachedPdfs.mock.calls[0][1]).toEqual(attachments);
+    await waitFor(() => expect(h.persistGeneratedDocument).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('InvoiceEditor — dates west of UTC', () => {
+  useTimeZone('America/Los_Angeles');
+
+  const payment = (id: string, date: number): Payment => ({
+    id, targetType: 'invoice', targetId: 'inv-1', date, amount: 50, method: 'check', note: null, createdAt: 1,
+  });
+
+  it('opens on the day that was picked, and lists its payments on their own days', async () => {
+    mount(invoice({
+      date: new Date('2026-10-01').getTime(),
+      payments: [
+        payment('pay-1', new Date('2026-10-15').getTime()),
+        payment('pay-2', Date.UTC(2026, 9, 21, 3, 30)), // stamped "now": Oct 20, 8:30pm in Los Angeles
+      ],
+    }));
+    expect(await screen.findByLabelText('Date')).toHaveValue('2026-10-01');
+    expect(screen.getByText(new Date(2026, 9, 15).toLocaleDateString())).toBeInTheDocument();
+    expect(screen.getByText(new Date(2026, 9, 20).toLocaleDateString())).toBeInTheDocument();
+  });
+
+  it('still stores a picked day the way it always has', async () => {
+    mount(invoice({ date: new Date('2026-10-01').getTime() }));
+    fireEvent.change(await screen.findByLabelText('Date'), { target: { value: '2026-10-05' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save invoice' }));
+    await waitFor(() => expect(h.saveInvoice).toHaveBeenCalledTimes(1));
+    expect(h.saveInvoice.mock.calls[0][1]).toMatchObject({ date: new Date('2026-10-05').getTime() });
   });
 });

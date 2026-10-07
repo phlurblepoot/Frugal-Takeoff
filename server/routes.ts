@@ -4,39 +4,48 @@ import fsSync from 'fs';
 import type Database from 'better-sqlite3';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
-  listProjectSummaries, patchProject, ValidationError, ConflictError, NotFoundError,
+  listProjectSummaries, patchProject, projectDataSummary, visibleDataSummary,
+  ValidationError, ConflictError, NotFoundError, ProjectHasDataError, PROJECT_HAS_DATA_MESSAGE,
 } from './projectStore';
-import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile, isDirectUploadKind } from './files';
+import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile, isDirectUploadKind, type FileMeta } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
 import { logActivity, listActivity } from './activity';
 import {
   listInvoices, getInvoice, createInvoice, saveInvoice, deleteInvoice,
   recordPayment, deletePayment, listProjectPayments, setInvoiceStatus,
+  getPayment, updatePayment, paymentProjectId, addPaymentAttachment, removePaymentAttachment,
   addInvoicePhoto, removeInvoicePhoto, addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus, deleteChangeOrder,
   addChangeOrderPhoto, removeChangeOrderPhoto,
-  billingSummary,
+  addChangeOrderAttachment, updateChangeOrderAttachment, removeChangeOrderAttachment,
+  billingSummary, type InvoiceStatusChange,
   ValidationError as BillingValidationError, ConflictError as BillingConflictError, NotFoundError as BillingNotFoundError,
 } from './billingStore';
 import {
   listIssues, getIssue, createIssue, saveIssue, setIssueStatus, deleteIssue,
   addPhoto, removePhoto,
+  addAttachment as addIssueAttachment, updateAttachment as updateIssueAttachment, removeAttachment as removeIssueAttachment,
   ValidationError as IssueValidationError, ConflictError as IssueConflictError, NotFoundError as IssueNotFoundError,
 } from './issueStore';
 import {
   listRfis, getRfi, createRfi, saveRfi, setRfiStatus, deleteRfi,
   addPhoto as addRfiPhoto, removePhoto as removeRfiPhoto, setRfiResponse,
+  addAttachment as addRfiAttachment, updateAttachment as updateRfiAttachment, removeAttachment as removeRfiAttachment,
   acceptPendingReply, dismissPendingReply,
   ValidationError as RfiValidationError, ConflictError as RfiConflictError, NotFoundError as RfiNotFoundError,
   NoPendingReplyError as RfiNoPendingReplyError,
 } from './rfiStore';
 import {
   getDailyReport, listDailyReports, createDailyReport, saveDailyReport, deleteDailyReport,
+  listCrews as listDailyCrews, createCrew as createDailyCrew, renameCrew as renameDailyCrew,
+  deleteCrew as deleteDailyCrew, getCrew as getDailyCrew, CrewConflictError as DailyCrewConflictError,
+  dailyReportActivityName,
   addPhoto as addDailyPhoto, removePhoto as removeDailyPhoto,
+  addAttachment as addDailyAttachment, updateAttachment as updateDailyAttachment, removeAttachment as removeDailyAttachment,
   ValidationError as DailyValidationError, ConflictError as DailyConflictError,
   NotFoundError as DailyNotFoundError, DateTakenError as DailyDateTakenError,
 } from './dailyReportStore';
-import { geocodeAddress, fetchDailyWeather } from './weather';
+import { geocodeAddress, fetchDailyWeather, DEFAULT_START_TIME, isStartTime } from './weather';
 import {
   getPunchItem, listPunchItems, createPunchItem, savePunchItem,
   setPunchDone, deletePunchItem, addPunchPhoto, removePunchPhoto,
@@ -68,7 +77,11 @@ import { listDocuments, listedDocumentIds, patchDocument, deleteDocument, Docume
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import { registerProposalRoutes } from './proposalRoutes';
 import { registerDocumentLibraryRoutes } from './documentLibraryRoutes';
-import { LIBRARY_KINDS, SIGNATURE_KIND, mayReadLibraryFile } from './documentLibrary';
+import { registerReportRoutes } from './reportRoutes';
+import { LIBRARY_KINDS, mayReadLibraryFile } from './documentLibrary';
+import { isAdminOnlyKind } from './onlyoffice/editorRoutes';
+import { mediaViewer, type MediaViewer } from './auth';
+import { setUntrustedContentHeaders } from './untrustedContent';
 import type { OnlyofficeServices } from './onlyoffice/services';
 import type { Notifier } from './notifications';
 import { getProposal } from './proposalStore';
@@ -221,6 +234,22 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
+  // Only a project with nothing in it can be deleted; one with documents or
+  // records is archived instead (spec 2026-10-07-project-delete-guard). The
+  // page asks first so it can offer Archive rather than a doomed Delete.
+  app.get('/api/projects/:id/delete-check', authenticateToken, (req, res) => {
+    try {
+      if (!db.prepare('SELECT 1 FROM projects WHERE id = ?').get(req.params.id)) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+      const { hasData, summary } = projectDataSummary(db, req.params.id);
+      res.json({ canDelete: !hasData, summary: visibleDataSummary(summary, (req as any).user?.role === 'admin') });
+    } catch (e) {
+      console.error('Error checking project for delete:', e);
+      res.status(500).json({ error: 'Failed to check project' });
+    }
+  });
+
   app.delete('/api/projects/:id', authenticateToken, (req, res) => {
     try {
       const name = (db.prepare('SELECT name FROM projects WHERE id = ?').get(req.params.id) as any)?.name;
@@ -235,6 +264,12 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       });
       res.json({ success: true });
     } catch (e) {
+      if (e instanceof ProjectHasDataError) {
+        return res.status(409).json({
+          error: 'project_has_data', message: PROJECT_HAS_DATA_MESSAGE,
+          summary: visibleDataSummary(e.summary, (req as any).user?.role === 'admin'),
+        });
+      }
       console.error('Error deleting project:', e);
       res.status(500).json({ error: 'Failed to delete project' });
     }
@@ -370,26 +405,68 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.get('/api/projects/:id/payments', authenticateToken, requireAdmin, (req, res) => {
     try { res.json(listProjectPayments(db, req.params.id)); } catch (e) { billingErr(e, res); }
   });
+  // A payment that settles an invoice, or reopens a paid one, moved its status
+  // (billingStore.syncInvoicePaidStatus). That change leaves the invoice's
+  // version alone, so the event carries none: every open invoice screen
+  // refetches, and an open editor refreshes (or flags it, mid-edit).
+  const broadcastInvoiceStatus = (req: express.Request, change: InvoiceStatusChange | null, projectId: string | null) => {
+    if (change && projectId) deps.broadcastChange({ type: 'invoice', id: change.invoiceId, projectId, action: 'updated', ...requestMeta(req) });
+  };
   app.post('/api/projects/:id/payments', authenticateToken, requireAdmin, (req, res) => {
     try {
       const r = recordPayment(db, req.body?.targetType, req.body?.targetId, req.body);
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'payment_recorded', message: `Payment of $${Number(req.body?.amount ?? 0).toFixed(2)} recorded` });
       deps.broadcastChange({ type: 'payment', id: r.id, projectId: req.params.id, action: 'created', ...requestMeta(req) });
-      res.json(r);
+      broadcastInvoiceStatus(req, r.invoiceStatusChange, req.params.id);
+      res.json({ id: r.id });
+    } catch (e) { billingErr(e, res); }
+  });
+  // payments are polymorphic (invoice|payapp) and carry no projectId column
+  // of their own; every route below resolves it via whichever target the
+  // payment points at (paymentProjectId) — before a delete, while it still can.
+  const broadcastPayment = (req: express.Request, id: string, projectId: string | null, action: 'updated' | 'deleted') => {
+    if (projectId) deps.broadcastChange({ type: 'payment', id, projectId, action, ...requestMeta(req) });
+  };
+  app.get('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const payment = getPayment(db, req.params.id);
+      if (!payment) return res.status(404).json({ error: 'Payment not found' });
+      res.json(payment);
+    } catch (e) { billingErr(e, res); }
+  });
+  // Date, amount, method and note only — what the payment paid never changes.
+  app.put('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const { date, amount, method, note } = req.body ?? {};
+      const statusChange = updatePayment(db, req.params.id, { date, amount, method, note });
+      const projectId = paymentProjectId(db, req.params.id);
+      broadcastPayment(req, req.params.id, projectId, 'updated');
+      broadcastInvoiceStatus(req, statusChange, projectId);
+      res.json({ success: true });
     } catch (e) { billingErr(e, res); }
   });
   app.delete('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
     try {
-      // payments are polymorphic (invoice|payapp) and carry no projectId column
-      // of their own; resolve it via whichever target table the payment points at.
-      const before = db.prepare('SELECT targetType, targetId FROM payments WHERE id = ?').get(req.params.id) as
-        { targetType: string; targetId: string } | undefined;
-      deletePayment(db, req.params.id);
-      if (before) {
-        const table = before.targetType === 'invoice' ? 'invoices' : 'aia_pay_apps';
-        const target = db.prepare(`SELECT projectId FROM ${table} WHERE id = ?`).get(before.targetId) as { projectId: string } | undefined;
-        if (target) deps.broadcastChange({ type: 'payment', id: req.params.id, projectId: target.projectId, action: 'deleted', ...requestMeta(req) });
-      }
+      const projectId = paymentProjectId(db, req.params.id);
+      const statusChange = deletePayment(db, req.params.id);
+      broadcastPayment(req, req.params.id, projectId, 'deleted');
+      broadcastInvoiceStatus(req, statusChange, projectId);
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  // Photos and PDFs on a payment (migration 43): shown on the payment only.
+  app.post('/api/payments/:id/attachments', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addPaymentAttachment(db, req.params.id, req.body.fileId);
+      broadcastPayment(req, req.params.id, paymentProjectId(db, req.params.id), 'updated');
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/payments/:id/attachments/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      removePaymentAttachment(db, req.params.id, req.params.fileId);
+      broadcastPayment(req, req.params.id, paymentProjectId(db, req.params.id), 'updated');
       res.json({ success: true });
     } catch (e) { billingErr(e, res); }
   });
@@ -446,6 +523,31 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.delete('/api/change-orders/:id/photos/:fileId', authenticateToken, requireAdmin, (req, res) => {
     try {
       removeChangeOrderPhoto(db, req.params.id, req.params.fileId);
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.post('/api/change-orders/:id/attachments', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addChangeOrderAttachment(db, req.params.id, req.body.fileId);
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.patch('/api/change-orders/:id/attachments/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      updateChangeOrderAttachment(db, req.params.id, req.params.fileId, req.body ?? {});
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/change-orders/:id/attachments/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      removeChangeOrderAttachment(db, req.params.id, req.params.fileId);
       const row = getChangeOrder(db, req.params.id);
       if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
@@ -728,6 +830,33 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json({ success: true });
     } catch (e) { issueErr(e, res); }
   });
+  // PDF attachments: like the photos, they move updatedAt but not version, so
+  // the broadcast carries no version either.
+  app.post('/api/issues/:id/attachments', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addIssueAttachment(db, req.params.id, req.body.fileId);
+      const row = getIssue(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { issueErr(e, res); }
+  });
+  app.patch('/api/issues/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      updateIssueAttachment(db, req.params.id, req.params.fileId, req.body ?? {});
+      const row = getIssue(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { issueErr(e, res); }
+  });
+  app.delete('/api/issues/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      removeIssueAttachment(db, req.params.id, req.params.fileId);
+      const row = getIssue(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { issueErr(e, res); }
+  });
 
   // ── RFIs (any authenticated user — field-created, like issues) ─────────────
   const rfiErr = (e: unknown, res: express.Response) => {
@@ -830,6 +959,33 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json({ success: true });
     } catch (e) { rfiErr(e, res); }
   });
+  // PDF attachments (not the GC's response file — that is /response): like the
+  // photos, they move updatedAt but not version, so no version is broadcast.
+  app.post('/api/rfis/:id/attachments', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addRfiAttachment(db, req.params.id, req.body.fileId);
+      const row = getRfi(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { rfiErr(e, res); }
+  });
+  app.patch('/api/rfis/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      updateRfiAttachment(db, req.params.id, req.params.fileId, req.body ?? {});
+      const row = getRfi(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { rfiErr(e, res); }
+  });
+  app.delete('/api/rfis/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      removeRfiAttachment(db, req.params.id, req.params.fileId);
+      const row = getRfi(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { rfiErr(e, res); }
+  });
   // Record the answer — usually an uploaded response PDF, optionally text.
   app.post('/api/rfis/:id/response', authenticateToken, (req, res) => {
     try {
@@ -882,6 +1038,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   // ── Daily Reports (any authenticated user — field-created, like RFIs) ──────
   const dailyErr = (e: unknown, res: express.Response) => {
     if (e instanceof DailyDateTakenError) return res.status(409).json({ error: 'date_taken', existingId: e.existingId });
+    if (e instanceof DailyCrewConflictError) return res.status(409).json({ error: e.message, code: e.code });
     if (e instanceof DailyNotFoundError) return res.status(404).json({ error: e.message });
     if (e instanceof DailyConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
     if (e instanceof DailyValidationError) return res.status(400).json({ error: e.message });
@@ -889,13 +1046,46 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     return res.status(500).json({ error: 'Daily report operation failed' });
   };
 
+  // Crews: each is its own set of daily reports (spec
+  // docs/superpowers/specs/2026-10-06-daily-report-crews-design.md). Listing
+  // makes a project's first crew ("Crew 1") when it has none, so the page
+  // always has a tab to file under.
+  app.get('/api/projects/:id/daily-report-crews', authenticateToken, (req, res) => {
+    try { res.json(listDailyCrews(db, req.params.id)); } catch (e) { dailyErr(e, res); }
+  });
+  app.post('/api/projects/:id/daily-report-crews', authenticateToken, (req, res) => {
+    try {
+      const crew = createDailyCrew(db, req.params.id, req.body?.name);
+      deps.broadcastChange({ type: 'dailyReportCrew', id: crew.id, projectId: crew.projectId, action: 'created', ...requestMeta(req) });
+      res.json(crew);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.put('/api/daily-report-crews/:id', authenticateToken, (req, res) => {
+    try {
+      const crew = renameDailyCrew(db, req.params.id, req.body?.name);
+      deps.broadcastChange({ type: 'dailyReportCrew', id: crew.id, projectId: crew.projectId, action: 'updated', ...requestMeta(req) });
+      res.json(crew);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.delete('/api/daily-report-crews/:id', authenticateToken, (req, res) => {
+    try {
+      const before = getDailyCrew(db, req.params.id);
+      deleteDailyCrew(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'dailyReportCrew', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+
+  // ?crewId= narrows the list to one crew's reports; without it, every crew's.
   app.get('/api/projects/:id/daily-reports', authenticateToken, (req, res) => {
-    try { res.json(listDailyReports(db, req.params.id)); } catch (e) { dailyErr(e, res); }
+    const crewId = typeof req.query.crewId === 'string' && req.query.crewId ? req.query.crewId : undefined;
+    try { res.json(listDailyReports(db, req.params.id, crewId)); } catch (e) { dailyErr(e, res); }
   });
   app.post('/api/projects/:id/daily-reports', authenticateToken, (req, res) => {
     try {
       const r = createDailyReport(db, req.params.id, req.body, (req as any).user?.username);
-      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'daily_report_created', message: `Daily report ${req.body?.reportDate ?? ''} created` });
+      const created = getDailyReport(db, r.id);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'daily_report_created', message: `Daily report ${dailyReportActivityName(created)} created` });
       deps.broadcastChange({ type: 'dailyReport', id: r.id, projectId: req.params.id, version: 1, action: 'created', ...requestMeta(req) });
       res.json(r);
     } catch (e) { dailyErr(e, res); }
@@ -944,16 +1134,47 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json({ success: true });
     } catch (e) { dailyErr(e, res); }
   });
+  // PDF attachments: same as the photos above — they stamp updatedAt (so the
+  // generated PDF reads out of date) without bumping version, and broadcast
+  // without one.
+  app.post('/api/daily-reports/:id/attachments', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addDailyAttachment(db, req.params.id, req.body.fileId);
+      const row = getDailyReport(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.patch('/api/daily-reports/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      updateDailyAttachment(db, req.params.id, req.params.fileId, req.body ?? {});
+      const row = getDailyReport(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.delete('/api/daily-reports/:id/attachments/:fileId', authenticateToken, (req, res) => {
+    try {
+      removeDailyAttachment(db, req.params.id, req.params.fileId);
+      const row = getDailyReport(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
   app.get('/api/projects/:id/daily-weather', authenticateToken, async (req, res) => {
     const date = String(req.query.date ?? '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'bad_date' });
+    // The report's start time (HH:MM); the weather covers it through 12 hours later.
+    const start = req.query.start === undefined ? DEFAULT_START_TIME : req.query.start;
+    if (!isStartTime(start)) return res.status(400).json({ error: 'bad_start' });
     const row = db.prepare('SELECT address FROM projects WHERE id = ?').get(req.params.id) as any;
     if (!row) return res.status(404).json({ error: 'Project not found' });
     if (!row.address) return res.status(400).json({ error: 'no_address' });
     try {
       const geo = await geocodeAddress(row.address);
       if (!geo) return res.status(502).json({ error: 'weather_unavailable' });
-      res.json(await fetchDailyWeather(geo.lat, geo.lon, date));
+      res.json(await fetchDailyWeather(geo.lat, geo.lon, date, start));
     } catch (e) {
       console.error('Daily weather fetch failed:', e);
       res.status(502).json({ error: 'weather_unavailable' });
@@ -1143,9 +1364,19 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   // ── Images (legacy compat) + files ────────────────────────────────────────
 
+  // Who may have a file's bytes: one rule for every route that sends them
+  // (spec docs/superpowers/specs/2026-10-07-file-link-security-design.md). A
+  // signature is its owner's alone (ONLYOFFICE Phase 3); billing documents and
+  // templates are admins' only, as everywhere else in the app; anything else
+  // is for anyone signed in. A file someone may not have 404s, like the rest
+  // of the app's hidden files.
+  const mayViewFile = (meta: FileMeta, viewer: MediaViewer) =>
+    mayReadLibraryFile(meta, viewer) && (viewer.role === 'admin' || !isAdminOnlyKind(meta.kind));
+
   app.get('/api/images/:id', authenticateToken, (req, res) => {
     try {
-      const data = getDataUrlString(db, dataDir, req.params.id);
+      const meta = getMeta(db, req.params.id);
+      const data = meta && mayViewFile(meta, (req as any).user ?? {}) ? getDataUrlString(db, dataDir, req.params.id) : null;
       if (data == null) return res.status(404).json({ error: 'Image not found' });
       res.json({ data });
     } catch (e) {
@@ -1153,17 +1384,21 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
-  // Public (used in <img src> / pdf.js URLs) — kept public deliberately.
+  // The URL in <img src> and pdf.js loads, which can't send the Authorization
+  // header: signed in by the media cookie (server/auth.ts), ?token= or the
+  // header. Cached privately: the browser may keep its copy, but Cloudflare
+  // and any other shared cache must never keep or serve one.
   app.get('/api/images/:id/raw', (req, res) => {
     try {
+      const viewer = mediaViewer(req, verifyToken);
+      if (!viewer) return res.status(401).send('Authentication required');
       const meta = getMeta(db, req.params.id);
       const st = statFile(dataDir, req.params.id);
-      // No login here (plain <img> tags), so a signature, which only its owner
-      // may read, is never served this way (ONLYOFFICE Phase 3).
-      if (!meta || !st || meta.kind === SIGNATURE_KIND) return res.status(404).send('Image not found');
+      if (!meta || !st || !mayViewFile(meta, viewer)) return res.status(404).send('Image not found');
       res.set('Content-Type', meta.mime);
+      setUntrustedContentHeaders(res, meta.mime);
       res.set('Content-Length', String(st.size));
-      res.set('Cache-Control', 'public, max-age=31536000');
+      res.set('Cache-Control', 'private, max-age=31536000');
       fsSync.createReadStream(pathFor(dataDir, req.params.id)).pipe(res);
     } catch (e) {
       res.status(500).send('Failed to fetch image');
@@ -1171,17 +1406,23 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
 
   // A photo shrunk for tiles and lists: tens of KB instead of the several-MB
-  // original (server/onlyoffice/thumbnails.ts). No login, like /raw, and never
-  // a signature. Anything it can't shrink (not a photo, a format the server
-  // can't read) sends the browser to the original instead.
+  // original (server/onlyoffice/thumbnails.ts). Signed in and cached like
+  // /raw. Anything it can't shrink (not a photo, a format the server can't
+  // read) sends the browser to the original instead: the cookie and header go
+  // along by themselves, a ?token= is passed on.
   app.get('/api/images/:id/thumb', async (req, res) => {
     try {
+      const viewer = mediaViewer(req, verifyToken);
+      if (!viewer) return res.status(401).send('Authentication required');
       const meta = getMeta(db, req.params.id);
-      if (!meta || meta.kind === SIGNATURE_KIND) return res.status(404).send('Image not found');
+      if (!meta || !mayViewFile(meta, viewer)) return res.status(404).send('Image not found');
       const thumb = await deps.onlyoffice?.thumbnails.photo(meta.id) ?? null;
-      if (!thumb) return res.redirect(302, `/api/images/${encodeURIComponent(meta.id)}/raw`);
+      if (!thumb) {
+        const token = typeof req.query.token === 'string' && req.query.token ? `?token=${encodeURIComponent(req.query.token)}` : '';
+        return res.redirect(302, `/api/images/${encodeURIComponent(meta.id)}/raw${token}`);
+      }
       res.set('Content-Type', 'image/webp');
-      res.set('Cache-Control', 'public, max-age=31536000');
+      res.set('Cache-Control', 'private, max-age=31536000');
       res.sendFile(thumb);
     } catch (e) {
       res.status(500).send('Failed to fetch image');
@@ -1262,24 +1503,25 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   );
 
-  // Streaming read with HTTP Range support. Auth via Authorization header or
-  // ?token= (media elements and pdf.js can't always set headers).
+  // Streaming read with HTTP Range support. Signed in like /api/images/:id/raw:
+  // the Authorization header, ?token= or the media cookie (media elements and
+  // pdf.js can't always set headers).
   app.get('/api/files/:id/content', (req, res) => {
     try {
-      const header = req.headers['authorization'];
-      const bearer = header && header.split(' ')[1];
-      const token = bearer || String(req.query.token || '');
-      const viewer = token ? verifyToken(token) : null;
+      const viewer = mediaViewer(req, verifyToken);
       if (!viewer) return res.status(401).json({ error: 'Authentication required' });
 
       const meta = getMeta(db, req.params.id);
       const st = statFile(dataDir, req.params.id);
-      // A signature is its owner's alone (ONLYOFFICE Phase 3).
-      if (!meta || !st || !mayReadLibraryFile(meta, viewer as { id?: unknown })) return res.status(404).json({ error: 'File not found' });
+      if (!meta || !st || !mayViewFile(meta, viewer)) return res.status(404).json({ error: 'File not found' });
 
       const filePath = pathFor(dataDir, req.params.id);
       res.set('Accept-Ranges', 'bytes');
       res.set('Content-Type', meta.mime);
+      setUntrustedContentHeaders(res, meta.mime);
+      // Never in a shared cache, and always fresh: a new version replaces the
+      // content under the same id.
+      res.set('Cache-Control', 'private, no-cache');
 
       const range = req.headers.range;
       if (range) {
@@ -1534,6 +1776,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       ['issue_photos', 'fileId'], ['punch_photos', 'fileId'], ['task_photos', 'fileId'],
       ['change_order_photos', 'fileId'], ['rfi_photos', 'fileId'], ['daily_report_photos', 'fileId'],
       ['invoice_photos', 'fileId'], ['invoice_attachments', 'fileId'],
+      ['change_order_attachments', 'fileId'], ['rfi_attachments', 'fileId'],
+      ['issue_attachments', 'fileId'], ['daily_report_attachments', 'fileId'],
+      ['payment_attachments', 'fileId'],
       ['proposal_photos', 'fileId'], ['proposal_attachments', 'fileId'],
       ['proposals', 'fileId'], ['proposals', 'signedFileId'], ['rfis', 'responseFileId'],
     ];
@@ -1777,6 +2022,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   registerProposalRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
   registerDocumentLibraryRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
+  registerReportRoutes(app, { db, authenticateToken, requireAdmin });
 }
 
 // ── Item send routes ─────────────────────────────────────────────────────────
@@ -2018,13 +2264,15 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     const report = getDailyReport(db, req.params.id);
     if (!report) { res.status(404).json({ error: 'Daily report not found' }); return; }
     // Mirrors dailyReportPdf.ts's sanitizeForFileName + dailyReportFileName
-    // (client can't be imported server-side) — falls back to date-only when
-    // jobName is blank.
-    const sanitizedJobName = (report.jobName as string || '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
+    // (client can't be imported server-side): DailyReport-<job>-<crew>-<date>,
+    // each name part left out when blank. The crew is in both the file name
+    // and the subject — one date can have a report per crew.
+    const sanitize = (s: unknown) => (typeof s === 'string' ? s : '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
+    const nameParts = [sanitize(report.jobName), sanitize(report.crewName)].filter(Boolean);
     const r = await sendItem(req, res, {
       itemType: 'dailyReport', itemId: report.id,
-      primaryName: sanitizedJobName ? `DailyReport-${sanitizedJobName}-${report.reportDate}.pdf` : `DailyReport-${report.reportDate}.pdf`,
-      defaultSubject: `Daily Report — ${report.reportDate}${report.jobName ? ` — ${report.jobName}` : ''}`,
+      primaryName: `DailyReport-${[...nameParts, report.reportDate].join('-')}.pdf`,
+      defaultSubject: `Daily Report — ${report.reportDate}${report.crewName ? ` — ${report.crewName}` : ''}${report.jobName ? ` — ${report.jobName}` : ''}`,
       defaultBody: 'Please find the attached daily report.',
     });
     if (!r) return;

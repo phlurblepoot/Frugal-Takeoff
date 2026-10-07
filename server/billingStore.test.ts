@@ -12,12 +12,14 @@ import {
   toCents, sumCents, listInvoices, getInvoice, createInvoice, saveInvoice,
   deleteInvoice, ValidationError, ConflictError, NotFoundError,
   recordPayment, deletePayment, setInvoiceStatus, listProjectPayments, paidCentsFor,
+  getPayment, updatePayment, paymentProjectId, addPaymentAttachment, removePaymentAttachment,
   addInvoicePhoto, removeInvoicePhoto, addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus,
   deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
-  listBilledDocuments,
+  addChangeOrderAttachment, updateChangeOrderAttachment, removeChangeOrderAttachment,
+  listBilledDocuments, autoInvoiceStatus, syncInvoicePaidStatus,
 } from './billingStore';
-import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp, lockSov, SovLockedError } from './aiaStore';
+import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp, lockSov, SovLockedError, deletePayApp } from './aiaStore';
 
 let db: Database.Database;
 let dir: string;
@@ -317,6 +319,301 @@ describe('payments + status', () => {
   });
 });
 
+// Payment detail view, edits and attachments (spec
+// docs/superpowers/specs/2026-10-06-payment-attachments-design.md).
+describe('payment detail, edits and attachments (migration 43)', () => {
+  const invoiceWithPayment = (amount = 40) => {
+    const inv = createInvoice(db, 'p1', { number: 'INV-7', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
+    const pay = recordPayment(db, 'invoice', inv.id, { date: 1000, amount, method: 'check', note: 'deposit' });
+    return { invoiceId: inv.id, paymentId: pay.id };
+  };
+  const invoiceUpdatedAt = (id: string) => (db.prepare('SELECT updatedAt FROM invoices WHERE id = ?').get(id) as any).updatedAt;
+  const attachmentRows = (paymentId: string) =>
+    (db.prepare('SELECT COUNT(*) c FROM payment_attachments WHERE paymentId = ?').get(paymentId) as any).c;
+
+  it('getPayment returns the payment, what it paid, its project and its attachments; null when unknown', () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    jpgFile('check');
+    addPaymentAttachment(db, paymentId, 'check');
+    expect(getPayment(db, paymentId)).toEqual(expect.objectContaining({
+      id: paymentId, targetType: 'invoice', targetId: invoiceId, date: 1000, amount: 40,
+      method: 'check', note: 'deposit', targetLabel: 'Invoice INV-7', projectId: 'p1',
+      attachments: [expect.objectContaining({ fileId: 'check', sortOrder: 0, name: 'check.jpg', mime: 'image/jpeg', size: 1, kind: 'invoice-photo' })],
+    }));
+    expect(getPayment(db, 'nope')).toBeNull();
+  });
+
+  it('getPayment and paymentProjectId resolve a pay application target too', () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 4, 'draft', 1, 1)").run();
+    const { id } = recordPayment(db, 'payapp', 'app1', { amount: 500 });
+    expect(getPayment(db, id)).toMatchObject({ targetLabel: 'Application #4', projectId: 'p1', attachments: [] });
+    expect(paymentProjectId(db, id)).toBe('p1');
+    expect(paymentProjectId(db, 'nope')).toBeNull();
+  });
+
+  it('attaches photos and PDFs in add order, idempotently', () => {
+    const { paymentId } = invoiceWithPayment();
+    jpgFile('front'); pdfFile('remit');
+    addPaymentAttachment(db, paymentId, 'front');
+    addPaymentAttachment(db, paymentId, 'remit');
+    addPaymentAttachment(db, paymentId, 'front'); // no second row
+    expect(getPayment(db, paymentId)!.attachments).toEqual([
+      expect.objectContaining({ fileId: 'front', sortOrder: 0, mime: 'image/jpeg' }),
+      expect.objectContaining({ fileId: 'remit', sortOrder: 1, mime: 'application/pdf', name: 'remit.pdf' }),
+    ]);
+    expect(attachmentRows(paymentId)).toBe(2);
+  });
+
+  it('refuses anything but a photo or a PDF, an unknown file, a blank fileId and an unknown payment', () => {
+    const { paymentId } = invoiceWithPayment();
+    putBuffer(db, dir, 'sheet', Buffer.from('x'), 'text/csv', { projectId: 'p1', kind: 'document', name: 'sheet.csv' });
+    putBuffer(db, dir, 'doc', Buffer.from('x'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', { projectId: 'p1', kind: 'document', name: 'a.docx' });
+    expect(() => addPaymentAttachment(db, paymentId, 'sheet')).toThrow(ValidationError);
+    expect(() => addPaymentAttachment(db, paymentId, 'doc')).toThrow(ValidationError);
+    expect(() => addPaymentAttachment(db, paymentId, 'missing')).toThrow(NotFoundError);
+    expect(() => addPaymentAttachment(db, paymentId, '')).toThrow(ValidationError);
+    jpgFile('ok');
+    expect(() => addPaymentAttachment(db, 'no-such-payment', 'ok')).toThrow(NotFoundError);
+    expect(attachmentRows(paymentId)).toBe(0);
+  });
+
+  it('removes an attachment (a missing one is a no-op); an unknown payment is NotFound', () => {
+    const { paymentId } = invoiceWithPayment();
+    jpgFile('a'); pdfFile('b');
+    addPaymentAttachment(db, paymentId, 'a');
+    addPaymentAttachment(db, paymentId, 'b');
+    removePaymentAttachment(db, paymentId, 'a');
+    removePaymentAttachment(db, paymentId, 'not-attached');
+    expect(getPayment(db, paymentId)!.attachments.map((a: any) => a.fileId)).toEqual(['b']);
+    expect(() => removePaymentAttachment(db, 'no-such-payment', 'b')).toThrow(NotFoundError);
+    // Unlinked, not deleted: the file itself stays in Documents.
+    expect(db.prepare('SELECT id FROM files WHERE id = ?').get('a')).toBeTruthy();
+  });
+
+  // Attachments live on the payment only — nothing a generated invoice or pay
+  // app PDF prints changes, so the target's freshness clock must not move.
+  it('attaching and removing leave the target invoice\'s updatedAt alone', async () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    const before = invoiceUpdatedAt(invoiceId);
+    await new Promise(r => setTimeout(r, 2));
+    jpgFile('a');
+    addPaymentAttachment(db, paymentId, 'a');
+    removePaymentAttachment(db, paymentId, 'a');
+    expect(invoiceUpdatedAt(invoiceId)).toBe(before);
+  });
+
+  it('listProjectPayments counts each payment\'s attachments', () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    const other = recordPayment(db, 'invoice', invoiceId, { date: 2000, amount: 10 });
+    jpgFile('a'); pdfFile('b');
+    addPaymentAttachment(db, paymentId, 'a');
+    addPaymentAttachment(db, paymentId, 'b');
+    const byId = Object.fromEntries(listProjectPayments(db, 'p1').map(p => [p.id, p]));
+    expect(byId[paymentId].attachmentCount).toBe(2);
+    expect(byId[other.id].attachmentCount).toBe(0);
+  });
+
+  it('updatePayment edits date, amount, method and note; the target never moves', () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    updatePayment(db, paymentId, { date: 5000, amount: 60.25, method: 'ach', note: 'Final payment', targetId: 'other' } as any);
+    expect(getPayment(db, paymentId)).toMatchObject({
+      date: 5000, amount: 60.25, method: 'ach', note: 'Final payment', targetType: 'invoice', targetId: invoiceId,
+    });
+    expect(getInvoice(db, invoiceId)!.paidCents).toBe(6025);
+  });
+
+  it('updatePayment keeps what it is not given; a null date keeps the date; blank method/note clear to null', () => {
+    const { paymentId } = invoiceWithPayment();
+    updatePayment(db, paymentId, { note: 'only the note' });
+    expect(getPayment(db, paymentId)).toMatchObject({ date: 1000, amount: 40, method: 'check', note: 'only the note' });
+    updatePayment(db, paymentId, { date: null, method: '  ', note: '   ' });
+    expect(getPayment(db, paymentId)).toMatchObject({ date: 1000, amount: 40, method: null, note: null });
+  });
+
+  it('updatePayment validates like recordPayment and 404s an unknown payment', () => {
+    const { paymentId } = invoiceWithPayment();
+    expect(() => updatePayment(db, paymentId, { amount: 0 })).toThrow(ValidationError);
+    expect(() => updatePayment(db, paymentId, { amount: -5 })).toThrow(ValidationError);
+    expect(() => updatePayment(db, paymentId, { amount: 1e400 })).toThrow(ValidationError);
+    expect(() => updatePayment(db, paymentId, { amount: '50' as any })).toThrow(ValidationError);
+    expect(() => updatePayment(db, paymentId, { date: 'yesterday' as any })).toThrow(ValidationError);
+    expect(() => updatePayment(db, 'no-such-payment', { amount: 5 })).toThrow(NotFoundError);
+    expect(getPayment(db, paymentId)).toMatchObject({ amount: 40, date: 1000 }); // nothing written
+  });
+
+  // Paid/Balance on the invoice PDF (and the pay app's) come from the amounts:
+  // an amount edit stamps the target like a record/delete does; a date, method
+  // or note fix leaves its PDF current.
+  it('updatePayment stamps the target invoice only when the amount changes', async () => {
+    const { invoiceId, paymentId } = invoiceWithPayment();
+    const before = invoiceUpdatedAt(invoiceId);
+    await new Promise(r => setTimeout(r, 2));
+    updatePayment(db, paymentId, { date: 9000, method: 'card', note: 'fixed typo', amount: 40.001 }); // same cents
+    expect(invoiceUpdatedAt(invoiceId)).toBe(before);
+    await new Promise(r => setTimeout(r, 2));
+    updatePayment(db, paymentId, { amount: 45 });
+    expect(invoiceUpdatedAt(invoiceId)).toBeGreaterThan(before);
+  });
+
+  it('updatePayment stamps a pay application target on an amount change', async () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt, updatedAt) VALUES ('app1', 'p1', 3, 'draft', 1, 1, 1)").run();
+    const { id } = recordPayment(db, 'payapp', 'app1', { amount: 500 });
+    db.prepare("UPDATE aia_pay_apps SET updatedAt = 1 WHERE id = 'app1'").run();
+    updatePayment(db, id, { amount: 750 });
+    expect((db.prepare("SELECT updatedAt FROM aia_pay_apps WHERE id = 'app1'").get() as any).updatedAt).toBeGreaterThan(1);
+    expect(paidCentsFor(db, 'payapp', 'app1')).toBe(75000);
+  });
+
+  it('deleting the payment, its invoice or its pay application removes its attachment rows', () => {
+    jpgFile('a');
+    const first = invoiceWithPayment();
+    addPaymentAttachment(db, first.paymentId, 'a');
+    deletePayment(db, first.paymentId);
+    expect(attachmentRows(first.paymentId)).toBe(0);
+
+    const second = invoiceWithPayment();
+    addPaymentAttachment(db, second.paymentId, 'a');
+    deleteInvoice(db, second.invoiceId);
+    expect(attachmentRows(second.paymentId)).toBe(0);
+
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 1, 'draft', 1, 1)").run();
+    const third = recordPayment(db, 'payapp', 'app1', { amount: 5 });
+    addPaymentAttachment(db, third.id, 'a');
+    deletePayApp(db, 'app1');
+    expect(attachmentRows(third.id)).toBe(0);
+    // The photo itself is still a document — only the links went.
+    expect(db.prepare('SELECT id FROM files WHERE id = ?').get('a')).toBeTruthy();
+  });
+});
+
+// Invoices are marked paid automatically (spec
+// docs/superpowers/specs/2026-10-06-reports-design.md): paid once payments
+// cover the total, back to sent when a balance opens up again.
+describe('automatic paid status', () => {
+  const row = (id: string) => db.prepare('SELECT status, version, updatedAt FROM invoices WHERE id = ?').get(id) as
+    { status: string; version: number; updatedAt: number };
+  const sentInvoice = (unitPrice = 100) => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', status: 'sent', lines: [{ description: 'A', qty: 1, unitPrice }] });
+    return id;
+  };
+
+  it('autoInvoiceStatus: covered in full → paid; a paid one with a balance → sent; anything else kept', () => {
+    expect(autoInvoiceStatus('sent', 10000, 10000)).toBe('paid');
+    expect(autoInvoiceStatus('sent', 10000, 12000)).toBe('paid'); // overpaid
+    expect(autoInvoiceStatus('draft', 10000, 10000)).toBe('paid');
+    expect(autoInvoiceStatus('sent', 10000, 9999)).toBe('sent');
+    expect(autoInvoiceStatus('paid', 10000, 9999)).toBe('sent');
+    expect(autoInvoiceStatus('paid', 10000, 10000)).toBe('paid');
+    // A $0 invoice is never "covered": its status is left as it is.
+    expect(autoInvoiceStatus('sent', 0, 0)).toBe('sent');
+    expect(autoInvoiceStatus('sent', 0, 500)).toBe('sent');
+    expect(autoInvoiceStatus('paid', 0, 0)).toBe('paid');
+    expect(autoInvoiceStatus('draft', 10000, 5000)).toBe('draft');
+  });
+
+  it('recording a payment that covers the total marks the invoice paid, and says so', () => {
+    const id = sentInvoice();
+    const r = recordPayment(db, 'invoice', id, { amount: 100 });
+    expect(r.invoiceStatusChange).toEqual({ invoiceId: id, status: 'paid' });
+    expect(getInvoice(db, id)).toMatchObject({ status: 'paid', balanceCents: 0 });
+  });
+
+  it('a partial payment leaves it sent; the one that completes it marks it paid (cents, no float drift)', () => {
+    const { id } = createInvoice(db, 'p1', { status: 'sent', lines: [
+      { description: 'a', qty: 1, unitPrice: 0.1 }, { description: 'b', qty: 1, unitPrice: 0.2 },
+    ] }); // 30 cents
+    expect(recordPayment(db, 'invoice', id, { amount: 0.1 }).invoiceStatusChange).toBeNull();
+    expect(row(id).status).toBe('sent');
+    expect(recordPayment(db, 'invoice', id, { amount: 0.2 }).invoiceStatusChange).toEqual({ invoiceId: id, status: 'paid' });
+    expect(row(id).status).toBe('paid');
+  });
+
+  it('deleting a payment puts a paid invoice back to sent', () => {
+    const id = sentInvoice();
+    recordPayment(db, 'invoice', id, { amount: 60 });
+    const last = recordPayment(db, 'invoice', id, { amount: 40 });
+    expect(row(id).status).toBe('paid');
+    expect(deletePayment(db, last.id)).toEqual({ invoiceId: id, status: 'sent' });
+    expect(row(id).status).toBe('sent');
+    expect(deletePayment(db, 'no-such-payment')).toBeNull();
+  });
+
+  it('reducing a payment puts it back to sent; raising it again marks it paid; a note edit changes nothing', () => {
+    const id = sentInvoice();
+    const pay = recordPayment(db, 'invoice', id, { amount: 100 });
+    expect(updatePayment(db, pay.id, { note: 'check #1042' })).toBeNull();
+    expect(row(id).status).toBe('paid');
+    expect(updatePayment(db, pay.id, { amount: 99.99 })).toEqual({ invoiceId: id, status: 'sent' });
+    expect(row(id).status).toBe('sent');
+    expect(updatePayment(db, pay.id, { amount: 100 })).toEqual({ invoiceId: id, status: 'paid' });
+    expect(row(id).status).toBe('paid');
+  });
+
+  it('a save that grows the lines past what was paid puts it back to sent; shrinking them to the payments marks it paid', () => {
+    const id = sentInvoice();
+    recordPayment(db, 'invoice', id, { amount: 100 });
+    saveInvoice(db, id, { ...getInvoice(db, id)!, lines: [{ description: 'A', qty: 1, unitPrice: 100 }, { description: 'Extra', qty: 1, unitPrice: 25 }] });
+    expect(getInvoice(db, id)).toMatchObject({ status: 'sent', balanceCents: 2500 });
+    saveInvoice(db, id, { ...getInvoice(db, id)!, lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
+    expect(getInvoice(db, id)).toMatchObject({ status: 'paid', balanceCents: 0 });
+  });
+
+  it('a fully paid draft is marked paid too; a partly paid draft stays a draft', () => {
+    const { id } = createInvoice(db, 'p1', { lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
+    recordPayment(db, 'invoice', id, { amount: 50 });
+    expect(row(id).status).toBe('draft');
+    recordPayment(db, 'invoice', id, { amount: 50 });
+    expect(row(id).status).toBe('paid');
+  });
+
+  it('a manual status pick stands until the next payment or line change', () => {
+    const id = sentInvoice();
+    recordPayment(db, 'invoice', id, { amount: 40 });
+    setInvoiceStatus(db, id, 'paid'); // marked paid by hand with $60 still owing
+    expect(row(id).status).toBe('paid');
+    recordPayment(db, 'invoice', id, { amount: 10 }); // the rule applies again
+    expect(row(id).status).toBe('sent');
+  });
+
+  it('pay application payments never touch invoice statuses', () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 1, 'finalized', 1, 1)").run();
+    expect(recordPayment(db, 'payapp', 'app1', { amount: 500 }).invoiceStatusChange).toBeNull();
+  });
+
+  // The automatic change doesn't bump version, so an invoice editor open
+  // elsewhere can still save — and what it echoes back can't undo the change.
+  it('leaves version and updatedAt alone, so an open editor still saves, without writing its stale status back', async () => {
+    const id = sentInvoice();
+    const loaded = getInvoice(db, id)!; // an editor opens the invoice while it is 'sent'
+    await new Promise(r => setTimeout(r, 2));
+    const pay = recordPayment(db, 'invoice', id, { amount: 100 });
+    const afterPayment = row(id);
+    expect(afterPayment.status).toBe('paid');
+    expect(afterPayment.version).toBe(loaded.version);
+
+    // A notes-only save from that editor: still version-checked OK, and the
+    // 'sent' it carries is resolved back to 'paid' — nothing PDF-relevant moved.
+    const saved = saveInvoice(db, id, { ...loaded, notes: 'Thanked them' });
+    expect(saved.version).toBe(loaded.version + 1);
+    expect(row(id)).toMatchObject({ status: 'paid', updatedAt: afterPayment.updatedAt });
+
+    // The other way round: a payment deleted under an editor that loaded 'paid'.
+    const reloaded = getInvoice(db, id)!;
+    deletePayment(db, pay.id);
+    expect(row(id)).toMatchObject({ status: 'sent', version: reloaded.version });
+    saveInvoice(db, id, { ...reloaded, terms: 'Net 15' });
+    expect(row(id).status).toBe('sent');
+  });
+
+  it('syncInvoicePaidStatus is a no-op for an unknown invoice and when nothing moved', () => {
+    expect(syncInvoicePaidStatus(db, 'nope')).toBeNull();
+    const id = sentInvoice();
+    expect(syncInvoicePaidStatus(db, id)).toBeNull();
+    db.prepare(`INSERT INTO payments (id, targetType, targetId, date, amount, createdAt) VALUES ('raw', 'invoice', ?, 1, 100, 1)`).run(id);
+    expect(syncInvoicePaidStatus(db, id)).toEqual({ invoiceId: id, status: 'paid' });
+  });
+});
+
 describe('change orders + contract rollup', () => {
   beforeEach(() => {
     db.prepare('UPDATE projects SET contractValue = ? WHERE id = ?').run(10000, 'p1'); // $10k base
@@ -497,9 +794,61 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
     expect(co.version).toBe(4);
   });
 
-  it('deleteChangeOrder cascades lines, photos, and the synced SOV line', () => {
+  // Same contract as the invoice's attachments (and this CO's photos): PDFs
+  // only, idempotent, appended in add order, and every change bumps version +
+  // updatedAt so the generated change order reads out of date.
+  it('attachments must be PDFs and existing files; sortOrder assigns in add order; each change bumps version', () => {
+    const { id } = createChangeOrder(db, 'p1', {});
+    jpgFile('notpdf');
+    expect(() => addChangeOrderAttachment(db, id, 'notpdf')).toThrow(ValidationError);
+    expect(() => addChangeOrderAttachment(db, id, 'missing')).toThrow(NotFoundError);
+    expect(() => addChangeOrderAttachment(db, id, '')).toThrow(ValidationError);
+    pdfFile('a1'); pdfFile('a2');
+    expect(() => addChangeOrderAttachment(db, 'nope', 'a1')).toThrow(NotFoundError);
+    expect(getChangeOrder(db, id)!.attachments).toEqual([]);
+    addChangeOrderAttachment(db, id, 'a1');
+    addChangeOrderAttachment(db, id, 'a1'); // idempotent
+    addChangeOrderAttachment(db, id, 'a2');
+    let co = getChangeOrder(db, id)!;
+    expect(co.attachments).toEqual([
+      expect.objectContaining({ fileId: 'a1', sortOrder: 0, name: 'a1.pdf', mime: 'application/pdf' }),
+      expect.objectContaining({ fileId: 'a2', sortOrder: 1, name: 'a2.pdf', mime: 'application/pdf' }),
+    ]);
+    expect(co.version).toBe(3); // 1 -> +1 (a1) -> +1 (a2); the a1 repeat is a no-op
+
+    updateChangeOrderAttachment(db, id, 'a1', { sortOrder: 5 });
+    co = getChangeOrder(db, id)!;
+    expect(co.attachments.map((a: any) => a.fileId)).toEqual(['a2', 'a1']);
+    expect(co.version).toBe(4);
+    expect(() => updateChangeOrderAttachment(db, id, 'nope', { sortOrder: 0 })).toThrow(NotFoundError);
+    expect(() => updateChangeOrderAttachment(db, id, 'a1', { sortOrder: 1.5 })).toThrow(ValidationError);
+
+    removeChangeOrderAttachment(db, id, 'a1');
+    removeChangeOrderAttachment(db, id, 'a1'); // already gone: no bump
+    co = getChangeOrder(db, id)!;
+    expect(co.attachments.map((a: any) => a.fileId)).toEqual(['a2']);
+    expect(co.version).toBe(5);
+  });
+
+  it('attachment changes move updatedAt (freshness contract)', () => {
+    const { id } = createChangeOrder(db, 'p1', {});
+    pdfFile('a1');
+    db.prepare('UPDATE change_orders SET updatedAt = 1 WHERE id = ?').run(id);
+    addChangeOrderAttachment(db, id, 'a1');
+    expect(getChangeOrder(db, id)!.updatedAt).toBeGreaterThan(1);
+    db.prepare('UPDATE change_orders SET updatedAt = 1 WHERE id = ?').run(id);
+    updateChangeOrderAttachment(db, id, 'a1', { sortOrder: 3 });
+    expect(getChangeOrder(db, id)!.updatedAt).toBeGreaterThan(1);
+    db.prepare('UPDATE change_orders SET updatedAt = 1 WHERE id = ?').run(id);
+    removeChangeOrderAttachment(db, id, 'a1');
+    expect(getChangeOrder(db, id)!.updatedAt).toBeGreaterThan(1);
+  });
+
+  it('deleteChangeOrder cascades lines, photos, attachments, and the synced SOV line', () => {
     const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0, lines: [{ description: 'A', qty: 1, unitPrice: 10 }] });
     addChangeOrderPhoto(db, id, 'file-1');
+    pdfFile('a1');
+    addChangeOrderAttachment(db, id, 'a1');
     // Simulate a synced AIA SOV line keyed on this CO.
     db.prepare(
       'INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, isChangeOrder, changeOrderId, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, 1, ?, 0, 1, 1)'
@@ -508,6 +857,7 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
     expect(getChangeOrder(db, id)).toBeNull();
     expect((db.prepare('SELECT COUNT(*) c FROM change_order_lines WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
     expect((db.prepare('SELECT COUNT(*) c FROM change_order_photos WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM change_order_attachments WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
     expect((db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
   });
 
@@ -538,6 +888,58 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
     expect(() => deleteChangeOrder(db, id)).not.toThrow();
     expect(getChangeOrder(db, id)).toBeNull();
     expect((db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE id = ?').get('sov-co2') as any).c).toBe(0);
+  });
+});
+
+// A change order from before migration 14 still in its old shape (migration 47
+// moves the ones that exist when it runs): no line rows, lumpSumAmount at the
+// column's default 0, its value only in amount.
+describe('change orders from before line items — value only in amount', () => {
+  beforeEach(() => {
+    db.prepare('UPDATE projects SET contractValue = ? WHERE id = ?').run(10000, 'p1'); // $10k base
+    db.prepare(`INSERT INTO change_orders (id, projectId, number, description, amount, status, createdAt)
+                VALUES ('legacy', 'p1', '001', 'Extra electrical', 1234.56, 'approved', 1)`).run();
+  });
+
+  it('reads as a lump sum of its amount: the list, the editor record and the PDF totals show its value', () => {
+    expect(listChangeOrders(db, 'p1')).toMatchObject([{ id: 'legacy', amount: 1234.56, lumpSumAmount: 1234.56, totalCents: 123456 }]);
+    expect(getChangeOrder(db, 'legacy')).toMatchObject({ amount: 1234.56, lumpSumAmount: 1234.56, lumpSumCents: 123456, totalCents: 123456, lines: [] });
+    expect(billingSummary(db, 'p1').approvedChangeCents).toBe(123456);
+    // Reading writes nothing.
+    expect(db.prepare('SELECT lumpSumAmount, version FROM change_orders WHERE id = ?').get('legacy')).toEqual({ lumpSumAmount: 0, version: 1 });
+  });
+
+  it('saving it unchanged, as the editor does, keeps its amount and the contract total', () => {
+    const before = billingSummary(db, 'p1').contractTotalCents;
+    expect(before).toBe(1000000 + 123456);
+    // The editor posts the record back with its Lump sum field, filled from lumpSumAmount.
+    const co = getChangeOrder(db, 'legacy')!;
+    saveChangeOrder(db, 'legacy', { ...co, lumpSumAmount: co.lumpSumAmount, lines: co.lines });
+    expect(db.prepare('SELECT amount, lumpSumAmount, version FROM change_orders WHERE id = ?').get('legacy'))
+      .toEqual({ amount: 1234.56, lumpSumAmount: 1234.56, version: 2 });
+    expect(listChangeOrders(db, 'p1')[0].totalCents).toBe(123456);
+    expect(billingSummary(db, 'p1').contractTotalCents).toBe(before);
+  });
+
+  it('an edit to it saves like any change order: new lines and lump sum, or cleared to $0', () => {
+    let co = getChangeOrder(db, 'legacy')!;
+    saveChangeOrder(db, 'legacy', { version: co.version, lumpSumAmount: 1000, lines: [{ description: 'A', qty: 2, unitPrice: 50 }] });
+    expect(getChangeOrder(db, 'legacy')).toMatchObject({ amount: 1100, lumpSumAmount: 1000, totalCents: 110000 });
+    co = getChangeOrder(db, 'legacy')!;
+    saveChangeOrder(db, 'legacy', { version: co.version, lumpSumAmount: 0, lines: [] });
+    expect(getChangeOrder(db, 'legacy')).toMatchObject({ amount: 0, lumpSumAmount: 0, totalCents: 0 });
+    expect(billingSummary(db, 'p1').approvedChangeCents).toBe(0);
+  });
+
+  it('change orders with lines, a lump sum, or $0 throughout read exactly as stored', () => {
+    const lined = createChangeOrder(db, 'p1', { lines: [{ description: 'A', qty: 2, unitPrice: 50 }] });
+    const lump = createChangeOrder(db, 'p1', { lumpSumAmount: 75 });
+    const zero = createChangeOrder(db, 'p1', {});
+    expect(getChangeOrder(db, lined.id)).toMatchObject({ amount: 100, lumpSumAmount: 0, lumpSumCents: 0, totalCents: 10000 });
+    expect(getChangeOrder(db, lump.id)).toMatchObject({ amount: 75, lumpSumAmount: 75, lumpSumCents: 7500, totalCents: 7500 });
+    expect(getChangeOrder(db, zero.id)).toMatchObject({ amount: 0, lumpSumAmount: 0, lumpSumCents: 0, totalCents: 0 });
+    expect(listChangeOrders(db, 'p1').filter(c => c.id !== 'legacy').map(c => [c.lumpSumAmount, c.totalCents]))
+      .toEqual([[0, 0], [75, 7500], [0, 10000]]);
   });
 });
 

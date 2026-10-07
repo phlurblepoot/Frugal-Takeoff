@@ -678,9 +678,11 @@ describe('migration 24: change-order-title', () => {
 });
 
 describe('migration 27: daily reports', () => {
+  // As migration 27 made it: one report per project per date. Migration 45
+  // makes that per crew (its own tests below).
   it('creates daily_reports with the unique date rule and the photos join table', () => {
     const db = openDb(':memory:');
-    runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-m27-')), migrations);
+    runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-m27-')), migrations.filter(m => m.version <= 27));
     db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, createdAt, updatedAt) VALUES ('d1','p1','2026-08-26',1,1)`).run();
     expect(() =>
       db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, createdAt, updatedAt) VALUES ('d2','p1','2026-08-26',1,1)`).run(),
@@ -1159,5 +1161,378 @@ describe('migration 38: onlyoffice-history', () => {
     const m38 = migrations.find(m => m.version === 38)!;
     expect(() => m38.up({ db, dataDir: dir } as any)).not.toThrow();
     db.close();
+  });
+});
+
+describe('migration 42: pdf-attachments', () => {
+  // [table, owner column (the same one that record's photo table uses), index]
+  const TABLES = [
+    ['change_order_attachments', 'changeOrderId', 'idx_change_order_attachments_change_order'],
+    ['rfi_attachments', 'rfiId', 'idx_rfi_attachments_rfi'],
+    ['issue_attachments', 'issueId', 'idx_issue_attachments_issue'],
+    ['daily_report_attachments', 'dailyReportId', 'idx_daily_report_attachments_report'],
+  ] as const;
+
+  it('adds the four tables to a v41 database, shaped like invoice_attachments, and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 41));
+    for (const [t] of TABLES) expect(tableNames(db)).not.toContain(t);
+
+    runMigrations(db, dir, migrations);
+    for (const [t, owner] of TABLES) {
+      expect(columnNames(db, t), t).toEqual(['id', owner, 'fileId', 'sortOrder', 'createdAt']);
+      const ins = db.prepare(`INSERT INTO ${t} (id, ${owner}, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)`);
+      ins.run(`${t}-1`, 'r1', 'f1', 0, 1);
+      expect(() => ins.run(`${t}-2`, 'r1', 'f1', 1, 1), t).toThrow(/UNIQUE/);
+      ins.run(`${t}-3`, 'r2', 'f1', 0, 1); // the same PDF on another record is fine
+    }
+
+    // Idempotent: replaying up() must not throw or touch the rows.
+    const m42 = migrations.find(m => m.version === 42)!;
+    expect(() => m42.up({ db, dataDir: dir })).not.toThrow();
+    for (const [t] of TABLES) expect(db.prepare(`SELECT COUNT(*) c FROM ${t}`).get(), t).toEqual({ c: 2 });
+    db.close();
+  });
+
+  it('indexes each table on its owner column', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    for (const [, owner, idx] of TABLES) {
+      const cols = (db.prepare(`PRAGMA index_info(${idx})`).all() as { name: string }[]).map(r => r.name);
+      expect(cols, idx).toEqual([owner]);
+    }
+    db.close();
+  });
+});
+
+describe('migration 43: payment-attachments', () => {
+  it('adds payment_attachments to a v42 database, shaped like the other attachment tables, and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 42));
+    expect(tableNames(db)).not.toContain('payment_attachments');
+
+    runMigrations(db, dir, migrations);
+    expect(columnNames(db, 'payment_attachments')).toEqual(['id', 'paymentId', 'fileId', 'sortOrder', 'createdAt']);
+    const ins = db.prepare('INSERT INTO payment_attachments (id, paymentId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)');
+    ins.run('pa-1', 'pay1', 'check.jpg', 0, 1);
+    ins.run('pa-2', 'pay1', 'remit.pdf', 1, 1); // a photo and a PDF on one payment
+    expect(() => ins.run('pa-3', 'pay1', 'check.jpg', 2, 1)).toThrow(/UNIQUE/);
+    ins.run('pa-4', 'pay2', 'check.jpg', 0, 1); // the same file on another payment is fine
+
+    // Idempotent: replaying up() must not throw or touch the rows.
+    const m43 = migrations.find(m => m.version === 43)!;
+    expect(() => m43.up({ db, dataDir: dir })).not.toThrow();
+    expect(db.prepare('SELECT COUNT(*) c FROM payment_attachments').get()).toEqual({ c: 3 });
+    db.close();
+  });
+
+  it('indexes the table on paymentId and leaves existing payments untouched', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 42));
+    db.prepare(`INSERT INTO payments (id, targetType, targetId, date, amount, method, note, createdAt)
+                VALUES ('pay1', 'invoice', 'inv1', 5, 120.5, 'check', 'deposit', 6)`).run();
+    runMigrations(db, dir, migrations);
+    const cols = (db.prepare('PRAGMA index_info(idx_payment_attachments_payment)').all() as { name: string }[]).map(r => r.name);
+    expect(cols).toEqual(['paymentId']);
+    expect(db.prepare('SELECT * FROM payments').all()).toEqual([
+      { id: 'pay1', targetType: 'invoice', targetId: 'inv1', date: 5, amount: 120.5, method: 'check', note: 'deposit', createdAt: 6 },
+    ]);
+    db.close();
+  });
+});
+
+describe('migration 44: daily-report-start-time', () => {
+  it('adds startTime (nullable) to daily_reports, leaves existing reports and their weather alone, and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 43));
+    expect(columnNames(db, 'daily_reports')).not.toContain('startTime');
+
+    const hourly = JSON.stringify([{ hour: '6 AM', tempF: 71, condition: 'Clear' }]);
+    db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, weatherSummary, temperature, weatherHourly, createdAt, updatedAt)
+                VALUES ('d1', 'p1', '2026-08-26', 'Clear', '71–80°F', ?, 1, 1)`).run(hourly);
+
+    runMigrations(db, dir, migrations);
+
+    expect(columnNames(db, 'daily_reports')).toContain('startTime');
+    expect(db.prepare('SELECT startTime, weatherSummary, temperature, weatherHourly, version FROM daily_reports WHERE id = ?').get('d1'))
+      .toEqual({ startTime: null, weatherSummary: 'Clear', temperature: '71–80°F', weatherHourly: hourly, version: 1 });
+
+    // Idempotent: replaying up() must not throw (duplicate column) or reset data.
+    db.prepare('UPDATE daily_reports SET startTime = ? WHERE id = ?').run('07:00', 'd1');
+    const m44 = migrations.find(m => m.version === 44)!;
+    expect(() => m44.up({ db, dataDir: dir })).not.toThrow();
+    expect(db.prepare('SELECT startTime FROM daily_reports WHERE id = ?').get('d1')).toEqual({ startTime: '07:00' });
+    db.close();
+  });
+});
+
+describe('migration 45: daily-report-crews', () => {
+  // Every column daily_reports had at v44, in its v44 order.
+  const V44_COLS = ['id', 'projectId', 'reportDate', 'jobName', 'contractorName', 'weatherSummary', 'temperature',
+    'weatherHourly', 'manCounts', 'fieldNotes', 'issues', 'createdBy', 'createdAt', 'updatedAt', 'version', 'startTime'];
+
+  // A v44 database with reports on two projects (one since deleted — project
+  // delete never removed its reports), a project with none, and the photo and
+  // PDF-attachment rows that hang off the reports by id.
+  const seedV44 = () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 44));
+    expect(columnNames(db, 'daily_reports')).toEqual(V44_COLS);
+    db.prepare(`INSERT INTO projects (id, name, createdAt) VALUES ('p1', 'Dania', 1), ('p2', 'Hollywood', 1), ('p3', 'No reports', 1)`).run();
+    const ins = db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, startTime, jobName, contractorName, weatherSummary,
+        temperature, weatherHourly, manCounts, fieldNotes, issues, createdBy, createdAt, updatedAt, version)
+      VALUES (?, ?, ?, ?, 'Job', 'GC', 'Clear', '71–80°F', '[{"hour":"6 AM","tempF":71,"condition":"Clear"}]',
+        '[{"type":"Plasterer","count":4}]', 'notes', 'none', 'nathan', 5, 6, 3)`);
+    ins.run('d1', 'p1', '2026-08-25', '07:00');
+    ins.run('d2', 'p1', '2026-08-26', null);
+    ins.run('d3', 'p2', '2026-08-26', '06:00');
+    ins.run('d4', 'gone', '2026-08-20', null); // its project was deleted
+    db.prepare(`INSERT INTO daily_report_photos (id, dailyReportId, fileId, sortOrder, createdAt) VALUES ('ph1', 'd1', 'f1', 0, 1)`).run();
+    db.prepare(`INSERT INTO daily_report_attachments (id, dailyReportId, fileId, sortOrder, createdAt) VALUES ('at1', 'd3', 'f2', 0, 1)`).run();
+    return { db, dir, before: db.prepare('SELECT * FROM daily_reports ORDER BY id').all() as any[] };
+  };
+
+  it('rebuilds daily_reports with crewId, keeping every row, id, column value and its photos/attachments', () => {
+    const { db, dir, before } = seedV44();
+    runMigrations(db, dir, migrations);
+
+    expect(columnNames(db, 'daily_reports').sort()).toEqual([...V44_COLS, 'crewId'].sort());
+    const after = db.prepare('SELECT * FROM daily_reports ORDER BY id').all() as any[];
+    expect(after.map(({ crewId, ...rest }) => rest)).toEqual(before);
+    expect(after.every(r => typeof r.crewId === 'string' && r.crewId)).toBe(true);
+    // Children still find their report by id.
+    expect(db.prepare(`SELECT r.reportDate FROM daily_report_photos p JOIN daily_reports r ON r.id = p.dailyReportId`).all())
+      .toEqual([{ reportDate: '2026-08-25' }]);
+    expect(db.prepare(`SELECT r.projectId FROM daily_report_attachments a JOIN daily_reports r ON r.id = a.dailyReportId`).all())
+      .toEqual([{ projectId: 'p2' }]);
+    // Defaults survive the rebuild.
+    db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES ('d9', 'p3', 'c9', '2026-08-26', 1, 1)`).run();
+    expect(db.prepare('SELECT jobName, weatherHourly, manCounts, startTime, version FROM daily_reports WHERE id = ?').get('d9'))
+      .toEqual({ jobName: '', weatherHourly: '[]', manCounts: '[]', startTime: null, version: 1 });
+    db.close();
+  });
+
+  it('gives every project with reports one "Crew 1" holding all of them, and a project with none no crew', () => {
+    const { db, dir } = seedV44();
+    runMigrations(db, dir, migrations);
+
+    expect(columnNames(db, 'daily_report_crews')).toEqual(['id', 'projectId', 'name', 'sortOrder', 'createdAt', 'updatedAt']);
+    const crews = db.prepare('SELECT id, projectId, name, sortOrder FROM daily_report_crews ORDER BY projectId').all() as any[];
+    expect(crews.map(c => [c.projectId, c.name, c.sortOrder])).toEqual([['gone', 'Crew 1', 0], ['p1', 'Crew 1', 0], ['p2', 'Crew 1', 0]]);
+    const crewOf = Object.fromEntries(crews.map(c => [c.projectId, c.id]));
+    expect(db.prepare('SELECT id, crewId FROM daily_reports ORDER BY id').all()).toEqual([
+      { id: 'd1', crewId: crewOf.p1 }, { id: 'd2', crewId: crewOf.p1 }, { id: 'd3', crewId: crewOf.p2 }, { id: 'd4', crewId: crewOf.gone },
+    ]);
+    db.close();
+  });
+
+  it('makes the date rule one report per date PER CREW, and keeps the indexes', () => {
+    const { db, dir } = seedV44();
+    runMigrations(db, dir, migrations);
+    const crew1 = (db.prepare(`SELECT id FROM daily_report_crews WHERE projectId = 'p1'`).get() as any).id;
+    const ins = db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, 1)`);
+    expect(() => ins.run('dup', 'p1', crew1, '2026-08-26')).toThrow(/UNIQUE/);
+    ins.run('other-crew', 'p1', 'crew-2', '2026-08-26'); // same date, another crew: fine
+    expect(() => ins.run('no-crew', 'p1', null, '2026-08-27')).toThrow(/NOT NULL/);
+
+    const indexCols = (idx: string) => (db.prepare(`PRAGMA index_info(${idx})`).all() as { name: string }[]).map(r => r.name);
+    expect(indexCols('idx_daily_reports_project')).toEqual(['projectId']);
+    expect(indexCols('idx_daily_report_crews_project')).toEqual(['projectId']);
+    const unique = (db.prepare(`PRAGMA index_list(daily_reports)`).all() as any[]).filter(i => i.unique && i.origin === 'u');
+    expect(unique.map(i => indexCols(i.name))).toEqual([['projectId', 'crewId', 'reportDate']]);
+    expect(tableNames(db)).not.toContain('daily_reports_new');
+    db.close();
+  });
+
+  it('replaying up() is a no-op: no second crew, no second rebuild', () => {
+    const { db, dir } = seedV44();
+    runMigrations(db, dir, migrations);
+    const crews = db.prepare('SELECT * FROM daily_report_crews ORDER BY id').all();
+    const reports = db.prepare('SELECT * FROM daily_reports ORDER BY id').all();
+
+    const m45 = migrations.find(m => m.version === 45)!;
+    expect(() => m45.up({ db, dataDir: dir })).not.toThrow();
+    expect(db.prepare('SELECT * FROM daily_report_crews ORDER BY id').all()).toEqual(crews);
+    expect(db.prepare('SELECT * FROM daily_reports ORDER BY id').all()).toEqual(reports);
+    db.close();
+  });
+
+  it('on a fresh install, makes the crews table and an empty per-crew daily_reports', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    expect(db.prepare('SELECT COUNT(*) c FROM daily_report_crews').get()).toEqual({ c: 0 });
+    expect(columnNames(db, 'daily_reports')).toContain('crewId');
+    db.close();
+  });
+
+  it('a column the rebuild does not know stops the migration, leaving the v44 table and its rows as they were', () => {
+    const { db, dir, before } = seedV44();
+    db.exec(`ALTER TABLE daily_reports ADD COLUMN somethingElse TEXT`);
+    expect(() => runMigrations(db, dir, migrations)).toThrow(/columns the rebuild would drop: somethingElse/);
+    expect(db.prepare('SELECT MAX(version) v FROM schema_version').get()).toEqual({ v: 44 });
+    expect(columnNames(db, 'daily_reports')).toEqual([...V44_COLS, 'somethingElse']);
+    expect((db.prepare('SELECT * FROM daily_reports ORDER BY id').all() as any[]).map(({ somethingElse, ...r }) => r)).toEqual(before);
+    expect(tableNames(db)).not.toContain('daily_report_crews');
+    db.close();
+  });
+});
+
+describe('migration 46: invoices-auto-paid', () => {
+  // A v45 database with invoices in every state the rule distinguishes.
+  const seedV45 = () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 45));
+    db.prepare(`INSERT INTO projects (id, name, createdAt) VALUES ('p1', 'Dania', 1)`).run();
+    const inv = db.prepare(`INSERT INTO invoices (id, projectId, number, status, version, createdAt, updatedAt) VALUES (?, 'p1', ?, ?, 3, 5, 6)`);
+    const line = db.prepare(`INSERT INTO invoice_lines (id, invoiceId, description, qty, unitPrice, sortOrder) VALUES (?, ?, 'x', ?, ?, 0)`);
+    const pay = db.prepare(`INSERT INTO payments (id, targetType, targetId, date, amount, createdAt) VALUES (?, ?, ?, 1, ?, 1)`);
+    // Paid in full, still 'sent' → marked paid. Three 0.1 lines = 30¢ exactly.
+    inv.run('full', '1001', 'sent');
+    ['a', 'b', 'c'].forEach(l => line.run(`full-${l}`, 'full', 1, 0.1));
+    pay.run('pf1', 'invoice', 'full', 0.1); pay.run('pf2', 'invoice', 'full', 0.2);
+    // Overpaid → paid.
+    inv.run('over', '1002', 'sent'); line.run('over-a', 'over', 2, 50); pay.run('po', 'invoice', 'over', 150);
+    // Partly paid by one cent → stays sent.
+    inv.run('part', '1003', 'sent'); line.run('part-a', 'part', 1, 100); pay.run('pp', 'invoice', 'part', 99.99);
+    // $0 invoice with a payment → stays sent (nothing to cover).
+    inv.run('zero', '1004', 'sent'); pay.run('pz', 'invoice', 'zero', 10);
+    // A fully paid draft is not touched by the backfill.
+    inv.run('draft', '1005', 'draft'); line.run('draft-a', 'draft', 1, 40); pay.run('pd', 'invoice', 'draft', 40);
+    // Already paid → untouched.
+    inv.run('paid', '1006', 'paid'); line.run('paid-a', 'paid', 1, 40);
+    // A pay application payment with the same id as an invoice never counts for it.
+    inv.run('payapp', '1007', 'sent'); line.run('payapp-a', 'payapp', 1, 40); pay.run('pa', 'payapp', 'payapp', 40);
+    return { db, dir };
+  };
+  const statuses = (db: any) => Object.fromEntries(
+    (db.prepare('SELECT id, status FROM invoices ORDER BY id').all() as { id: string; status: string }[]).map(r => [r.id, r.status]));
+
+  it('marks sent invoices whose payments cover a total over $0 paid, and nothing else', () => {
+    const { db, dir } = seedV45();
+    runMigrations(db, dir, migrations);
+    expect(statuses(db)).toEqual({
+      full: 'paid', over: 'paid', part: 'sent', zero: 'sent', draft: 'draft', paid: 'paid', payapp: 'sent',
+    });
+    db.close();
+  });
+
+  it('changes only the status: version, updatedAt, lines and payments are as they were', () => {
+    const { db, dir } = seedV45();
+    const others = (d: any) => ({
+      invoices: d.prepare('SELECT id, number, version, createdAt, updatedAt FROM invoices ORDER BY id').all(),
+      lines: d.prepare('SELECT * FROM invoice_lines ORDER BY id').all(),
+      payments: d.prepare('SELECT * FROM payments ORDER BY id').all(),
+    });
+    const before = others(db);
+    runMigrations(db, dir, migrations);
+    expect(others(db)).toEqual(before);
+    db.close();
+  });
+
+  it('replaying up() is a no-op, and a fresh install runs it cleanly', () => {
+    const { db, dir } = seedV45();
+    runMigrations(db, dir, migrations);
+    const after = statuses(db);
+    const m46 = migrations.find(m => m.version === 46)!;
+    expect(() => m46.up({ db, dataDir: dir })).not.toThrow();
+    expect(statuses(db)).toEqual(after);
+    db.close();
+
+    const fresh = openDb(':memory:');
+    expect(() => runMigrations(fresh, tmpDir(), migrations.filter(m => m.version <= 46))).not.toThrow();
+    expect(fresh.prepare('SELECT MAX(version) v FROM schema_version').get()).toEqual({ v: 46 });
+    fresh.close();
+  });
+});
+
+describe('migration 47: change-order-legacy-lump-sum', () => {
+  // Change orders written before migration 14 (value only in amount, no lines;
+  // 14 gives them lumpSumAmount 0), carried up to v46, next to change orders
+  // the store wrote since.
+  const seedV46 = () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 13));
+    const legacy = db.prepare(`INSERT INTO change_orders (id, projectId, number, description, amount, status, createdAt) VALUES (?, 'p1', ?, 'Extra', ?, ?, 5)`);
+    legacy.run('legacy', '1', 1234.56, 'approved');
+    legacy.run('credit', '2', -250, 'pending'); // a deduction moves the same way
+    legacy.run('legacy-zero', '3', 0, 'pending'); // worth $0 → nothing to move
+    runMigrations(db, dir, migrations.filter(m => m.version <= 46));
+    const co = db.prepare(`INSERT INTO change_orders (id, projectId, number, description, amount, status, version, lumpSumAmount, createdAt, updatedAt)
+      VALUES (?, 'p1', ?, 'x', ?, 'approved', 3, ?, 5, 6)`);
+    const line = db.prepare(`INSERT INTO change_order_lines (id, changeOrderId, description, qty, unitPrice, sortOrder) VALUES (?, ?, 'x', ?, ?, 0)`);
+    // Lines and no lump sum → untouched. Three 0.1 lines = 30¢ exactly.
+    co.run('lined', '4', 0.3, 0);
+    ['a', 'b', 'c'].forEach(l => line.run(`lined-${l}`, 'lined', 1, 0.1));
+    co.run('lump', '5', 75, 75); // a lump sum already → untouched
+    co.run('both', '6', 175, 75); line.run('both-a', 'both', 2, 50); // lines + lump sum → untouched
+    co.run('zero', '7', 0, 0); // $0 throughout → untouched
+    return { db, dir };
+  };
+  const lumpSums = (db: any) => Object.fromEntries(
+    (db.prepare('SELECT id, lumpSumAmount FROM change_orders ORDER BY id').all() as { id: string; lumpSumAmount: number }[])
+      .map(r => [r.id, r.lumpSumAmount]));
+
+  it('gives a change order with no lines, no lump sum and a non-zero amount that amount as its lump sum, and nothing else', () => {
+    const { db, dir } = seedV46();
+    expect(lumpSums(db)).toEqual({ legacy: 0, credit: 0, 'legacy-zero': 0, lined: 0, lump: 75, both: 75, zero: 0 });
+    runMigrations(db, dir, migrations);
+    expect(lumpSums(db)).toEqual({ legacy: 1234.56, credit: -250, 'legacy-zero': 0, lined: 0, lump: 75, both: 75, zero: 0 });
+    db.close();
+  });
+
+  it('makes Σ line cents + lump-sum cents equal amount for every change order', () => {
+    const { db, dir } = seedV46();
+    runMigrations(db, dir, migrations);
+    const cents = (d: number) => Math.round(d * 100);
+    const lineCents = (id: string) => (db.prepare('SELECT qty, unitPrice FROM change_order_lines WHERE changeOrderId = ?').all(id) as any[])
+      .reduce((a, l) => a + cents(l.qty * l.unitPrice), 0);
+    for (const r of db.prepare('SELECT id, amount, lumpSumAmount FROM change_orders').all() as any[]) {
+      expect(lineCents(r.id) + cents(r.lumpSumAmount), r.id).toBe(cents(r.amount));
+    }
+    db.close();
+  });
+
+  it('changes only lumpSumAmount (and a fixed row\'s updatedAt): amount, status, version and lines are as they were', () => {
+    const { db, dir } = seedV46();
+    const others = (d: any) => ({
+      changeOrders: d.prepare('SELECT id, number, amount, status, version, createdAt FROM change_orders ORDER BY id').all(),
+      lines: d.prepare('SELECT * FROM change_order_lines ORDER BY id').all(),
+    });
+    const stamps = (d: any) => Object.fromEntries(
+      (d.prepare('SELECT id, updatedAt FROM change_orders ORDER BY id').all() as { id: string; updatedAt: number | null }[])
+        .map(r => [r.id, r.updatedAt]));
+    const before = others(db);
+    const stampsBefore = stamps(db);
+    const t0 = Date.now();
+    runMigrations(db, dir, migrations);
+    expect(others(db)).toEqual(before);
+    // A fixed row's stored PDF (which printed $0) now reads out of date; the
+    // rest keep their stamp.
+    const after = stamps(db);
+    for (const id of ['legacy', 'credit']) expect(after[id]).toBeGreaterThanOrEqual(t0);
+    for (const id of ['legacy-zero', 'lined', 'lump', 'both', 'zero']) expect(after[id]).toBe(stampsBefore[id]);
+    db.close();
+  });
+
+  it('replaying up() is a no-op, and a fresh install runs it cleanly', () => {
+    const { db, dir } = seedV46();
+    runMigrations(db, dir, migrations);
+    const after = db.prepare('SELECT * FROM change_orders ORDER BY id').all();
+    const m47 = migrations.find(m => m.version === 47)!;
+    expect(() => m47.up({ db, dataDir: dir })).not.toThrow();
+    expect(db.prepare('SELECT * FROM change_orders ORDER BY id').all()).toEqual(after);
+    db.close();
+
+    const fresh = openDb(':memory:');
+    expect(() => runMigrations(fresh, tmpDir(), migrations)).not.toThrow();
+    expect(fresh.prepare('SELECT name FROM schema_version WHERE version = 47').get()).toEqual({ name: 'change-order-legacy-lump-sum' });
+    fresh.close();
   });
 });

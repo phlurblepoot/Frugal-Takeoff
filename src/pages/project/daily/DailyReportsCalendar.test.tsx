@@ -6,7 +6,7 @@ import { DailyReportsCalendar, monthGrid } from './DailyReportsCalendar';
 import { DailyReportListItem } from '../../../utils/store';
 
 const report = (over: Partial<DailyReportListItem> = {}): DailyReportListItem => ({
-  id: 'r1', projectId: 'p1', reportDate: '2026-09-05', jobName: 'Job', contractorName: 'GC',
+  id: 'r1', projectId: 'p1', crewId: 'c1', crewName: 'Crew 1', reportDate: '2026-09-05', jobName: 'Job', contractorName: 'GC', startTime: null,
   weatherSummary: '', temperature: '', manCounts: [], createdBy: null,
   createdAt: 1, updatedAt: 1, version: 1, photoCount: 0,
   ...over,
@@ -73,5 +73,47 @@ describe('DailyReportsCalendar', () => {
 
     fireEvent.click(screen.getByText('Today'));
     expect(screen.getByText('September 2026')).toBeInTheDocument();
+  });
+});
+
+// The All crews tab (spec docs/superpowers/specs/2026-10-06-daily-report-crews-design.md):
+// every crew's reports on one calendar, for viewing — no onCreate.
+describe('DailyReportsCalendar — All crews (read-only)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 5));
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const reports = [
+    report({ id: 'ours', crewName: 'Crew 1', reportDate: '2026-09-10', manCounts: [{ type: 'Plasterer', count: 4 }] }),
+    report({ id: 'theirs', crewId: 'c2', crewName: 'Smith Drywall', reportDate: '2026-09-10', manCounts: [] }),
+    report({ id: 'later', crewId: 'c2', crewName: 'Smith Drywall', reportDate: '2026-09-12', manCounts: [{ type: 'Hanger', count: 2 }] }),
+  ];
+
+  it('lists each crew\'s report on its day with the crew name and man count', () => {
+    render(<DailyReportsCalendar reports={reports} onOpen={vi.fn()} />);
+    const day = screen.getByTestId('daily-calendar-day-2026-09-10');
+    expect(day.dataset.report).toBe('true');
+    expect(screen.getByTestId('daily-calendar-entry-ours')).toHaveTextContent('Crew 1 · 4 men');
+    expect(screen.getByTestId('daily-calendar-entry-theirs')).toHaveTextContent(/^Smith Drywall$/); // no men counted
+    expect(screen.getByTestId('daily-calendar-entry-later')).toHaveTextContent('Smith Drywall · 2 men');
+    expect(day.querySelectorAll('button')).toHaveLength(2);
+  });
+
+  it('opens the clicked crew\'s report', () => {
+    const onOpen = vi.fn();
+    render(<DailyReportsCalendar reports={reports} onOpen={onOpen} />);
+    fireEvent.click(screen.getByRole('button', { name: "Open Smith Drywall's daily report for 2026-09-10" }));
+    expect(onOpen).toHaveBeenCalledWith('theirs');
+  });
+
+  it('starts nothing from an empty day', () => {
+    render(<DailyReportsCalendar reports={reports} onOpen={vi.fn()} />);
+    const empty = screen.getByTestId('daily-calendar-day-2026-09-11');
+    expect(empty.dataset.report).toBeUndefined();
+    expect(empty.tagName).toBe('DIV');
+    expect(empty.querySelector('button')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Create daily report/ })).toBeNull();
   });
 });

@@ -15,6 +15,31 @@ export const getAuthHeaders = () => {
   };
 };
 
+// Photo and file links (<img src>, pdf.js) can't send the Authorization header,
+// so the server signs them in by an HttpOnly media cookie carrying the same
+// token (server/auth.ts). Signing in sets it; a session from before it
+// existed (only the token in localStorage) trades the token for it as the app
+// starts. Resolves once that is done, refused or offline, or after `waitMs`
+// whatever the server is doing — never rejects.
+const MEDIA_SESSION_WAIT_MS = 3000;
+export const startMediaSession = (waitMs = MEDIA_SESSION_WAIT_MS): Promise<void> => {
+  const token = localStorage.getItem('token');
+  if (!token) return Promise.resolve();
+  const traded = fetch('/api/auth/media-session', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  }).then(() => {}, () => {});
+  return Promise.race([traded, new Promise<void>(resolve => setTimeout(resolve, waitMs))]);
+};
+
+/** Signing out: the server clears the media cookie (keepalive, so it survives
+ *  the page navigating away). The caller forgets the token itself. */
+export const endMediaSession = (): void => {
+  try {
+    void fetch('/api/auth/logout', { method: 'POST', keepalive: true }).catch(() => {});
+  } catch { /* nothing to clear without a network */ }
+};
+
 export const getImageUrl = (id: string) => {
   return `/api/images/${id}/raw`;
 };
@@ -216,8 +241,35 @@ export const getAllProjects = async (): Promise<Project[]> => {
   return await res.json();
 };
 
+/** What a project holds, by kind — only the kinds it has any of, e.g.
+ *  { documents: 12, invoices: 2 } (server/projectStore.ts projectDataSummary).
+ *  Someone who isn't an admin gets billing, proposals and time folded into
+ *  `otherRecords`. */
+export type ProjectDataSummary = Record<string, number>;
+
+/** Thrown for the server's 409 `project_has_data`: the project has documents
+ *  or records, so it can only be archived (spec 2026-10-07-project-delete-guard). */
+export class ProjectHasDataError extends Error {
+  constructor(public summary: ProjectDataSummary) {
+    super('This project has documents or records. Archive it instead.');
+    this.name = 'ProjectHasDataError';
+  }
+}
+
+/** Whether a project may be deleted (only one with nothing in it may), and
+ *  what's in it — so a page can offer Archive instead of a doomed Delete. */
+export const getProjectDeleteCheck = async (id: string): Promise<{ canDelete: boolean; summary: ProjectDataSummary }> => {
+  const res = await fetchWithRetry(`/api/projects/${encodeURIComponent(id)}/delete-check`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return await res.json();
+};
+
 export const deleteProject = async (id: string): Promise<void> => {
   const res = await fetch('/api/projects/' + id, { method: 'DELETE', headers: getAuthHeaders() });
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    if (body?.error === 'project_has_data') throw new ProjectHasDataError(body.summary ?? {});
+  }
   await handleResponse(res);
 };
 
@@ -1395,13 +1447,33 @@ export interface Payment {
   note: string | null;
   createdAt: number;
   targetLabel?: string;
+  /** Photos/PDFs on the payment (migration 43) — on the project payments list only. */
+  attachmentCount?: number;
+}
+// A photo or PDF on a payment — a check image, a receipt, remittance advice
+// (migration 43). Shown on the payment only. name/mime/size/kind/createdAt/
+// versionNumber are the file's own, so a file deleted since reads as nulls.
+export interface PaymentAttachment {
+  id: string; fileId: string; sortOrder: number;
+  name: string | null; mime: string | null; size: number | null;
+  kind: string | null; createdAt: number | null; versionNumber: number | null;
+}
+// GET /api/payments/:id — the payment detail view.
+export interface PaymentDetail extends Payment {
+  targetLabel: string;
+  projectId: string | null;
+  attachments: PaymentAttachment[];
 }
 export interface InvoicePhoto {
   id: string;
   fileId: string;
   sortOrder: number;
 }
-export interface InvoiceAttachment { id: string; fileId: string; sortOrder: number; name: string | null; mime: string | null; size: number | null }
+// A stored PDF appended to the end of a record's generated PDF, after its
+// photos, in sortOrder — invoices (migration 34); change orders, RFIs, issues
+// and daily reports (migration 42). name/mime/size are the file's own, so a
+// file deleted since reads as nulls.
+export interface PdfAttachment { id: string; fileId: string; sortOrder: number; name: string | null; mime: string | null; size: number | null }
 export interface Invoice {
   id: string;
   projectId: string;
@@ -1424,7 +1496,7 @@ export interface Invoice {
   // Appended to the generated invoice PDF (migration 34): photos as pages,
   // then attached PDFs, in sortOrder.
   photos: InvoicePhoto[];
-  attachments: InvoiceAttachment[];
+  attachments: PdfAttachment[];
   totalCents: number;
   paidCents: number;
   balanceCents: number;
@@ -1461,7 +1533,10 @@ export interface ChangeOrder {
   updatedAt: number;
   amount: number; // canonical rolled-up dollar total (= (Σ line cents + lump-sum cents)/100)
   lines: ChangeOrderLine[];
+  // Appended to the generated change order PDF: photos as pages, then the
+  // attached PDFs (migration 42), in sortOrder.
   photos: COPhoto[];
+  attachments: PdfAttachment[];
   totalCents: number;
   lumpSumCents: number;
 }
@@ -1572,12 +1647,29 @@ export const recordPayment = async (
   targetType: 'invoice' | 'payapp',
   targetId: string,
   input: { amount: number; date?: number | null; method?: string; note?: string }
-): Promise<void> => {
+): Promise<{ id: string }> => {
   const res = await billingJson('POST', `/api/projects/${projectId}/payments`, { targetType, targetId, ...input });
-  await handleResponse(res);
+  await handleResponse(res); return res.json();
 };
 export const deletePayment = async (id: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/payments/${id}`); await handleResponse(res);
+};
+export const getPayment = async (id: string): Promise<PaymentDetail> => {
+  const res = await fetchWithRetry(`/api/payments/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+// What it paid can't change — only these four.
+export const updatePayment = async (
+  id: string,
+  input: { amount: number; date?: number | null; method?: string | null; note?: string | null },
+): Promise<void> => {
+  const res = await billingJson('PUT', `/api/payments/${id}`, input); await handleResponse(res);
+};
+export const addPaymentAttachment = async (paymentId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('POST', `/api/payments/${paymentId}/attachments`, { fileId }); await handleResponse(res);
+};
+export const removePaymentAttachment = async (paymentId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/payments/${paymentId}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
 export const getChangeOrders = async (projectId: string): Promise<ChangeOrderListItem[]> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/change-orders`, { headers: { ...getAuthHeaders() } });
@@ -1612,6 +1704,15 @@ export const addCOPhoto = async (coId: string, fileId: string): Promise<void> =>
 };
 export const removeCOPhoto = async (coId: string, fileId: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/change-orders/${coId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const addCOAttachment = async (coId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('POST', `/api/change-orders/${coId}/attachments`, { fileId }); await handleResponse(res);
+};
+export const updateCOAttachment = async (coId: string, fileId: string, patch: { sortOrder: number }): Promise<void> => {
+  const res = await billingJson('PATCH', `/api/change-orders/${coId}/attachments/${encodeURIComponent(fileId)}`, patch); await handleResponse(res);
+};
+export const removeCOAttachment = async (coId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/change-orders/${coId}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
 export const sendChangeOrder = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res); return res.json();
@@ -1658,6 +1759,7 @@ export interface Issue {
   createdAt: number;
   updatedAt: number;
   photos: IssuePhoto[];
+  attachments: PdfAttachment[];        // appended to the issue report after the photos (migration 42)
 }
 export interface IssueListItem {
   id: string; projectId: string; number: number; title: string | null;
@@ -1700,6 +1802,15 @@ export const addIssuePhoto = async (issueId: string, fileId: string): Promise<vo
 };
 export const removeIssuePhoto = async (issueId: string, fileId: string): Promise<void> => {
   const res = await issueJson('DELETE', `/api/issues/${issueId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const addIssueAttachment = async (issueId: string, fileId: string): Promise<void> => {
+  const res = await issueJson('POST', `/api/issues/${issueId}/attachments`, { fileId }); await handleResponse(res);
+};
+export const updateIssueAttachment = async (issueId: string, fileId: string, patch: { sortOrder: number }): Promise<void> => {
+  const res = await issueJson('PATCH', `/api/issues/${issueId}/attachments/${encodeURIComponent(fileId)}`, patch); await handleResponse(res);
+};
+export const removeIssueAttachment = async (issueId: string, fileId: string): Promise<void> => {
+  const res = await issueJson('DELETE', `/api/issues/${issueId}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
 export const sendIssue = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res); return res.json();
@@ -1749,6 +1860,7 @@ export interface Rfi {
   createdAt: number;
   updatedAt: number;
   photos: RfiPhoto[];
+  attachments: PdfAttachment[];              // appended to the RFI PDF after the photos (migration 42)
   pendingReply?: RfiPendingReply | null;
   responseSource?: string | null;            // 'email' once an emailed reply was accepted
   responseMessageIdHeader?: string | null;
@@ -1803,6 +1915,15 @@ export const addRfiPhoto = async (rfiId: string, fileId: string): Promise<void> 
 export const removeRfiPhoto = async (rfiId: string, fileId: string): Promise<void> => {
   const res = await rfiJson('DELETE', `/api/rfis/${rfiId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
+export const addRfiAttachment = async (rfiId: string, fileId: string): Promise<void> => {
+  const res = await rfiJson('POST', `/api/rfis/${rfiId}/attachments`, { fileId }); await handleResponse(res);
+};
+export const updateRfiAttachment = async (rfiId: string, fileId: string, patch: { sortOrder: number }): Promise<void> => {
+  const res = await rfiJson('PATCH', `/api/rfis/${rfiId}/attachments/${encodeURIComponent(fileId)}`, patch); await handleResponse(res);
+};
+export const removeRfiAttachment = async (rfiId: string, fileId: string): Promise<void> => {
+  const res = await rfiJson('DELETE', `/api/rfis/${rfiId}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
 export const setRfiResponse = async (id: string, input: { fileId?: string; text?: string }): Promise<void> => {
   const res = await rfiJson('POST', `/api/rfis/${id}/response`, input); await handleResponse(res);
 };
@@ -1851,15 +1972,29 @@ export const dismissRfiPendingReply = async (id: string): Promise<void> => {
 export interface DailyReportPhoto { id: string; fileId: string; sortOrder: number; }
 export interface ManCountLine { type: string; count: number; }
 export interface DailyWeatherHour { hour: string; tempF: number | null; condition: string; }
+// A crew is a named tab on a project's Daily Reports page — the company's own
+// crew or a sub's — and its own set of reports, one per date (migration 45).
+export interface DailyReportCrew {
+  id: string; projectId: string; name: string; sortOrder: number; createdAt: number; updatedAt: number;
+  reportCount: number; // a crew with reports can be renamed, not deleted
+}
 export interface DailyReport {
   id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
+  // The crew it was filed under. crewName is null only for a report whose
+  // crew is gone (a deleted project's).
+  crewId: string; crewName: string | null;
+  // 'HH:MM' (24-hour); the weather covers it through 12 hours later. Null on
+  // reports made before it existed (migration 44) — their weather is 6 AM–6 PM.
+  startTime: string | null;
   weatherSummary: string; temperature: string; weatherHourly: DailyWeatherHour[];
   manCounts: ManCountLine[]; fieldNotes: string; issues: string;
   createdBy: string | null; createdAt: number; updatedAt: number; version: number;
   photos: DailyReportPhoto[];
+  attachments: PdfAttachment[]; // appended to the daily report PDF after the photos (migration 42)
 }
 export interface DailyReportListItem {
-  id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
+  id: string; projectId: string; crewId: string; crewName: string | null;
+  reportDate: string; jobName: string; contractorName: string; startTime: string | null;
   weatherSummary: string; temperature: string; manCounts: ManCountLine[];
   createdBy: string | null; createdAt: number; updatedAt: number; version: number; photoCount: number;
 }
@@ -1880,7 +2015,23 @@ export const getDailyReport = async (id: string): Promise<DailyReport> => {
   const res = await fetchWithRetry(`/api/daily-reports/${id}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const createDailyReport = async (projectId: string, input: { reportDate: string; jobName?: string; contractorName?: string }): Promise<{ id: string }> => {
+export const getDailyReportCrews = async (projectId: string): Promise<DailyReportCrew[]> => {
+  // Listing makes the project's first crew ("Crew 1") when it has none yet.
+  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-report-crews`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+// A blank or duplicate name, or deleting a crew that has reports (or the
+// last one), fails with the server's own explanation as the error message.
+export const createDailyReportCrew = async (projectId: string, name: string): Promise<DailyReportCrew> => {
+  const res = await dailyJson('POST', `/api/projects/${projectId}/daily-report-crews`, { name }); await handleResponse(res); return res.json();
+};
+export const renameDailyReportCrew = async (id: string, name: string): Promise<DailyReportCrew> => {
+  const res = await dailyJson('PUT', `/api/daily-report-crews/${id}`, { name }); await handleResponse(res); return res.json();
+};
+export const deleteDailyReportCrew = async (id: string): Promise<void> => {
+  const res = await dailyJson('DELETE', `/api/daily-report-crews/${id}`); await handleResponse(res);
+};
+export const createDailyReport = async (projectId: string, input: { crewId: string; reportDate: string; jobName?: string; contractorName?: string }): Promise<{ id: string }> => {
   const res = await dailyJson('POST', `/api/projects/${projectId}/daily-reports`, input);
   if (res.status === 409) {
     const b = await res.json().catch(() => ({} as any));
@@ -1907,13 +2058,25 @@ export const addDailyReportPhoto = async (id: string, fileId: string): Promise<v
 export const removeDailyReportPhoto = async (id: string, fileId: string): Promise<void> => {
   const res = await dailyJson('DELETE', `/api/daily-reports/${id}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
+export const addDailyReportAttachment = async (id: string, fileId: string): Promise<void> => {
+  const res = await dailyJson('POST', `/api/daily-reports/${id}/attachments`, { fileId }); await handleResponse(res);
+};
+export const updateDailyReportAttachment = async (id: string, fileId: string, patch: { sortOrder: number }): Promise<void> => {
+  const res = await dailyJson('PATCH', `/api/daily-reports/${id}/attachments/${encodeURIComponent(fileId)}`, patch); await handleResponse(res);
+};
+export const removeDailyReportAttachment = async (id: string, fileId: string): Promise<void> => {
+  const res = await dailyJson('DELETE', `/api/daily-reports/${id}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
 export const sendDailyReport = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res); return res.json();
 };
-export const getDailyWeather = async (projectId: string, date: string): Promise<{ hourly: DailyWeatherHour[]; summary: string; temperature: string }> => {
+// `startTime` (HH:MM) starts the 12-hour window; without one the server uses
+// 6 AM, the window reports had before start times existed.
+export const getDailyWeather = async (projectId: string, date: string, startTime?: string | null): Promise<{ hourly: DailyWeatherHour[]; summary: string; temperature: string }> => {
   // No retries: a failing upstream (Open-Meteo/Nominatim) should fail fast
   // rather than the user waiting through ~4 retried upstream calls.
-  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-weather?date=${encodeURIComponent(date)}`, { headers: { ...getAuthHeaders() } }, { retries: 0 });
+  const start = startTime ? `&start=${encodeURIComponent(startTime)}` : '';
+  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-weather?date=${encodeURIComponent(date)}${start}`, { headers: { ...getAuthHeaders() } }, { retries: 0 });
   if (res.status === 400) {
     const b = await res.json().catch(() => ({} as any));
     if (b?.error === 'no_address') throw new Error('no_address');

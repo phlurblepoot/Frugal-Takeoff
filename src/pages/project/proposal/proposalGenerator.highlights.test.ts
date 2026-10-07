@@ -106,3 +106,35 @@ describe('highlight quality presets', () => {
     expect(normalizeHighlightQuality('best')).toBe('best');
   });
 });
+
+// A multiplied measurement's printout label shows its math, and the page's
+// legend total counts it that many times. Text is drawn in WinAnsi-encoded
+// hex strings (Helvetica), where "×" is byte D7.
+describe('buildHighlightsPdf multiplier', () => {
+  const winAnsiHex = (text: string) =>
+    [...text].map(ch => (ch === '×' ? 0xd7 : ch.charCodeAt(0)).toString(16).toUpperCase().padStart(2, '0')).join('');
+
+  it('labels "1200.00 sq ft × 2 = 2400.00 sq ft" and the legend totals 2400', async () => {
+    sourcePdfDataUrl = await makeSourcePdf([0, 0, 600, 400]);
+    const project = makeProject();
+    const page = project.pages[0];
+    // 10 px = 1 ft: the 400x300 px rectangle is 1200 sq ft; it counts twice.
+    page.scaleConfig = { pixelDistance: 10, realWorldDistance: 1, unit: 'ft' };
+    page.showLegend = true;
+    page.measurements[0].multiplier = 2;
+
+    const out = await buildHighlightsPdf(project, new Set(['t1']));
+    const { PDFDocument, PDFRawStream, decodePDFRawStream } = await import('pdf-lib');
+    const doc = await PDFDocument.load(new Uint8Array(out!));
+    const chunks: string[] = [];
+    for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+      if (obj instanceof PDFRawStream) {
+        try { chunks.push(Buffer.from(decodePDFRawStream(obj).decode()).toString('latin1')); } catch { /* not content */ }
+      }
+    }
+    const ops = chunks.join('\n');
+    expect(ops).toContain(`<${winAnsiHex('1200.00 sq ft × 2 = 2400.00 sq ft')}> Tj`);
+    // Legend: the page's total for the takeoff, in the legend's own wording.
+    expect(ops).toContain(`<${winAnsiHex('2400.00 ft')}> Tj`);
+  });
+});

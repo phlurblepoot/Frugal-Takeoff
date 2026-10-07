@@ -129,3 +129,62 @@ test('?stage= deep link selects the right tab, including a legacy param', async 
   await expect(authedPage.getByTestId('project-row')).toHaveCount(1);
   await expect(authedPage.getByTestId('project-row').first()).toContainText(seeded.biddingName);
 });
+
+// Only a project with nothing in it can be deleted; one with documents or
+// records is archived instead (spec
+// docs/superpowers/specs/2026-10-07-project-delete-guard-design.md).
+test('delete: a project with a document offers Archive instead; an empty one deletes', async ({ authedPage, request }) => {
+  const { token } = await login(request);
+  const auth = { Authorization: `Bearer ${token}` };
+  const short = randomUUID().slice(0, 8);
+  const custRes = await request.post('/api/customers', { headers: auth, data: { name: `E2E Guard Customer ${short}` } });
+  if (!custRes.ok()) throw new Error(`customer create failed: ${custRes.status()} ${await custRes.text()}`);
+  const customer = await custRes.json();
+
+  const mkProject = async (name: string) => {
+    const id = randomUUID();
+    const res = await request.post('/api/projects', {
+      headers: auth,
+      data: { id, name, createdAt: Date.now(), customerId: customer.id, status: 'bidding', pages: [], takeoffs: [], version: 1 },
+    });
+    if (!res.ok()) throw new Error(`project create failed: ${res.status()} ${await res.text()}`);
+    return id;
+  };
+  const withDocName = `E2E Guard Documents ${short}`;
+  const emptyName = `E2E Guard Empty ${short}`;
+  const withDocId = await mkProject(withDocName);
+  const emptyId = await mkProject(emptyName);
+  const up = await request.post(`/api/files/${randomUUID()}?projectId=${withDocId}&kind=document&name=Spec-${short}.pdf`, {
+    headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from('%PDF-1.4 e2e fixture'),
+  });
+  if (!up.ok()) throw new Error(`document upload failed: ${up.status()} ${await up.text()}`);
+
+  // The server refuses it outright, whatever the page does.
+  const refused = await request.delete(`/api/projects/${withDocId}`, { headers: auth });
+  expect(refused.status()).toBe(409);
+  expect(await refused.json()).toMatchObject({ error: 'project_has_data', summary: { documents: 1 } });
+
+  await authedPage.goto('/projects');
+  await authedPage.locator('select').first().selectOption({ label: customer.name });
+  const rowFor = (name: string) => authedPage.getByTestId('project-row').filter({ hasText: name });
+  await expect(authedPage.getByTestId('project-row')).toHaveCount(2);
+
+  // With a document: the reason and Archive, no Delete.
+  await rowFor(withDocName).getByTitle('Delete', { exact: true }).click();
+  const dialog = authedPage.getByRole('dialog');
+  await expect(dialog.getByTestId('delete-blocked-reason')).toHaveText('Has 1 document — archive it instead.');
+  await expect(dialog.getByRole('button', { name: 'Delete project' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Archive' }).click();
+  await expect(rowFor(withDocName)).toHaveCount(0);
+  await authedPage.getByTestId('stage-tab-archive').click();
+  await expect(rowFor(withDocName)).toHaveCount(1);
+  await authedPage.getByTestId('stage-tab-bidding').click();
+
+  // Empty: the same type-delete confirm as before, and it's gone.
+  await rowFor(emptyName).getByTitle('Delete', { exact: true }).click();
+  await dialog.getByPlaceholder('delete').fill('delete');
+  await dialog.getByRole('button', { name: 'Delete project' }).click();
+  await expect(rowFor(emptyName)).toHaveCount(0);
+  expect((await request.get(`/api/projects/${emptyId}`, { headers: auth })).status()).toBe(404);
+  expect((await request.get(`/api/projects/${withDocId}`, { headers: auth })).status()).toBe(200);
+});

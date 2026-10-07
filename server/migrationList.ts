@@ -1816,4 +1816,277 @@ export const migrations: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_shares_resourceId ON shares (resourceId);`);
     },
   },
+  {
+    version: 42,
+    name: 'pdf-attachments',
+    // ADDITIVE: PDF attachments for change orders, RFIs, issues and daily
+    // reports — four join tables, each the same shape as invoice_attachments
+    // (migration 34), keyed by the same owner column as that record's photo
+    // table. Attached PDFs are appended to the end of the record's generated
+    // PDF, after its photos (spec
+    // docs/superpowers/specs/2026-10-06-pdf-attachments-design.md). Existing
+    // records simply have none. IF NOT EXISTS makes replaying up() a no-op.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS change_order_attachments (
+          id TEXT PRIMARY KEY,
+          changeOrderId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(changeOrderId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_change_order_attachments_change_order ON change_order_attachments (changeOrderId);
+
+        CREATE TABLE IF NOT EXISTS rfi_attachments (
+          id TEXT PRIMARY KEY,
+          rfiId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(rfiId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rfi_attachments_rfi ON rfi_attachments (rfiId);
+
+        CREATE TABLE IF NOT EXISTS issue_attachments (
+          id TEXT PRIMARY KEY,
+          issueId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(issueId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue ON issue_attachments (issueId);
+
+        CREATE TABLE IF NOT EXISTS daily_report_attachments (
+          id TEXT PRIMARY KEY,
+          dailyReportId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(dailyReportId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_report_attachments_report ON daily_report_attachments (dailyReportId);
+      `);
+    },
+  },
+  {
+    version: 43,
+    name: 'payment-attachments',
+    // ADDITIVE: photos and PDFs on a payment — a check image, a receipt,
+    // remittance advice, an ACH confirmation. One join table for both, the
+    // same shape as the attachment tables of migrations 34 and 42; the file's
+    // mime tells a photo from a PDF. Unlike those, nothing here ever reaches a
+    // generated document: the attachments show only on the payment itself
+    // (spec docs/superpowers/specs/2026-10-06-payment-attachments-design.md).
+    // Existing payments simply have none. IF NOT EXISTS makes replaying up()
+    // a no-op.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS payment_attachments (
+          id TEXT PRIMARY KEY,
+          paymentId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(paymentId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_payment_attachments_payment ON payment_attachments (paymentId);
+      `);
+    },
+  },
+  {
+    version: 44,
+    name: 'daily-report-start-time',
+    // ADDITIVE, IDEMPOTENT: one nullable column, same pattern as migrations
+    // 24 and 33. daily_reports.startTime is 'HH:MM' (24-hour); the report's
+    // weather covers that hour through 12 hours later (spec
+    // docs/superpowers/specs/2026-10-06-daily-report-start-time-design.md).
+    // Existing reports keep NULL — their weather was fetched for the old fixed
+    // 6 AM–6 PM window, which is also what a NULL start time fetches, and their
+    // stored weather is untouched.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(daily_reports)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('startTime')) {
+        db.exec(`ALTER TABLE daily_reports ADD COLUMN startTime TEXT;`);
+      }
+    },
+  },
+  {
+    version: 45,
+    name: 'daily-report-crews',
+    // DATA-TRANSFORMING (supervised). Daily reports become per crew: each
+    // project's Daily Reports page has named crew tabs, each its own set of
+    // reports, one per date per crew (spec
+    // docs/superpowers/specs/2026-10-06-daily-report-crews-design.md).
+    //   * daily_report_crews — one row per crew (name, tab order).
+    //   * daily_reports is REBUILT: SQLite cannot change the table-level
+    //     UNIQUE(projectId, reportDate) in place, so the table is recreated with
+    //     a crewId column and UNIQUE(projectId, crewId, reportDate), every row
+    //     is copied (same ids, so daily_report_photos / daily_report_attachments
+    //     and every files.sourceId / mail link that points at a report still
+    //     resolve), the old table dropped and the new one renamed into place.
+    //     Its indexes and triggers are read from sqlite_master first and
+    //     recreated afterwards.
+    //   * Every project that has reports gets one crew, "Crew 1", and all of
+    //     its reports move into it — including reports of a project that has
+    //     since been deleted (project delete never removed them), so no row is
+    //     lost to the new NOT NULL crewId.
+    // NON-DESTRUCTIVE: no report data changes; nothing references daily_reports
+    // by a declared FOREIGN KEY, so the drop cascades nowhere. The framework
+    // backs the database up first and the whole up() runs in one transaction,
+    // so a failure (e.g. the row-count check below) leaves the table as it was.
+    // Replay-safe: the crews table is IF NOT EXISTS, a project that already
+    // has a crew gets no second one, and a daily_reports that already has
+    // crewId is not rebuilt again.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS daily_report_crews (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          name TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_report_crews_project ON daily_report_crews (projectId);
+      `);
+      const oldCols = (db.prepare(`PRAGMA table_info(daily_reports)`).all() as { name: string }[]).map(c => c.name);
+      if (oldCols.includes('crewId')) return; // already rebuilt
+
+      // "Crew 1" for every project with reports that has no crew yet.
+      const now = Date.now();
+      const insCrew = db.prepare(`INSERT INTO daily_report_crews (id, projectId, name, sortOrder, createdAt, updatedAt)
+        VALUES (?, ?, 'Crew 1', 0, ?, ?)`);
+      const projectIds = (db.prepare(`SELECT DISTINCT projectId FROM daily_reports
+        WHERE projectId NOT IN (SELECT projectId FROM daily_report_crews) ORDER BY projectId`).all() as { projectId: string }[])
+        .map(r => r.projectId);
+      for (const pid of projectIds) insCrew.run(crypto.randomUUID(), pid, now, now);
+
+      // The rebuild. Indexes and triggers are captured before the drop takes
+      // them with it (sql IS NULL = the UNIQUE constraint's own autoindex,
+      // which the new table brings back in its new form).
+      const attached = db.prepare(`SELECT sql FROM sqlite_master
+        WHERE tbl_name = 'daily_reports' AND type IN ('index', 'trigger') AND sql IS NOT NULL`).all() as { sql: string }[];
+      db.exec(`
+        CREATE TABLE daily_reports_new (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          crewId TEXT NOT NULL,
+          reportDate TEXT NOT NULL,
+          startTime TEXT,
+          jobName TEXT NOT NULL DEFAULT '',
+          contractorName TEXT NOT NULL DEFAULT '',
+          weatherSummary TEXT NOT NULL DEFAULT '',
+          temperature TEXT NOT NULL DEFAULT '',
+          weatherHourly TEXT NOT NULL DEFAULT '[]',
+          manCounts TEXT NOT NULL DEFAULT '[]',
+          fieldNotes TEXT NOT NULL DEFAULT '',
+          issues TEXT NOT NULL DEFAULT '',
+          createdBy TEXT,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(projectId, crewId, reportDate)
+        );
+      `);
+      // Copy by name. A column the new table lacks would be lost, so it stops
+      // the migration instead (the transaction rolls back).
+      const newCols = (db.prepare(`PRAGMA table_info(daily_reports_new)`).all() as { name: string }[]).map(c => c.name);
+      const missing = oldCols.filter(c => !newCols.includes(c));
+      if (missing.length) throw new Error(`[migrations] 45: daily_reports has columns the rebuild would drop: ${missing.join(', ')}`);
+      const colList = oldCols.join(', ');
+      db.exec(`
+        INSERT INTO daily_reports_new (${colList}, crewId)
+          SELECT ${colList}, (SELECT c.id FROM daily_report_crews c WHERE c.projectId = daily_reports.projectId
+                              ORDER BY c.sortOrder, c.createdAt, c.id LIMIT 1)
+          FROM daily_reports;
+      `);
+      const count = (t: string) => (db.prepare(`SELECT COUNT(*) c FROM ${t}`).get() as { c: number }).c;
+      const before = count('daily_reports');
+      if (count('daily_reports_new') !== before) throw new Error('[migrations] 45: daily_reports row count changed during the rebuild');
+      db.exec(`
+        DROP TABLE daily_reports;
+        ALTER TABLE daily_reports_new RENAME TO daily_reports;
+      `);
+      for (const { sql } of attached) db.exec(sql);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_daily_reports_project ON daily_reports (projectId);');
+      console.log(`[migrations] 45: ${before} daily report(s) moved into "Crew 1" on ${projectIds.length} project(s)`);
+    },
+  },
+  {
+    version: 46,
+    name: 'invoices-auto-paid',
+    // DATA-TRANSFORMING (supervised). Invoices now turn 'paid' by themselves
+    // once their payments cover the total (billingStore.syncInvoicePaidStatus,
+    // spec docs/superpowers/specs/2026-10-06-reports-design.md). This marks the
+    // ones that already were: every 'sent' invoice with a total over $0 whose
+    // payments reach it. Totals use the store's cents maths, inlined so a later
+    // store change can't alter what this migration did: each line's qty ×
+    // unitPrice rounded to cents before summing (sumCents), each payment rounded
+    // to cents (paidCentsFor).
+    // Only the status changes. version and updatedAt stay as they are, as they
+    // do when a payment moves the status, so no open editor conflicts and no
+    // stored PDF reads out of date (the PDF never prints the status). Drafts,
+    // invoices already 'paid', and partly paid or $0 invoices are untouched.
+    // Replay-safe: a second run finds nothing left to mark.
+    up({ db }) {
+      const cents = (dollars: unknown): number => Math.round((Number(dollars) || 0) * 100);
+      const sent = db.prepare(`SELECT id FROM invoices WHERE status = 'sent'`).all() as { id: string }[];
+      const linesOf = db.prepare('SELECT qty, unitPrice FROM invoice_lines WHERE invoiceId = ?');
+      const paymentsOf = db.prepare(`SELECT amount FROM payments WHERE targetType = 'invoice' AND targetId = ?`);
+      const markPaid = db.prepare(`UPDATE invoices SET status = 'paid' WHERE id = ?`);
+      let marked = 0;
+      for (const { id } of sent) {
+        const totalCents = (linesOf.all(id) as { qty: number; unitPrice: number }[])
+          .reduce((acc, l) => acc + cents((Number(l.qty) || 0) * (Number(l.unitPrice) || 0)), 0);
+        if (totalCents <= 0) continue;
+        const paidCents = (paymentsOf.all(id) as { amount: number }[]).reduce((acc, p) => acc + cents(p.amount), 0);
+        if (paidCents < totalCents) continue;
+        markPaid.run(id);
+        marked++;
+      }
+      console.log(`[migrations] 46: ${marked} fully paid invoice(s) marked paid`);
+    },
+  },
+  {
+    version: 47,
+    name: 'change-order-legacy-lump-sum',
+    // DATA-TRANSFORMING (supervised). A change order made before migration 14
+    // keeps its value only in change_orders.amount: it has no
+    // change_order_lines rows, and its lumpSumAmount is the 0 that migration
+    // 14's new column defaulted to (14 deliberately rewrote no data). The
+    // Change Orders tab, the editor and the PDF show Σ line cents + lump-sum
+    // cents, so such a change order showed $0 there — and saving it from the
+    // editor rewrote its amount to $0, dropping it from the contract total —
+    // while billingSummary, the AIA SOV sync and Reports, which read amount,
+    // still counted it. This moves the value into the lump sum: every change
+    // order with no lines, a $0 lump sum and a non-zero amount gets
+    // lumpSumAmount = amount, so Σ lines + lump sum equals amount again.
+    // Cents compare with the store's rounding (toCents), inlined so a later
+    // store change can't alter what this migration did.
+    // amount — and so the contract total and any synced SOV line — is what it
+    // was, and version stays as it is (no open editor is sent a conflict). A
+    // fixed row's updatedAt moves to now, though: a PDF generated for it since
+    // migration 14 printed a $0 total, and the fresh stamp makes its "up to
+    // date" chip say it needs regenerating. Change orders with lines, with a
+    // lump sum, or worth $0 are untouched.
+    // billingStore.readChangeOrderRow reads any row still in this shape the
+    // same way. Replay-safe: a second run finds nothing left to fix.
+    up({ db }) {
+      const cents = (dollars: unknown): number => Math.round((Number(dollars) || 0) * 100);
+      const lineless = db.prepare(`SELECT id, amount, lumpSumAmount FROM change_orders c
+        WHERE NOT EXISTS (SELECT 1 FROM change_order_lines l WHERE l.changeOrderId = c.id)`).all() as
+        { id: string; amount: number; lumpSumAmount: number }[];
+      const toLumpSum = db.prepare('UPDATE change_orders SET lumpSumAmount = amount, updatedAt = ? WHERE id = ?');
+      const now = Date.now();
+      let fixed = 0;
+      for (const co of lineless) {
+        if (cents(co.lumpSumAmount) !== 0 || cents(co.amount) === 0) continue;
+        toLumpSum.run(now, co.id);
+        fixed++;
+      }
+      console.log(`[migrations] 47: ${fixed} change order(s) from before line items given their amount as a lump sum`);
+    },
+  },
 ];

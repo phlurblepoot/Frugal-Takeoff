@@ -49,8 +49,20 @@ function monthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-function ageDays(fromMs: number, nowMs: number): number {
+// Whole days since fromMs (never negative). Exported, with agingBucket below,
+// for the Reports page's open-invoices report, so its days outstanding and
+// buckets are the dashboard's exactly.
+export function ageDays(fromMs: number, nowMs: number): number {
   return Math.max(0, Math.floor((nowMs - fromMs) / DAY_MS));
+}
+
+// The receivables aging buckets — 0–30 days (current), 31–60, 61+ — keyed
+// like DashboardMoney.aging.
+export type AgingBucket = keyof DashboardMoney['aging'];
+export function agingBucket(age: number): AgingBucket {
+  if (age <= 30) return 'current';
+  if (age <= 60) return 'days31to60';
+  return 'days61plus';
 }
 
 function pluralDays(n: number): string {
@@ -218,7 +230,7 @@ export function dashboardMoney(db: Database.Database): DashboardMoney {
   `).all() as { id: string; name: string | null; archived: number }[]).filter(p => !Number(p.archived));
 
   let outstandingCents = 0, contractTotalCents = 0, billedCents = 0, paidCents = 0;
-  let agingCurrentCents = 0, agingDays31to60Cents = 0, agingDays61PlusCents = 0;
+  const aging: DashboardMoney['aging'] = { current: 0, days31to60: 0, days61plus: 0 };
   const nowMs = Date.now();
   for (const p of projRows) {
     // Fetch docs ONCE and hand the same array to billingSummary — avoids a
@@ -231,12 +243,7 @@ export function dashboardMoney(db: Database.Database): DashboardMoney {
       outstandingCents += doc.balanceCents;
       if (doc.balanceCents > 0) {
         const docDateMs = billedDocDateMs(doc.date);
-        if (docDateMs != null) {
-          const age = ageDays(docDateMs, nowMs);
-          if (age <= 30) agingCurrentCents += doc.balanceCents;
-          else if (age <= 60) agingDays31to60Cents += doc.balanceCents;
-          else agingDays61PlusCents += doc.balanceCents;
-        }
+        if (docDateMs != null) aging[agingBucket(ageDays(docDateMs, nowMs))] += doc.balanceCents;
       }
     }
   }
@@ -282,8 +289,7 @@ export function dashboardMoney(db: Database.Database): DashboardMoney {
   });
 
   return {
-    outstandingCents, contractTotalCents, billedCents, paidCents, draftPayAppCount, recentPayments, trend,
-    aging: { current: agingCurrentCents, days31to60: agingDays31to60Cents, days61plus: agingDays61PlusCents },
+    outstandingCents, contractTotalCents, billedCents, paidCents, draftPayAppCount, recentPayments, trend, aging,
   };
 }
 

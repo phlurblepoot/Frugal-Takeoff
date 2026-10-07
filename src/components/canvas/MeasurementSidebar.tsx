@@ -4,6 +4,7 @@ import { Plus, Edit2, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronsDo
 import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff } from '../../types';
 import { formatRealValue } from '../../utils/math';
 import { MeasurementItem } from './MeasurementItem';
+import { multipliersMatch } from '../../utils/multiplier';
 
 type TakeoffTotal = MeasurementTakeoff & { totalRealValue: number; measurementsCount: number };
 
@@ -39,6 +40,8 @@ interface MeasurementSidebarProps {
   setShowTakeoffModal: React.Dispatch<React.SetStateAction<boolean>>;
   setTakeoffToDelete: React.Dispatch<React.SetStateAction<MeasurementTakeoff | null>>;
   setHeightsModalMeasurementId: React.Dispatch<React.SetStateAction<string | null>>;
+  /** Opens the multiplier editor for a length/area measurement. */
+  onEditMultiplier: (measurementId: string) => void;
 
   selectMeasurement: (m: Measurement) => void;
   updateMeasurement: (id: string, updates: Partial<Measurement>, targetPageId?: string) => void;
@@ -74,6 +77,7 @@ export function MeasurementSidebar({
   setShowTakeoffModal,
   setTakeoffToDelete,
   setHeightsModalMeasurementId,
+  onEditMultiplier,
   selectMeasurement,
   updateMeasurement,
   deleteMeasurement,
@@ -183,6 +187,10 @@ export function MeasurementSidebar({
                         const types = [...multiSelectedIds].map(id => page.measurements.find(m => m.id === id)?.type).filter(Boolean);
                         const allSame = types.every(t => t === types[0]);
                         if (!allSame) return 'Mixed types — cannot merge';
+                        // Merge folds them into one measurement, which has one multiplier.
+                        const picked = page.measurements.filter(m => multiSelectedIds.has(m.id));
+                        const target = page.measurements.find(m => m.id === selectedMeasurementId && m.type === types[0]);
+                        if (!multipliersMatch(target ? [target, ...picked] : picked)) return 'Different multipliers — cannot merge';
                         return selectedMeasurementId ? 'Will merge into selected measurement' : 'Will create a new measurement';
                       })()}
                     </p>
@@ -326,7 +334,7 @@ export function MeasurementSidebar({
                       </div>
                     </div>
                     <div className="flex flex-col items-end shrink-0 ml-2">
-                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-accent-600 text-white border-accent-700 shadow-sm' : 'bg-sunken text-ink border-edge'}`}>
+                      <span data-testid="takeoff-total" className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-accent-600 text-white border-accent-700 shadow-sm' : 'bg-sunken text-ink border-edge'}`}>
                         {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff, false)}
                       </span>
                       {(takeoff.costPerUnit || takeoff.isAdvancedCost) && (
@@ -368,6 +376,7 @@ export function MeasurementSidebar({
                               onSelect={() => selectMeasurement(m)}
                               onRename={(newName) => updateMeasurement(m.id, { name: newName }, p.id)}
                               onEditHeights={() => setHeightsModalMeasurementId(m.id)}
+                              onEditMultiplier={() => onEditMultiplier(m.id)}
                               takeoff={takeoff}
                               pageName={showCurrentPageOnly ? undefined : p.name}
                               pageId={p.id}
@@ -463,6 +472,7 @@ export function MeasurementSidebar({
                           onSelect={() => selectMeasurement(m)}
                           onRename={(newName) => updateMeasurement(m.id, { name: newName }, p.id)}
                           onEditHeights={() => setHeightsModalMeasurementId(m.id)}
+                          onEditMultiplier={() => onEditMultiplier(m.id)}
                           pageName={showCurrentPageOnly ? undefined : p.name}
                           pageId={p.id}
                           projectId={project.id}

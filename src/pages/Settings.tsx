@@ -28,6 +28,120 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.1.10',
+    date: 'October 7, 2026',
+    changes: [
+      'A project that has anything in it can no longer be deleted, only archived. That means documents, plan pages, measurements, proposals, invoices, payments, change orders, pay applications, RFIs, issues, punch items, daily reports, time, notes or linked emails. Only a project with nothing in it, such as one made by mistake, can still be deleted. Who can delete is unchanged.',
+      'Clicking the trash can on the Projects page now checks the project first. If it has anything in it, the box says what (for example "Has 12 documents and 2 invoices — archive it instead.") and offers Archive in place of Delete. An empty project deletes as before: type "delete" to confirm. The same goes for Delete in a project\'s Settings: the reason shows under it, with Archive just above.',
+      'An archived project keeps everything and can be restored anytime from the Archive tab.',
+    ],
+  },
+  {
+    version: '4.1.9',
+    date: 'October 7, 2026',
+    changes: [
+      'Security: photos, PDFs and other files can no longer be opened by anyone who has (or guesses) their link without signing in. Every photo, plan page, PDF and download now needs a signed-in account, the same as the rest of the app. Your browser keeps a sign-in cookie just for loading pictures and files, set when you sign in and removed when you click Logout. If you were already signed in before this update it is set for you as the app opens, so nothing shows broken and you don\'t need to sign in again.',
+      'Security: admin-only files stay admin-only through their links too. Invoices, pay applications, change orders, proposals and payment photos and PDFs (check images) already didn\'t show to anyone but an admin in the app; opening one by its link now answers "not found" for anyone else. A signature still opens only for the person it belongs to.',
+      'Security: photos and files are no longer marked as shareable for Cloudflare or any other shared cache to keep. Only your own browser keeps a copy. Share links you send to people without an account work as before.',
+      'Security: an uploaded or emailed file can no longer run code inside the app. Opening an SVG drawing, a web page (.html) or any other file that isn\'t a photo, PDF, audio or video straight from its link — an upload, a shared file, or a mail attachment — now shows it with scripts turned off, so a booby-trapped file can\'t act as you. Photos and PDFs open exactly as before.',
+      'Note for self-hosters: no settings to change and no database migration. Behind Cloudflare the new sign-in cookie is marked secure automatically. If you use a different reverse proxy, make sure it sends X-Forwarded-Proto along with X-Forwarded-For. If you set Cloudflare to cache everything, including /api, purge its cache once after updating so no copy cached under the old setting is served.',
+    ],
+  },
+  {
+    version: '4.1.8',
+    date: 'October 6, 2026',
+    changes: [
+      'Fix: billing dates no longer show a day early. In US time zones a date picked as October 1 on an invoice, change order or payment showed as September 30 — on the Payments tab, in the invoice and pay application editors\' payment lists, on the Change Orders tab, on invoice and change order PDFs, on a customer\'s Billing tab and Payments and Needs attention cards, and on the dashboard\'s Recent payments card. Pay application "Period to" and "Application date" showed a day early on the Applications list too. Every one of them now shows the day that was picked, and opening an editor never moves its date. Nothing stored changes, so dates already entered are fixed as well.',
+      'Recording a payment now fills in today\'s date for you (change it if the payment came in on another day), and a new pay application starts on today\'s date on your own calendar — late in the evening it used to start on tomorrow\'s.',
+    ],
+  },
+  {
+    version: '4.1.7',
+    date: 'October 6, 2026',
+    changes: [
+      'Fix: older change orders — made before change orders had line items — no longer show $0. Their amount showed as $0 on the Change Orders tab, in the editor, on the PDF and on the project dashboard\'s Change orders card, and clicking Save in the editor changed the amount to $0, which took an approved one out of the contract total. They now show their real amount as the lump sum, and saving one keeps it. A PDF already made for one of them (which printed $0) now shows as out of date — regenerate it.',
+      'Note for self-hosters: this update includes a small data-transforming migration (47) that copies the amount of each change order with no line items and no lump sum into its lump sum (the amount itself is unchanged) — back up before pulling this update.',
+    ],
+  },
+  {
+    version: '4.1.6',
+    date: 'October 6, 2026',
+    changes: [
+      'New Reports page (admins only), in the sidebar and the command palette: billing reports across all your projects, filtered by customer and project. Archived projects are included — money owed on a closed-out job is still owed — and unticking "Include archived projects" leaves them out. Download Excel saves the report exactly as filtered; the spreadsheet\'s filter buttons sort it further.',
+      'Open invoices: every sent invoice and finalized pay application that still has a balance, whatever its status says, with its customer, project, date, days outstanding (counted from the invoice or application date) and the dashboard\'s aging buckets (0–30, 31–60 and 61+ days) — oldest first, with totals and a subtotal per bucket. With archived projects left out, the totals match the dashboard\'s Outstanding and Aging receivables.',
+      'Payments received: the payments in a date range — this month to start with, or last month, this quarter, year to date, last year, all time or any dates you pick — with each one\'s date, customer, project, what it paid, method, note and amount, and the total. Payment photos and PDFs are not part of it; they stay on the payment.',
+      'Change orders: every change order by project with its number, title, status, date, amount and schedule impact, and a total for each status. Click a status — Sent is "waiting on approval" — or pick one to see only those. Older change orders marked Pending count as drafts.',
+      'Retainage: for each project with a finalized pay application, the latest one\'s contract sum to date, work completed and stored to date, and the retainage held and released so far, worked out the same way as its G702.',
+      'Invoices are now marked Paid by themselves once their payments cover the total, and go back to Sent if a balance opens up again — a payment is deleted or lowered, or the invoice\'s lines grow. A draft invoice that is paid in full is marked Paid too. Clicking the status still changes it by hand; a status set by hand stays until the next payment or line change. Anyone with the invoice open elsewhere sees the change.',
+      'Invoices you already have that are paid in full but still say Sent are marked Paid when you update.',
+      'Note for self-hosters: this update includes a small data-transforming migration (46) that marks sent invoices whose payments already cover their total as paid (only the status changes) — back up before pulling this update.',
+    ],
+  },
+  {
+    version: '4.1.5',
+    date: 'October 6, 2026',
+    changes: [
+      'A length or area measurement can now count more than once — for example one floor plan that is the same for four floors. Select the measurement in the canvas sidebar and click Multiplier (next to Rename), then enter how many times it counts: a whole number from 1 to 999, where 1 counts it once. The row gets a ×4 badge next to its name.',
+      'Everywhere one measurement\'s amount is shown, a multiplied measurement shows the math, e.g. "1250.00 sq ft × 4 = 5000.00 sq ft": its label on the canvas and on printed plans, its row in the canvas sidebar (cutouts too), the selected-measurement bar and segment label at the bottom of the canvas, and its row on the Takeoffs tab.',
+      'Every total uses the multiplied amount: the sidebar and Takeoffs tab totals, page totals, the legend on the canvas and on printouts, dollars, the Excel export, proposals and the Schedule of Values seeded from the estimate. In Excel a multiplied measurement\'s row also shows its Measured Qty and Multiplier in two extra columns.',
+      'Count markers don\'t have a multiplier. Merging measurements that have different multipliers isn\'t allowed — give them the same multiplier first. Like other edits, a multiplier can be undone, and it carries over to a new revision of the sheet; it can\'t be changed on an older (read-only) revision.',
+    ],
+  },
+  {
+    version: '4.1.4',
+    date: 'October 6, 2026',
+    changes: [
+      'Daily reports now have crews. Each project\'s Daily Reports page has a tab for each crew — your own crew or a sub\'s — and every crew keeps its own full set of daily reports with its own calendar: one report per day per crew, each with its own date, start time, weather, man count, notes, issues, photos and PDFs.',
+      'Add crew (next to the tabs) adds a crew under the name you type, and opens its tab. The ⋯ button next to it renames the open crew or deletes it — only a crew with no reports can be deleted, and a project always keeps at least one crew. Your tab is kept in the page address, so a link or a refresh opens the same crew.',
+      'A new report starts at the same time as that crew\'s last report, so a crew on nights and a crew on days each keep their own start time.',
+      'The All crews tab shows every crew\'s reports on one calendar (or list): each day lists each crew\'s report with its crew name and man count. It is for viewing — click a report to open it; new reports are added on a crew\'s tab.',
+      'Since one day can now have a report from several crews, a report is named with its crew everywhere it is named by its date: the report\'s title, the PDF (in its heading, a new Crew line, and its file name, e.g. DailyReport-Dania-Beach-Crew-1-2026-10-06.pdf), the email subject, Documents (which now opens the report\'s crew tab), mail links, the activity feed and the dashboard\'s Latest daily report card. In the list view the men-on-site column is now called "Men".',
+      'Your existing daily reports are now in a crew called "Crew 1" on each project — rename it to whatever you call that crew. Renaming a crew marks its reports\' PDFs out of date, since the crew\'s name is printed on them.',
+      'Note for self-hosters: this update includes a data-transforming migration (45) that rebuilds the daily reports table to give each report a crew, and moves every project\'s existing reports into a new "Crew 1" (report ids, photos and PDF attachments are unchanged) — back up before pulling this update.',
+    ],
+  },
+  {
+    version: '4.1.3',
+    date: 'October 6, 2026',
+    changes: [
+      'Daily reports now have a start time, next to the date (and on the PDF under the date). The weather covers the start time through 12 hours later — a 7:00 AM start shows 7 AM to 7 PM. A start after noon runs past midnight, and the next morning\'s hours are marked "+1", e.g. "2 AM +1".',
+      'A new daily report starts at the same time as the report before it, so you rarely need to change it; the first report on a project starts at 6:00 AM, which gives the same 6 AM–6 PM weather as before.',
+      'Changing the start time on a report that already has weather asks "Update the weather to match the new start time?" — Update weather fetches it again for the new hours, Keep current leaves it as it is. Fetch weather and Refresh weather always use the start time in the form.',
+      'The start time also shows in the Daily Reports list and on the project dashboard\'s Latest daily report card. Reports made before this update have no start time, and their weather (6 AM–6 PM) is unchanged.',
+      'Note for self-hosters: this update adds one new column to the daily reports table (migration 44, additive — existing data untouched).',
+    ],
+  },
+  {
+    version: '4.1.2',
+    date: 'October 6, 2026',
+    changes: [
+      'Payments can now have photos and PDFs attached — a photo of the check, a receipt, remittance advice or an ACH confirmation. Add them while recording a payment with Attach under the form (or drag them onto it; on a phone, Attach can take a photo), and they are saved with the payment when you click Record.',
+      'Click a payment on Billing → Payments to open it: change its date, amount, method or note, delete it, and see its attachments — photos open full size, PDFs open in the viewer — and add more or remove them. A paperclip on the row shows how many it has.',
+      'Attachments stay on the payment: they do not appear in the invoice\'s payment list, on invoice or pay application PDFs or emails, or in reports. Like the rest of billing, only admins can see them (in Documents they are listed as "Payment Attachment", for admins only).',
+      'Changing a payment\'s amount marks its invoice\'s or pay application\'s PDF out of date, since Paid and Balance change; changing only the date, method or note does not.',
+      'Note for self-hosters: this update adds one new database table for the attachments (migration 43, additive — existing data untouched).',
+    ],
+  },
+  {
+    version: '4.1.1',
+    date: 'October 6, 2026',
+    changes: [
+      'Change orders, RFIs, issues and daily reports can now have PDF attachments, the same way invoices do: Add PDFs in the editor uploads a PDF or picks one already in the app (from any project), and the list can be reordered or trimmed. The attached PDFs\' pages are added to the end of the generated document — after its own pages and photos — in the order shown, so they go out with the email too.',
+      'Adding, removing or reordering an attachment marks that document out of date, so the next Generate or Send includes the change.',
+      'On an RFI these are separate from the GC\'s answer, which stays under Response.',
+      'Note for self-hosters: this update adds four new database tables for the attachments (migration 42, additive — existing data untouched).',
+    ],
+  },
+  {
+    version: '4.1.0',
+    date: 'October 6, 2026',
+    changes: [
+      'Canvas: clicking one segment of a measurement now shows what that segment alone is worth — its quantity and dollars — in a highlighted label on the segment, e.g. "420.00 sq ft · $1,470". A cutout shows as a deduction, e.g. "−12.50 sq ft · −$44". The measurement\'s own total label stays where it was.',
+      'Canvas: a bar at the bottom of the canvas shows what is selected — the measurement\'s name, its takeoff and colour, the measurement total, and the clicked segment\'s amount when one is clicked. For a count marker it shows its price and how many of that takeoff are on the page; with several picked in multi-select it shows how many.',
+      'These dollars are the measurement\'s (or segment\'s) share of the takeoff\'s price, split the same way the Takeoffs tab splits it, in whole dollars (not rounded up to the next $100). A takeoff with no pricing shows the quantity only.',
+    ],
+  },
+  {
     version: '4.0.0',
     date: 'September 27, 2026',
     changes: [

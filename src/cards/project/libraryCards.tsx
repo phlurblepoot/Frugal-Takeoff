@@ -33,7 +33,7 @@ import type { CustomerRoleEmails } from '../../types';
 import type { ProjectThreadRow } from '../../pages/mail/types';
 import { mailApi } from '../../utils/mailApi';
 import { formatMoney } from '../../utils/money';
-import { manCountTotal, weatherLine, formatReportDate } from '../../pages/project/daily/dailyReportForm';
+import { manCountTotal, weatherLine, formatReportDate, formatStartTime } from '../../pages/project/daily/dailyReportForm';
 import { formatMailDate } from '../../pages/mail/mailFormat';
 import { ReplyFlagChip } from '../../components/documents/ReplyFlagChip';
 import { Lightbox } from '../../components/Lightbox';
@@ -316,8 +316,10 @@ const ChangeOrdersCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ct
 };
 
 // ── pj-daily-latest ──────────────────────────────────────────────────────
+// The newest-dated report across every crew; on a date several crews filed,
+// the one filed last.
 function newestDailyReport(rows: DailyReportListItem[]): DailyReportListItem | null {
-  return [...rows].sort((a, b) => b.reportDate.localeCompare(a.reportDate))[0] ?? null;
+  return [...rows].sort((a, b) => b.reportDate.localeCompare(a.reportDate) || b.createdAt - a.createdAt)[0] ?? null;
 }
 
 const DailyLatestCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx }) => {
@@ -337,7 +339,8 @@ const DailyLatestCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx
       }
     }).catch(() => { setRows([]); setNotes(null); });
   };
-  useLiveQuery(load, { types: ['dailyReport'], projectId });
+  // dailyReportCrew too: a renamed crew renames the card's report.
+  useLiveQuery(load, { types: ['dailyReport', 'dailyReportCrew'], projectId });
 
   if (!projectId) return null;
 
@@ -352,11 +355,14 @@ const DailyLatestCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx
     >
       {latest && (
         <div className="space-y-1.5">
-          <p className="text-sm font-semibold text-ink">{formatReportDate(latest.reportDate)}</p>
+          {/* One date can hold a report per crew, so the crew names it too. */}
+          <p className="text-sm font-semibold text-ink">{formatReportDate(latest.reportDate)}{latest.crewName ? ` · ${latest.crewName}` : ''}</p>
           {(latest.weatherSummary || latest.temperature) && (
             <p className="text-xs text-ink-soft">{weatherLine(latest.weatherSummary, latest.temperature)}</p>
           )}
-          <p className="text-xs text-ink-faint">{manCountTotal(latest.manCounts)} on site</p>
+          <p className="text-xs text-ink-faint">
+            {manCountTotal(latest.manCounts)} on site{latest.startTime ? ` · started ${formatStartTime(latest.startTime)}` : ''}
+          </p>
           {notes && <p className="line-clamp-2 text-xs text-ink-faint">{notes}</p>}
         </div>
       )}

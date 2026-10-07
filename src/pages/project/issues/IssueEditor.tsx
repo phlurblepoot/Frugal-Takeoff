@@ -1,16 +1,21 @@
 // src/pages/project/issues/IssueEditor.tsx
 import React, { useState } from 'react';
-import { Issue, saveIssue, getIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, getSettings, fetchFileBlob, sendIssue } from '../../../utils/store';
+import {
+  Issue, saveIssue, getIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, getSettings, fetchFileBlob, sendIssue,
+  addIssueAttachment, updateIssueAttachment, removeIssueAttachment,
+} from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
+import { PdfAttachmentsCard } from '../../../components/documents/PdfAttachmentsCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { IssueStatusPill, ISSUE_STATUS_META } from '../../../components/ui/IssueStatusPill';
 import { buildIssuePdf } from './issuePdf';
+import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
 export const IssueEditor: React.FC<{
@@ -57,7 +62,7 @@ export const IssueEditor: React.FC<{
   // on the prop). A failed re-read throws on purpose — the bar then reports
   // the failure and keeps the existing document, rather than quietly storing
   // pre-save bytes and marking them current.
-  const buildIssueBytes = async (headerEmail?: string): Promise<Uint8Array> => {
+  const buildIssueBytes = async (headerEmail?: string): Promise<Uint8Array | ArrayBuffer> => {
     const saved = await getIssue(issue.id);
     if (!saved) throw new Error('Issue not found');
     const settings = await getSettings();
@@ -77,7 +82,7 @@ export const IssueEditor: React.FC<{
         photoDataUrls.push(await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); }));
       } catch { /* skip */ }
     }
-    return buildIssuePdf({
+    const bytes = buildIssuePdf({
       issue: saved,
       projectName: projectName,
       contractor: contractor,
@@ -94,6 +99,8 @@ export const IssueEditor: React.FC<{
       },
       headerEmail: headerEmail || undefined,
     });
+    // Attached PDFs go last, after the photo pages, in attachment order.
+    return appendAttachedPdfs(bytes, saved.attachments);
   };
 
   const handleSave = async (opts?: { keepMounted?: boolean }) => {
@@ -190,6 +197,16 @@ export const IssueEditor: React.FC<{
         link={fileId => addIssuePhoto(issue.id, fileId)}
         onRemove={dropPhoto}
         onDone={onSaved}
+      />
+      <PdfAttachmentsCard
+        attachments={issue.attachments}
+        projectId={projectId}
+        documentName="issue report"
+        testId="issue"
+        link={fileId => addIssueAttachment(issue.id, fileId)}
+        update={(fileId, patch) => updateIssueAttachment(issue.id, fileId, patch)}
+        remove={fileId => removeIssueAttachment(issue.id, fileId)}
+        onChanged={onSaved}
       />
     </Modal>
   );

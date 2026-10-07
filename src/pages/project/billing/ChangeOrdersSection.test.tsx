@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { ChangeOrderListItem } from '../../../utils/store';
+import { useTimeZone } from '../../../test/timeZone';
 
 const h = vi.hoisted(() => ({
   getChangeOrders: vi.fn(),
@@ -146,5 +147,17 @@ describe('ChangeOrdersSection — editor remounting', () => {
     h.getChangeOrder.mockResolvedValue({ ...row({ version: 2 }), lines: [], photos: [], lumpSumCents: 0 });
     await act(async () => { fireEvent.click(screen.getByTestId('save-plain')); });
     expect(mounts.count).toBe(2);
+  });
+});
+
+describe('ChangeOrdersSection — dates west of UTC', () => {
+  useTimeZone('America/Los_Angeles');
+
+  it('shows a change order\'s date as the day that was picked', async () => {
+    h.getChangeOrders.mockResolvedValue([row({ date: new Date('2026-10-01').getTime() })]);
+    mount();
+    await screen.findByText('Extra wall');
+    expect(screen.getByText(new Date(2026, 9, 1).toLocaleDateString())).toBeInTheDocument();
+    expect(screen.queryByText(new Date(2026, 8, 30).toLocaleDateString())).toBeNull();
   });
 });

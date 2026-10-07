@@ -17,7 +17,7 @@ import { Button } from '../ui';
 export interface AddFilesButtonProps {
   /** Also the picker's title — "Add photos" / "Add files" / "Attach files". */
   label: string;
-  accept: 'pdf' | 'image' | 'spreadsheet' | 'office' | 'any';
+  accept: 'pdf' | 'image' | 'image-pdf' | 'spreadsheet' | 'office' | 'any';
   multi?: boolean;
   upload?: FilePickerUploadConfig;
   defaultTab?: FilePickerTab;
@@ -26,6 +26,8 @@ export interface AddFilesButtonProps {
   returnBlobs?: boolean;
   onPick?: (rows: DocumentRow[]) => void | Promise<void>;
   onPickBlobs?: (picked: { row: DocumentRow; blob: Blob }[]) => void | Promise<void>;
+  /** The Upload tab hands back the chosen files unstored (FilePickerModal). */
+  onPickFiles?: (files: File[]) => void | Promise<void>;
   variant?: 'primary' | 'secondary' | 'ghost';
   size?: 'sm';
   className?: string;
@@ -35,7 +37,7 @@ export interface AddFilesButtonProps {
 
 export const AddFilesButton: React.FC<AddFilesButtonProps> = ({
   label, accept, multi = true, upload, defaultTab, initialProjectIds, excludeFileIds,
-  returnBlobs, onPick, onPickBlobs, variant = 'secondary', size, className, disabled, title,
+  returnBlobs, onPick, onPickBlobs, onPickFiles, variant = 'secondary', size, className, disabled, title,
 }) => {
   const [open, setOpen] = useState(false);
 
@@ -70,6 +72,7 @@ export const AddFilesButton: React.FC<AddFilesButtonProps> = ({
           returnBlobs={returnBlobs}
           onPick={onPick}
           onPickBlobs={onPickBlobs}
+          onPickFiles={onPickFiles}
         />
       )}
     </>

@@ -49,6 +49,7 @@ const KIND_META: Record<string, KindMeta> = {
   'email-attachment':    { label: 'Email Attachment',   tone: 'slate' },
   'daily-report':        { label: 'Daily Report',       tone: 'violet' },
   'daily-report-photo':  { label: 'Daily Report Photo', tone: 'violet' },
+  'payment-attachment':  { label: 'Payment Attachment', tone: 'emerald' },
 };
 
 // Display order for the Type filter dropdown. 'plan' and 'settings-asset' are

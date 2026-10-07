@@ -9,7 +9,9 @@ import {
   ProjectSummary, getProjectsSummary, patchProject, deleteProject,
   getRecentProjects, ConflictError,
   getUserPreferences, saveUserPreferences, getCustomers,
+  getProjectDeleteCheck, ProjectHasDataError, type ProjectDataSummary,
 } from '../utils/store';
+import { projectDeleteBlockedReason } from '../utils/projectDelete';
 import { useCollaboration } from '../context/CollaborationContext';
 import { formatMoney } from '../utils/money';
 import { useToast } from '../components/Toast';
@@ -276,6 +278,12 @@ export const ProjectsPage: React.FC = () => {
   };
   const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null);
   const [deleteText, setDeleteText] = useState('');
+  // What's in the project the delete dialog is open for (spec
+  // 2026-10-07-project-delete-guard): only an empty one can be deleted, any
+  // other is offered Archive instead. Keyed by project so a slow answer for a
+  // dialog already closed can't land on the next one. Absent while asking;
+  // canDelete null if asking failed (the server still refuses one with data).
+  const [deleteCheck, setDeleteCheck] = useState<{ projectId: string; canDelete: boolean | null; summary: ProjectDataSummary } | null>(null);
 
   const load = async () => {
     try {
@@ -336,12 +344,14 @@ export const ProjectsPage: React.FC = () => {
 
   // Applies a granular patch and reconciles the local row. A 409 means our
   // summary is stale — refetch rather than reloading the page.
-  const applyPatch = async (p: ProjectSummary, patch: Partial<ProjectSummary> & Record<string, unknown>) => {
+  // Resolves true once the patch landed.
+  const applyPatch = async (p: ProjectSummary, patch: Partial<ProjectSummary> & Record<string, unknown>): Promise<boolean> => {
     try {
       const r = await patchProject(p.id, { version: p.version, ...patch } as any);
       // updatedAt mirrors the server's bump so recency sorting stays correct
       // without a refetch.
       setSummaries(prev => prev.map(s => (s.id === p.id ? { ...s, ...patch, version: r.version, updatedAt: Date.now() } : s)));
+      return true;
     } catch (e) {
       if (e instanceof ConflictError) {
         toast('Project changed elsewhere — refreshing', { type: 'warning' });
@@ -349,6 +359,7 @@ export const ProjectsPage: React.FC = () => {
       } else {
         toast('Update failed', { type: 'error' });
       }
+      return false;
     }
   };
 
@@ -360,6 +371,10 @@ export const ProjectsPage: React.FC = () => {
     }
     setDeleteText('');
     setDeleteTarget(p);
+    setDeleteCheck(null);
+    getProjectDeleteCheck(p.id)
+      .then(r => setDeleteCheck({ projectId: p.id, ...r }))
+      .catch(() => setDeleteCheck({ projectId: p.id, canDelete: null, summary: {} }));
   };
 
   const confirmDelete = async () => {
@@ -370,11 +385,29 @@ export const ProjectsPage: React.FC = () => {
     try {
       await deleteProject(removed.id);
       toast('Project deleted', { type: 'success' });
-    } catch {
+    } catch (e) {
       setSummaries(prev => [removed, ...prev]);
-      toast('Failed to delete project', { type: 'error' });
+      if (e instanceof ProjectHasDataError) {
+        // Something landed in it since the dialog asked: open it again, now
+        // saying why and offering Archive.
+        setDeleteTarget(removed);
+        setDeleteCheck({ projectId: removed.id, canDelete: false, summary: e.summary });
+      } else {
+        toast('Failed to delete project', { type: 'error' });
+      }
     }
   };
+
+  // The dialog's Archive, for a project that can't be deleted.
+  const archiveInstead = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    if (await applyPatch(target, { archived: true })) toast('Project archived', { type: 'success' });
+  };
+
+  const check = deleteTarget && deleteCheck?.projectId === deleteTarget.id ? deleteCheck : null;
+  const deleteBlocked = check?.canDelete === false;
 
   // `tab` fixes which signal each row shows; the Recently-opened row spans
   // tabs, so its rows are typed by the project itself.
@@ -493,24 +526,47 @@ export const ProjectsPage: React.FC = () => {
             </div>
           )}
 
-      {/* Delete confirmation */}
+      {/* Delete confirmation — or, for a project with anything in it, why
+          it can't be deleted and Archive instead. */}
       <Modal
         open={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}
-        title={`Delete "${deleteTarget?.name}"?`}
-        footer={
+        title={deleteBlocked ? `Can't delete "${deleteTarget?.name}"` : `Delete "${deleteTarget?.name}"?`}
+        footer={deleteBlocked ? (
+          <>
+            <Button variant="secondary" onClick={() => setDeleteTarget(null)}>{deleteTarget?.archived ? 'Close' : 'Cancel'}</Button>
+            {!deleteTarget?.archived && (
+              <Button onClick={archiveInstead}><Archive size={14} />Archive</Button>
+            )}
+          </>
+        ) : (
           <>
             <Button variant="secondary" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-            <Button variant="danger" disabled={deleteText.toLowerCase() !== 'delete'} onClick={confirmDelete}>
+            <Button variant="danger" disabled={!check || deleteText.toLowerCase() !== 'delete'} onClick={confirmDelete}>
               Delete project
             </Button>
           </>
-        }
+        )}
       >
-        <p className="mb-3 text-sm text-ink-soft">
-          This permanently deletes the project, its pages, measurements, and files. Type <strong>delete</strong> to confirm.
-        </p>
-        <Input value={deleteText} onChange={e => setDeleteText(e.target.value)} placeholder="delete" autoFocus />
+        {deleteBlocked ? (
+          <>
+            <p className="text-sm font-medium text-ink" data-testid="delete-blocked-reason">{projectDeleteBlockedReason(check!.summary)}</p>
+            <p className="mt-2 text-sm text-ink-soft">
+              {deleteTarget?.archived
+                ? 'Only a project with nothing in it can be deleted. This one is already archived.'
+                : 'Only a project with nothing in it can be deleted. Archiving moves it to the Archive tab, and it can be restored anytime.'}
+            </p>
+          </>
+        ) : check ? (
+          <>
+            <p className="mb-3 text-sm text-ink-soft">
+              This permanently deletes the project, its pages, measurements, and files. Type <strong>delete</strong> to confirm.
+            </p>
+            <Input value={deleteText} onChange={e => setDeleteText(e.target.value)} placeholder="delete" autoFocus />
+          </>
+        ) : (
+          <p className="text-sm text-ink-soft">Checking what's in this project…</p>
+        )}
       </Modal>
     </div>
   );

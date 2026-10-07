@@ -13,8 +13,9 @@ const ALWAYS_EXCLUDED_KINDS = ['plan', 'settings-asset', 'document-template', 'c
 
 // Billing-priced kinds — hidden from non-admins (spec §Decisions "Role
 // visibility"). change-order-photo and printout are deliberately NOT here:
-// they carry no dollar figures.
-export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'payapp-pdf', 'change-order', 'proposal', 'proposal-signed'] as const;
+// they carry no dollar figures. payment-attachment is: a check image carries
+// the customer's bank details as well as the amount (migration 43).
+export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'payapp-pdf', 'change-order', 'proposal', 'proposal-signed', 'payment-attachment'] as const;
 
 // Generated documents that are nonetheless deletable. Everything else with a
 // sourceType is owned by a record you delete it at (an invoice, an issue, a
@@ -54,6 +55,7 @@ const KIND_LABELS: Record<string, string> = {
   'daily-report': 'Daily Report',
   'daily-report-photo': 'Daily Report Photo',
   'email-attachment': 'Email Attachment',
+  'payment-attachment': 'Payment Attachment',
 };
 const genericLabel = (kind: string): string => KIND_LABELS[kind] ?? kind;
 
@@ -286,9 +288,10 @@ interface SimpleResolver {
   sql: (placeholders: string) => string;
   label: (row: any) => string;
   // sourceId is only needed by resolvers whose href is per-entity (e.g.
-  // proposal); every other resolver's href depends on projectId alone and
-  // simply ignores the second argument.
-  href: (projectId: string | null, sourceId: string) => string | null;
+  // proposal), and the matched row by those whose href needs one of its
+  // columns (dailyReport's crew); every other resolver's href depends on
+  // projectId alone and simply ignores the rest.
+  href: (projectId: string | null, sourceId: string, row: any) => string | null;
 }
 const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
   invoice: {
@@ -300,6 +303,20 @@ const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
     sql: ph => `SELECT id, number FROM aia_pay_apps WHERE id IN (${ph})`,
     label: row => `Pay App #${row.number ?? '?'}`,
     href: pid => pid ? `/project/${pid}/billing?tab=pay-apps` : null,
+  },
+  // A payment's photos and PDFs (migration 43). Named after what it paid —
+  // a payment has no number of its own — and the link opens that payment on
+  // the Payments tab (PaymentsSection's ?open=).
+  payment: {
+    sql: ph => `SELECT p.id, p.targetType, i.number AS invoiceNumber, a.number AS payAppNumber
+      FROM payments p
+      LEFT JOIN invoices i ON p.targetType = 'invoice' AND i.id = p.targetId
+      LEFT JOIN aia_pay_apps a ON p.targetType = 'payapp' AND a.id = p.targetId
+      WHERE p.id IN (${ph})`,
+    label: row => row.targetType === 'payapp'
+      ? `Payment — Pay App #${row.payAppNumber ?? '?'}`
+      : `Payment — Invoice #${row.invoiceNumber || '?'}`,
+    href: (pid, id) => pid ? `/project/${pid}/billing?tab=payments&open=${encodeURIComponent(id)}` : null,
   },
   'change-order': {
     sql: ph => `SELECT id, number FROM change_orders WHERE id IN (${ph})`,
@@ -333,13 +350,17 @@ const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
     label: row => `Proposal #${row.number ?? '?'}`,
     href: (pid, id) => pid ? `/project/${pid}/proposal/${id}` : null,
   },
-  // Daily reports have no per-id route — the project's Daily Reports list
-  // (grouped by date, not by report id) is the click-through destination for
-  // both the report PDF and its photos.
+  // Daily reports have no per-id route — the project's Daily Reports page,
+  // on the report's crew tab, is the click-through destination for both the
+  // report PDF and its photos. A date names a report only together with its
+  // crew (one report per date per crew, migration 45).
   dailyReport: {
-    sql: ph => `SELECT id, reportDate FROM daily_reports WHERE id IN (${ph})`,
-    label: row => `Daily Report — ${row.reportDate ?? '?'}`,
-    href: pid => pid ? `/project/${pid}/daily-reports` : null,
+    sql: ph => `SELECT r.id, r.reportDate, r.crewId, c.name AS crewName FROM daily_reports r
+      LEFT JOIN daily_report_crews c ON c.id = r.crewId WHERE r.id IN (${ph})`,
+    label: row => `Daily Report — ${row.reportDate ?? '?'}${row.crewName ? ` — ${row.crewName}` : ''}`,
+    href: (pid, _id, row) => pid
+      ? `/project/${pid}/daily-reports${row?.crewName ? `?crew=${encodeURIComponent(row.crewId)}` : ''}`
+      : null,
   },
 };
 
@@ -448,7 +469,7 @@ function resolveSources(db: Database.Database, rows: RawRow[]): Map<string, Docu
     for (const r of list) {
       const match = found.get(r.sourceId as string);
       out.set(r.id, match
-        ? { type, id: r.sourceId as string, label: resolver.label(match), href: resolver.href(r.projectId, r.sourceId as string) }
+        ? { type, id: r.sourceId as string, label: resolver.label(match), href: resolver.href(r.projectId, r.sourceId as string, match) }
         : { type, id: r.sourceId as string, label: genericLabel(r.kind), href: null });
     }
   }

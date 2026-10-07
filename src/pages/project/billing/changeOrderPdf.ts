@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { ChangeOrder, ChangeOrderLine } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import { formatBillingDate } from '../../../utils/billingDates';
 import {
   LetterheadContext,
   drawLetterheadHeader,
@@ -73,7 +74,7 @@ export function buildChangeOrderPdf(ctx: ChangeOrderPdfContext): Uint8Array {
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(60, 60, 60);
   let metaY = y;
   doc.text(`No: CO-${co.number ?? ''}`, W - M, metaY, { align: 'right' }); metaY += 14;
-  if (co.date) { doc.text(`Date: ${new Date(co.date).toLocaleDateString()}`, W - M, metaY, { align: 'right' }); metaY += 14; }
+  if (co.date) { doc.text(`Date: ${formatBillingDate(co.date)}`, W - M, metaY, { align: 'right' }); metaY += 14; }
   const impact = scheduleImpactLabel(co.scheduleImpactDays);
   if (impact) { doc.text(impact, W - M, metaY, { align: 'right' }); metaY += 14; }
 

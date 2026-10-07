@@ -7,17 +7,20 @@ import type Database from 'better-sqlite3';
 import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
+import { putBuffer } from './files';
 import {
   listIssues, getIssue, createIssue, saveIssue, setIssueStatus, deleteIssue,
-  addPhoto, removePhoto, markIssueSent, countOpenIssues,
+  addPhoto, removePhoto, addAttachment, updateAttachment, removeAttachment, markIssueSent, countOpenIssues,
   ValidationError, ConflictError, NotFoundError,
 } from './issueStore';
 
 let db: Database.Database;
+let dir: string;
 
 beforeEach(() => {
   db = openDb(':memory:');
-  runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-iss-')), migrations);
+  dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-iss-'));
+  runMigrations(db, dir, migrations);
   db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Proj', 1);
   db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p2', 'Proj2', 1);
 });
@@ -142,5 +145,62 @@ describe('photos + sent', () => {
     await new Promise(r => setTimeout(r, 2));
     addPhoto(db, id, 'f1');
     expect((getIssue(db, id) as any).updatedAt).toBeGreaterThan(afterSave);
+  });
+});
+
+// PDF attachments: same contract as the invoice's, but with this issue's photo
+// freshness rule — updatedAt moves, version does not.
+describe('attachments', () => {
+  const pdfFile = (id: string) => putBuffer(db, dir, id, Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'document', name: `${id}.pdf` });
+  const stale = (id: string) => db.prepare('UPDATE issues SET updatedAt = 1 WHERE id = ?').run(id);
+
+  it('only an existing PDF can be attached, to an existing issue', () => {
+    const { id } = createIssue(db, 'p1', { title: 'A' });
+    putBuffer(db, dir, 'img', Buffer.from('x'), 'image/jpeg', { projectId: 'p1', kind: 'issue-photo', name: 'img.jpg' });
+    expect(() => addAttachment(db, id, 'img')).toThrow(ValidationError);
+    expect(() => addAttachment(db, id, 'missing')).toThrow(NotFoundError);
+    expect(() => addAttachment(db, id, '')).toThrow(ValidationError);
+    pdfFile('a1');
+    expect(() => addAttachment(db, 'nope', 'a1')).toThrow(NotFoundError);
+    expect(getIssue(db, id)!.attachments).toEqual([]);
+  });
+
+  it('adds idempotently in order, reorders, removes — stamping updatedAt but never version', () => {
+    const { id } = createIssue(db, 'p1', { title: 'A' });
+    pdfFile('a1'); pdfFile('a2');
+    stale(id);
+    addAttachment(db, id, 'a1');
+    addAttachment(db, id, 'a1'); // idempotent
+    addAttachment(db, id, 'a2');
+    let iss = getIssue(db, id)!;
+    expect(iss.attachments).toEqual([
+      expect.objectContaining({ fileId: 'a1', sortOrder: 0, name: 'a1.pdf', mime: 'application/pdf' }),
+      expect.objectContaining({ fileId: 'a2', sortOrder: 1, name: 'a2.pdf', mime: 'application/pdf' }),
+    ]);
+    expect(iss.updatedAt).toBeGreaterThan(1);
+    expect(iss.version).toBe(1);
+
+    stale(id);
+    updateAttachment(db, id, 'a1', { sortOrder: 5 });
+    iss = getIssue(db, id)!;
+    expect(iss.attachments.map((a: any) => a.fileId)).toEqual(['a2', 'a1']);
+    expect(iss.updatedAt).toBeGreaterThan(1);
+    expect(iss.version).toBe(1);
+    expect(() => updateAttachment(db, id, 'nope', { sortOrder: 0 })).toThrow(NotFoundError);
+
+    stale(id);
+    removeAttachment(db, id, 'a1');
+    iss = getIssue(db, id)!;
+    expect(iss.attachments.map((a: any) => a.fileId)).toEqual(['a2']);
+    expect(iss.updatedAt).toBeGreaterThan(1);
+    expect(iss.version).toBe(1);
+  });
+
+  it('deleteIssue removes its attachment links', () => {
+    const { id } = createIssue(db, 'p1', { title: 'A' });
+    pdfFile('a1');
+    addAttachment(db, id, 'a1');
+    deleteIssue(db, id);
+    expect((db.prepare('SELECT COUNT(*) c FROM issue_attachments WHERE issueId = ?').get(id) as any).c).toBe(0);
   });
 });

@@ -20,6 +20,7 @@ import { getMeta, type FileMeta } from './files';
 import { pathFor, statFile } from './fileStore';
 import { officeFormatOf } from '../src/utils/officeFormats';
 import { readOnlyofficeConfig } from './onlyoffice/config';
+import { setUntrustedContentHeaders } from './untrustedContent';
 import {
   SHARE_PROBLEM_TEXT, ShareError, activeShare, activeSharesForFile, createShare, getShare, mayShareFile, revokeShare,
   setShareExpiry, shareProblemStatus, sharedFileIds, type ShareRow,
@@ -60,7 +61,7 @@ export function registerShareRoutes(app: express.Express, deps: ShareRouteDeps):
     res.set('Content-Type', meta.mime);
     res.set('Content-Length', String(st.size));
     res.set('Cache-Control', 'private, max-age=3600');
-    res.set('X-Content-Type-Options', 'nosniff');
+    setUntrustedContentHeaders(res, meta.mime);
     fsSync.createReadStream(pathFor(dataDir, meta.id)).pipe(res);
   };
 

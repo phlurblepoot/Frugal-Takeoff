@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Eye, Plus, Trash2 } from 'lucide-react';
 import { AiaPayAppListItem, SovLockState, getPayApps, createPayApp, deletePayApp, getSovLock } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import { formatBillingDate, todayDay } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import {
@@ -23,8 +24,6 @@ const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
   draft:     { label: 'Draft',     tone: 'slate' },
   finalized: { label: 'Finalized', tone: 'emerald' },
 };
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 // Draft rows show a mini "breathing" bar: this application's totalCents —
 // G702 Line 8, the NET CURRENT PAYMENT DUE for just this one application,
@@ -48,7 +47,7 @@ export const AiaPayApplications: React.FC<{ projectId: string; contractTotalCent
   // New-application form modal.
   const [creating, setCreating] = useState(false);
   const [nPeriodTo, setNPeriodTo] = useState('');
-  const [nAppDate, setNAppDate] = useState(today());
+  const [nAppDate, setNAppDate] = useState(todayDay);
   const [busy, setBusy] = useState(false);
   const [sovLock, setSovLock] = useState<SovLockState | null>(null);
 
@@ -71,7 +70,7 @@ export const AiaPayApplications: React.FC<{ projectId: string; contractTotalCent
 
   const startCreate = () => {
     setNPeriodTo('');
-    setNAppDate(today());
+    setNAppDate(todayDay());
     setSovLock(null);
     getSovLock(projectId).then(setSovLock).catch(() => setSovLock(null));
     setCreating(true);
@@ -105,8 +104,6 @@ export const AiaPayApplications: React.FC<{ projectId: string; contractTotalCent
     catch { toast('Delete failed', { type: 'error' }); }
   };
 
-  const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString() : '—');
-
   return (
     <Card className="mb-5">
       <CardHeader title="Applications for payment"
@@ -126,8 +123,8 @@ export const AiaPayApplications: React.FC<{ projectId: string; contractTotalCent
                 return (
                   <TR key={app.id} interactive onClick={() => setOpenId(app.id)}>
                     <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">#{app.number}<EditingChip type="aiaPayApp" id={app.id} />{replyFlags.has(app.id) && <ReplyFlagChip data-testid={`payapp-reply-flag-${app.id}`} />}</span></TD>
-                    <TD className="text-ink-soft">{fmtDate(app.periodTo)}</TD>
-                    <TD className="text-ink-soft">{fmtDate(app.applicationDate)}</TD>
+                    <TD className="text-ink-soft">{formatBillingDate(app.periodTo)}</TD>
+                    <TD className="text-ink-soft">{formatBillingDate(app.applicationDate)}</TD>
                     <TD>
                       <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
                       {app.status === 'draft' && contractTotalCents != null && (

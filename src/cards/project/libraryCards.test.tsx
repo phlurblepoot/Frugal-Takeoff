@@ -318,6 +318,29 @@ describe('pj-daily-latest', () => {
     expect(screen.getByText('3 on site')).toBeInTheDocument();
   });
 
+  it('says when the newest report started', async () => {
+    getDailyReports.mockResolvedValue([
+      { id: 'd1', projectId: 'p1', reportDate: '2026-08-05', jobName: 'j', contractorName: 'c', startTime: '07:30', weatherSummary: '', temperature: '', manCounts: [{ type: 'Framers', count: 3 }], createdBy: null, createdAt: 1, updatedAt: 1, version: 1, photoCount: 0 },
+    ]);
+    getDailyReport.mockResolvedValue({ id: 'd1', fieldNotes: '' });
+    mount('pj-daily-latest', 1);
+    expect(await screen.findByText('3 on site · started 7:30 AM')).toBeInTheDocument();
+  });
+
+  // One date can hold a report per crew: the card names the crew, and of two
+  // crews' reports on the newest date shows the one filed last.
+  it('names the newest report\'s crew, the last-filed one on a shared date', async () => {
+    const row = (id: string, crewName: string, createdAt: number) => ({
+      id, projectId: 'p1', crewId: `c-${id}`, crewName, reportDate: '2026-08-05', jobName: 'j', contractorName: 'c', startTime: null,
+      weatherSummary: '', temperature: '', manCounts: [], createdBy: null, createdAt, updatedAt: createdAt, version: 1, photoCount: 0,
+    });
+    getDailyReports.mockResolvedValue([row('d1', 'Crew 1', 1), row('d2', 'Smith Drywall', 5), { ...row('d0', 'Crew 1', 9), reportDate: '2026-08-04' }]);
+    getDailyReport.mockResolvedValue({ id: 'd2', fieldNotes: '' });
+    mount('pj-daily-latest', 1);
+    expect(await screen.findByText('Aug 5, 2026 · Smith Drywall')).toBeInTheDocument();
+    expect(getDailyReport).toHaveBeenCalledWith('d2');
+  });
+
   it('shows the empty state when there are no daily reports', async () => {
     getDailyReports.mockResolvedValue([]);
     mount('pj-daily-latest', 1);

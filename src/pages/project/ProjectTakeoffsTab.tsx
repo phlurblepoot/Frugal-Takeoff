@@ -21,8 +21,21 @@ import {
 import { Project, MeasurementTakeoff } from '../../types';
 import { formatRealValue, calculateTakeoffTotalCost, calculateTakeoffCostDetails, roundUpTo100 } from '../../utils/math';
 import { allocateSubsetCost, allocateSubsetDetails } from '../../utils/costAllocation';
-import { HIGHLIGHT_QUALITY_PRESETS, HighlightQuality, TakeoffTotals } from './proposal/proposalGenerator';
+import { HIGHLIGHT_QUALITY_PRESETS, HighlightQuality, TakeoffTotals, TakeoffMeasurementTotal } from './proposal/proposalGenerator';
 import { takeoffPrintsUrl } from '../../utils/takeoffPrintNames';
+import { multipliedText } from '../../utils/multiplier';
+
+// A measurement row's quantity — what it counts for — with its math above it
+// when it is multiplied: "1250.00 sq ft × 4 =" / "5000.00 sq ft".
+function measurementQty(meas: TakeoffMeasurementTotal, format: (value: number) => string, mathClassName: string): React.ReactNode {
+  const q = multipliedText(meas.baseValue, meas.multiplier, format);
+  return (
+    <>
+      {q.math && <span data-testid="takeoff-measurement-math" className={`block ${mathClassName}`}>{q.math} </span>}
+      {q.total}
+    </>
+  );
+}
 
 interface ProjectTakeoffsTabProps {
   // state / computed
@@ -335,8 +348,10 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                                 return (
                                                   <div key={meas.id} className="py-2 pl-16 pr-6 grid grid-cols-[minmax(0,1fr)_140px_140px_180px] gap-4 items-start text-xs">
                                                     <span className="text-ink-soft truncate">{meas.name || 'Measurement'}</span>
-                                                    <div className="text-right font-semibold text-ink">
-                                                      {meas.realValue > 0 ? formatRealValue(meas.realValue, takeoff.type as 'length' | 'area' | 'count', meas.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                                                    <div data-testid="takeoff-measurement-qty" className="text-right font-semibold text-ink">
+                                                      {meas.realValue > 0
+                                                        ? measurementQty(meas, v => formatRealValue(v, takeoff.type as 'length' | 'area' | 'count', meas.unit?.replace('sq ', '') || 'ft', takeoff, false), 'text-[10px] font-medium text-ink-soft')
+                                                        : '-'}
                                                     </div>
                                                     <div className="text-right text-ink-soft font-medium">
                                                       {takeoff.isAdvancedCost ? (
@@ -481,15 +496,19 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                       </button>
 
                       {expandedTakeoffs[takeoff.id] && (() => {
-                        const renderStats = (subsetValue: number, unit: string, small: boolean) => {
+                        // meas: a measurement row, whose Qty shows its math when multiplied.
+                        const renderStats = (subsetValue: number, unit: string, small: boolean, meas?: TakeoffMeasurementTotal) => {
                           const subsetCost = allocateSubsetCost(takeoff, subsetValue);
                           const subsetDetails = allocateSubsetDetails(takeoff, subsetValue);
+                          const formatQty = (v: number) => formatRealValue(v, takeoff.type as 'length' | 'area' | 'count', unit?.replace('sq ', '') || 'ft', takeoff, false);
                           return (
                             <div className={`grid grid-cols-3 gap-2 ${small ? 'text-[10px]' : 'text-[11px]'}`}>
                               <div>
                                 <div className="text-ink-soft uppercase tracking-wide">Qty</div>
                                 <div className="font-bold text-ink">
-                                  {subsetValue > 0 ? formatRealValue(subsetValue, takeoff.type as 'length' | 'area' | 'count', unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                                  {subsetValue > 0
+                                    ? (meas ? measurementQty(meas, formatQty, 'text-[9px] font-medium text-ink-soft') : formatQty(subsetValue))
+                                    : '-'}
                                 </div>
                               </div>
                               <div>
@@ -558,7 +577,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                           <div className="text-[11px] text-ink-soft font-medium truncate mb-1">
                                             {meas.name || 'Measurement'}
                                           </div>
-                                          {renderStats(meas.realValue, meas.unit, true)}
+                                          {renderStats(meas.realValue, meas.unit, true, meas)}
                                         </div>
                                       ))}
                                       {pb.measurements.length === 0 && (

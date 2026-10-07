@@ -204,6 +204,66 @@ describe('route mutations broadcast entity-changed', () => {
     c.close();
   });
 
+  it('PUT /api/payments/:id and its attachment routes broadcast payment updated with the target\'s project', async () => {
+    await request(app).post('/api/projects').send({ id: 'p10b', name: 'P10b', pages: [], takeoffs: [] }).expect(200);
+    const inv = await request(app).post('/api/projects/p10b/invoices').send({ number: 'INV-10b', lines: [] }).expect(200);
+    const pay = await request(app).post('/api/projects/p10b/payments')
+      .send({ targetType: 'invoice', targetId: inv.body.id, amount: 25 }).expect(200);
+    await request(app).post('/api/files/chk?projectId=p10b&kind=payment-attachment&name=Check.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('jpg')).expect(200);
+    const c = await connectedClient();
+    const evts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 3);
+    await request(app).put(`/api/payments/${pay.body.id}`).send({ amount: 30 }).expect(200);
+    await request(app).post(`/api/payments/${pay.body.id}/attachments`).send({ fileId: 'chk' }).expect(200);
+    await request(app).delete(`/api/payments/${pay.body.id}/attachments/chk`).expect(200);
+    for (const e of await evts) {
+      expect(e).toMatchObject({ type: 'payment', id: pay.body.id, projectId: 'p10b', action: 'updated' });
+    }
+    c.close();
+  });
+
+  // A payment that settles an invoice marks it paid (and deleting it puts it
+  // back to sent); the invoice's own screens hear about it. The automatic
+  // change leaves the version alone, so the event carries none.
+  it('a payment that moves an invoice\'s status also broadcasts the invoice, without a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p10c', name: 'P10c', pages: [], takeoffs: [] }).expect(200);
+    const inv = await request(app).post('/api/projects/p10c/invoices')
+      .send({ number: 'INV-10c', status: 'sent', lines: [{ description: 'work', qty: 1, unitPrice: 100 }] }).expect(200);
+    const c = await connectedClient();
+
+    let evts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 2);
+    const pay = await request(app).post('/api/projects/p10c/payments')
+      .send({ targetType: 'invoice', targetId: inv.body.id, amount: 100 }).expect(200);
+    expect(pay.body).toEqual({ id: expect.any(String) });
+    let [paymentEvt, invoiceEvt] = await evts;
+    expect(paymentEvt).toMatchObject({ type: 'payment', id: pay.body.id, action: 'created' });
+    expect(invoiceEvt).toMatchObject({ type: 'invoice', id: inv.body.id, projectId: 'p10c', action: 'updated' });
+    expect(invoiceEvt.version).toBeUndefined();
+    expect((await request(app).get(`/api/invoices/${inv.body.id}`)).body.status).toBe('paid');
+
+    evts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 2);
+    await request(app).put(`/api/payments/${pay.body.id}`).send({ amount: 60 }).expect(200);
+    [paymentEvt, invoiceEvt] = await evts;
+    expect(paymentEvt).toMatchObject({ type: 'payment', action: 'updated' });
+    expect(invoiceEvt).toMatchObject({ type: 'invoice', id: inv.body.id, projectId: 'p10c', action: 'updated' });
+    expect((await request(app).get(`/api/invoices/${inv.body.id}`)).body.status).toBe('sent');
+
+    // A note edit moves no status: only its payment event goes out (then the
+    // amount edit that pays it again sends both).
+    const threeEvts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 3);
+    await request(app).put(`/api/payments/${pay.body.id}`).send({ note: 'check 1042' }).expect(200);
+    await request(app).put(`/api/payments/${pay.body.id}`).send({ amount: 100 }).expect(200);
+    expect((await threeEvts).map(e => e.type)).toEqual(['payment', 'payment', 'invoice']);
+
+    evts = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 2);
+    await request(app).delete(`/api/payments/${pay.body.id}`).expect(200);
+    [paymentEvt, invoiceEvt] = await evts;
+    expect(paymentEvt).toMatchObject({ type: 'payment', action: 'deleted', projectId: 'p10c' });
+    expect(invoiceEvt).toMatchObject({ type: 'invoice', id: inv.body.id, projectId: 'p10c', action: 'updated' });
+    expect((await request(app).get(`/api/invoices/${inv.body.id}`)).body.status).toBe('sent');
+    c.close();
+  });
+
   it('POST /api/projects/:id/change-orders broadcasts changeOrder created', async () => {
     await request(app).post('/api/projects').send({ id: 'p11', name: 'P11', pages: [], takeoffs: [] }).expect(200);
     const c = await connectedClient();
@@ -309,6 +369,55 @@ describe('route mutations broadcast entity-changed', () => {
     await request(app).delete(`/api/invoices/${inv.body.id}/photos/f18`).expect(200);
     e = await evt;
     expect(e).toMatchObject({ type: 'invoice', id: inv.body.id, projectId: 'p18', action: 'updated' });
+    c.close();
+  });
+
+  // PDF attachments (migration 42) follow the same rule as each record's photos.
+  const uploadPdf = (id: string) => request(app).post(`/api/files/${id}?kind=document&name=${id}.pdf`)
+    .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4')).expect(200);
+
+  it('POST /api/issues/:id/attachments broadcasts issue updated WITHOUT a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p19', name: 'P19', pages: [], takeoffs: [] }).expect(200);
+    const iss = await request(app).post('/api/projects/p19/issues').send({ title: 'crack' }).expect(200);
+    await uploadPdf('f19');
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/issues/${iss.body.id}/attachments`).send({ fileId: 'f19' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'issue', id: iss.body.id, projectId: 'p19', action: 'updated' });
+    expect(e.version).toBeUndefined();
+    c.close();
+  });
+
+  it('POST /api/rfis/:id/attachments broadcasts rfi updated WITHOUT a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p20', name: 'P20', pages: [], takeoffs: [] }).expect(200);
+    const rfi = await request(app).post('/api/projects/p20/rfis').send({ title: 'question' }).expect(200);
+    await uploadPdf('f20');
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/rfis/${rfi.body.id}/attachments`).send({ fileId: 'f20' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'rfi', id: rfi.body.id, projectId: 'p20', action: 'updated' });
+    expect(e.version).toBeUndefined();
+    c.close();
+  });
+
+  it('POST/DELETE /api/change-orders/:id/attachments broadcast a version (its store DOES bump it)', async () => {
+    await request(app).post('/api/projects').send({ id: 'p21', name: 'P21', pages: [], takeoffs: [] }).expect(200);
+    const co = await request(app).post('/api/projects/p21/change-orders').send({ number: 'CO-3' }).expect(200);
+    await uploadPdf('f21');
+    const c = await connectedClient();
+    let evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/change-orders/${co.body.id}/attachments`).send({ fileId: 'f21' }).expect(200);
+    let e = await evt;
+    expect(e).toMatchObject({ type: 'changeOrder', id: co.body.id, projectId: 'p21', action: 'updated' });
+    expect(typeof e.version).toBe('number');
+
+    evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).delete(`/api/change-orders/${co.body.id}/attachments/f21`).expect(200);
+    e = await evt;
+    expect(e).toMatchObject({ type: 'changeOrder', id: co.body.id, projectId: 'p21', action: 'updated' });
+    expect(typeof e.version).toBe('number');
     c.close();
   });
 

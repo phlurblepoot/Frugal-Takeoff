@@ -263,3 +263,32 @@ describe('CommandPalette — new documents (ONLYOFFICE Phase 3)', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('new=docx');
   });
 });
+
+// The Reports page is admin-only, like billing (spec
+// docs/superpowers/specs/2026-10-06-reports-design.md).
+describe('CommandPalette — Reports', () => {
+  const LocationProbe: React.FC = () => {
+    const loc = useLocation();
+    return <div data-testid="location">{loc.pathname}{loc.search}</div>;
+  };
+
+  it('offers Reports to admins and opens the page', () => {
+    localStorage.setItem('user', JSON.stringify({ username: 'nathan', role: 'admin' }));
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <ToastProvider><CommandPalette /><LocationProbe /></ToastProvider>
+      </MemoryRouter>
+    );
+    openPalette();
+    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'rep' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Reports/ }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/reports');
+  });
+
+  it('does not offer Reports to anyone else', () => {
+    localStorage.setItem('user', JSON.stringify({ username: 'crew', role: 'user' }));
+    renderPalette();
+    openPalette();
+    expect(screen.queryByRole('button', { name: /^Reports/ })).not.toBeInTheDocument();
+  });
+});

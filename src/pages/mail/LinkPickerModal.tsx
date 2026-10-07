@@ -56,8 +56,9 @@ const ITEM_FETCHERS: Partial<Record<ItemType, (projectId: string) => Promise<Pic
   rfi: async projectId => (await getRfis(projectId)).map(
     r => ({ id: r.id, label: `RFI-${String(r.number).padStart(3, '0')}${r.title ? ` — ${r.title}` : ''}` })
   ),
+  // One date can hold a report per crew, so the crew is part of the label.
   dailyReport: async projectId => (await getDailyReports(projectId)).map(
-    d => ({ id: d.id, label: `Daily Report — ${d.reportDate}` })
+    d => ({ id: d.id, label: `Daily Report — ${d.reportDate}${d.crewName ? ` — ${d.crewName}` : ''}` })
   ),
   task: async projectId => (await getTasks({ projectId })).map(
     t => ({ id: t.id, label: t.title || '(untitled)' })

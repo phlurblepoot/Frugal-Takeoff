@@ -593,6 +593,8 @@ export function setPayApp(db: Database.Database, id: string, patch: PayAppPatch)
 
 export function deletePayApp(db: Database.Database, id: string): void {
   const tx = db.transaction(() => {
+    // Its payments go with it, and their attachment rows (migration 43) first.
+    db.prepare("DELETE FROM payment_attachments WHERE paymentId IN (SELECT id FROM payments WHERE targetType = 'payapp' AND targetId = ?)").run(id);
     db.prepare("DELETE FROM payments WHERE targetType = 'payapp' AND targetId = ?").run(id);
     db.prepare('DELETE FROM aia_pay_app_lines WHERE payAppId = ?').run(id);
     db.prepare('DELETE FROM aia_pay_apps WHERE id = ?').run(id);
@@ -822,6 +824,37 @@ export interface G702 {
   };
 }
 
+// G702 line 5 (retainage): 5a on work completed at each line's effective rate,
+// 5b on stored materials at the stored rate, rounded per line. computeG702 and
+// retainageReleasedCents both sum it here so the two can never disagree.
+function retainageTotals(ctx: ComputeContext): { workCents: number; storedCents: number } {
+  const storedPct = effectiveStoredPct(ctx);
+  let workCents = 0, storedCents = 0;
+  for (const sov of ctx.sovLines) {
+    if (sov.lineType && sov.lineType !== 'item') continue;
+    const thisLine = ctx.thisLines.get(sov.id);
+    const percentComplete = thisLine ? thisLine.percentComplete : 0;
+    const stored = thisLine ? thisLine.storedMaterialsCents : 0;
+    const completedToDateCents = Math.round(sov.scheduledValueCents * percentComplete / 100);
+    workCents += Math.round(completedToDateCents * effectiveWorkPct(ctx, sov) / 100);
+    storedCents += Math.round(stored * storedPct / 100);
+  }
+  return { workCents, storedCents };
+}
+
+// The retainage releases recorded up to and including this application, in
+// dollars: line 5 as the same lines would hold it with no release, less line 5
+// as it is. Releases are entered as percentage points (setPayApp), so this is
+// where their dollar effect is read off (the Reports page's retainage report).
+// 0 on a project that has released nothing.
+export function retainageReleasedCents(db: Database.Database, payAppId: string): number {
+  const ctx = loadComputeContext(db, payAppId);
+  if (!(ctx.cumulativeReleasedPoints > 0)) return 0;
+  const held = retainageTotals(ctx);
+  const unreleased = retainageTotals({ ...ctx, cumulativeReleasedPoints: 0 });
+  return (unreleased.workCents + unreleased.storedCents) - (held.workCents + held.storedCents);
+}
+
 // Compute L6 (earned less retainage) for a given pay app — used for the recursive
 // L7 (less previous certificates). Returns 0 if app is missing (guard).
 function computeL6(db: Database.Database, payAppId: string | null): number {
@@ -834,11 +867,9 @@ function computeL6(db: Database.Database, payAppId: string | null): number {
 export function computeG702(db: Database.Database, payAppId: string): G702 {
   const ctx = loadComputeContext(db, payAppId);
   const { app, sovLines, thisLines, priorId } = ctx;
-  const storedPct = effectiveStoredPct(ctx);
 
   let L1 = 0, L2 = 0;
   let L4 = 0;
-  let L5a = 0, L5b = 0;
   let additions = 0, deductions = 0;
 
   for (const sov of sovLines) {
@@ -858,11 +889,9 @@ export function computeG702(db: Database.Database, payAppId: string): G702 {
     const completedToDateCents = Math.round(scheduledValueCents * percentComplete / 100);
     const totalToDateCents = completedToDateCents + storedCents;
     L4 += totalToDateCents;
-
-    L5a += Math.round(completedToDateCents * effectiveWorkPct(ctx, sov) / 100);
-    L5b += Math.round(storedCents * storedPct / 100);
   }
 
+  const { workCents: L5a, storedCents: L5b } = retainageTotals(ctx);
   const L3 = L1 + L2;
   const L5 = L5a + L5b;
   const L6 = L4 - L5;

@@ -5,7 +5,7 @@ import {
   Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
   ListTodo, Clock, CornerDownLeft, X, Keyboard,
   AlertCircle, ClipboardCheck, StickyNote, DollarSign, SlidersHorizontal, LayoutGrid,
-  MessageCircleQuestion, CalendarDays, Mail, FilePlus2,
+  MessageCircleQuestion, CalendarDays, Mail, FilePlus2, BarChart3,
 } from 'lucide-react';
 import { searchAll, SearchResult, getMyTimeEntries, clockIn, clockOut } from '../utils/store';
 import { useToast } from './Toast';
@@ -118,6 +118,11 @@ export const CommandPalette: React.FC = () => {
     { id: 'a:mail', type: 'action', title: 'Mail', icon: <Mail size={16} />, run: () => navigate('/mail') },
     { id: 'a:mail-compose', type: 'action', title: 'New email', icon: <Plus size={16} />, run: () => navigate('/mail?compose=1') },
     { id: 'a:time', type: 'action', title: 'Time tracking', icon: <Clock size={16} />, run: () => navigate('/time') },
+    // Billing reports are admin-only, like billing itself.
+    ...(isAdmin ? [{
+      id: 'a:reports', type: 'action' as const, title: 'Reports', subtitle: 'Open invoices, payments, change orders, retainage',
+      icon: <BarChart3 size={16} />, run: () => navigate('/reports'),
+    }] : []),
     {
       id: 'a:clock', type: 'action', title: 'Clock in / out', icon: <Clock size={16} />,
       run: async () => {
@@ -132,7 +137,7 @@ export const CommandPalette: React.FC = () => {
         finally { clockInFlight.current = false; }
       },
     },
-  ], [navigate, toast, projectId, location.pathname, location.search]);
+  ], [navigate, toast, projectId, location.pathname, location.search, isAdmin]);
 
   // Contextual actions: surfaced only when the user is inside a project.
   const contextualActions: Action[] = useMemo(() => {

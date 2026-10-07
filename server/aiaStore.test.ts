@@ -11,7 +11,7 @@ import {
   getSovLine, listSovLines, createSovLine, saveSovLine, deleteSovLine,
   seedSovLines, syncChangeOrders, reorderSovLines, splitSovLine,
   createPayApp, listPayApps, getPayApp, savePayAppLines, setPayApp, deletePayApp,
-  computeG703, computeG702, remainingReleasablePoints,
+  computeG703, computeG702, remainingReleasablePoints, retainageReleasedCents,
   getSovLock, lockSov, unlockSov, assertSovEditable,
   ValidationError, ConflictError, NotFoundError, SovLockedError,
 } from './aiaStore';
@@ -733,6 +733,44 @@ describe('retainage release (effective-rate model)', () => {
       .reduce((s, n) => s + n, 0);
     expect(sumL8).toBe(10000000);
     expect(sumL8).toBe(g3.L4totalCompletedStoredCents);
+  });
+
+  // The Reports page's retainage report shows releases in dollars: line 5 as
+  // it would read with no release, less line 5 as it is.
+  it('retainageReleasedCents: the dollars releases let go, 0 when nothing was released', () => {
+    setAiaSettings('p1', { retainageMode: 'uniform', retainagePercent: 15 });
+    const line = setupOneLine(); // $100,000
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    savePayAppLines(db, a1.id, [{ sovLineId: line, percentComplete: 50, storedMaterialsCents: 0 }], 1);
+    expect(retainageReleasedCents(db, a1.id)).toBe(0);
+
+    // 5 points released on app 2: held 15% → 10% of $50,000 completed.
+    const a2 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    setPayApp(db, a2.id, { releasedRetainagePoints: 5 });
+    expect(computeG702(db, a2.id).L5retainageCents).toBe(500000);
+    expect(retainageReleasedCents(db, a2.id)).toBe(250000); // 750000 unreleased − 500000 held
+    expect(retainageReleasedCents(db, a1.id)).toBe(0); // a later release doesn't reach back
+
+    // Stored materials are released at the same single rate.
+    const a3 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    savePayAppLines(db, a3.id, [{ sovLineId: line, percentComplete: 50, storedMaterialsCents: 100000 }], 1);
+    expect(computeG702(db, a3.id).L5retainageCents).toBe(500000 + 10000);
+    expect(retainageReleasedCents(db, a3.id)).toBe(250000 + 5000);
+  });
+
+  it('retainageReleasedCents follows per-line rates in perLine mode', () => {
+    setAiaSettings('p1', { retainageMode: 'perLine', retainagePercent: 10 });
+    const l1 = createSovLine(db, 'p1', { itemNo: '1', description: 'Framing', scheduledValueCents: 1000000, retainagePercent: 20 }).id;
+    const l2 = createSovLine(db, 'p1', { itemNo: '2', description: 'Lath', scheduledValueCents: 1000000 }).id; // base 10%
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10 });
+    savePayAppLines(db, a1.id, [
+      { sovLineId: l1, percentComplete: 100, storedMaterialsCents: 0 },
+      { sovLineId: l2, percentComplete: 100, storedMaterialsCents: 0 },
+    ], 1);
+    setPayApp(db, a1.id, { releasedRetainagePoints: 5 });
+    // Held: 15% + 5% of $10,000 each = $2,000; with no release 20% + 10% = $3,000.
+    expect(computeG702(db, a1.id).L5retainageCents).toBe(200000);
+    expect(retainageReleasedCents(db, a1.id)).toBe(100000);
   });
 
   it('remainingReleasablePoints subtracts prior releases and floors at 0', () => {

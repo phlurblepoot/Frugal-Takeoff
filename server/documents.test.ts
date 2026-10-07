@@ -256,6 +256,24 @@ describe('GET /api/documents — role exclusion', () => {
   });
 });
 
+// A check image carries the customer's bank details (migration 43): hidden
+// from non-admins everywhere the billing kinds are.
+describe('payment attachments are admin-only', () => {
+  it('hides a payment-attachment from a non-admin\'s list and by-source lookup, and 404s their PATCH/DELETE', async () => {
+    const chk = await upload('chk', { projectId: 'p1', kind: 'payment-attachment', sourceType: 'payment', sourceId: 'pay-1', name: 'Check.jpg' });
+    const visible = await upload('vis', { projectId: 'p1', kind: 'document', name: 'Visible.pdf' });
+
+    expect((await request(app).get('/api/documents')).body.rows.map((r: any) => r.id).sort()).toEqual([chk, visible].sort());
+
+    const userApp = buildApp('user', 'u2');
+    expect((await request(userApp).get('/api/documents')).body.rows.map((r: any) => r.id)).toEqual([visible]);
+    const bySource = await request(userApp).get('/api/documents/by-source?sourceType=payment&kind=payment-attachment&sourceIds=pay-1');
+    expect(bySource.body).toEqual({ 'pay-1': null });
+    expect((await request(userApp).patch(`/api/files/${chk}`).send({ archived: true })).status).toBe(404);
+    expect((await request(userApp).delete(`/api/files/${chk}`)).status).toBe(404);
+  });
+});
+
 describe('GET /api/documents — source label resolution', () => {
   it('resolves invoice, payapp, change-order and task labels with hrefs', async () => {
     const inv = await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-12', lines: [] });
@@ -300,16 +318,59 @@ describe('GET /api/documents — source label resolution', () => {
     expect(row.source).toEqual({ type: 'takeoff-print', id: 'po-1', label: 'Printout.pdf', href: '/project/p1/takeoff' });
   });
 
-  it('resolves a dailyReport label (Daily Report — <date>) with an href to the project daily-reports list', async () => {
-    const dr = await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' });
+  // One date can hold a report per crew (migration 45): the crew names the
+  // report too, and the link opens that crew's tab.
+  it('resolves a dailyReport label (Daily Report — <date> — <crew>) with an href to its crew\'s tab', async () => {
+    const crewId = (await request(app).get('/api/projects/p1/daily-report-crews')).body[0].id;
+    const sub = (await request(app).post('/api/projects/p1/daily-report-crews').send({ name: 'Smith & Sons' })).body;
+    const dr = await request(app).post('/api/projects/p1/daily-reports').send({ crewId, reportDate: '2026-08-20' });
+    const subDr = await request(app).post('/api/projects/p1/daily-reports').send({ crewId: sub.id, reportDate: '2026-08-20' });
     const pdfFid = await upload('dr-pdf', { projectId: 'p1', kind: 'daily-report', sourceType: 'dailyReport', sourceId: dr.body.id, name: 'DailyReport.pdf' });
     const photoFid = await upload('dr-photo', { projectId: 'p1', kind: 'daily-report-photo', sourceType: 'dailyReport', sourceId: dr.body.id, name: 'photo.jpg' });
+    const subFid = await upload('dr-sub-pdf', { projectId: 'p1', kind: 'daily-report', sourceType: 'dailyReport', sourceId: subDr.body.id, name: 'DailyReport-sub.pdf' });
 
     const res = await request(app).get('/api/documents');
     const byId = Object.fromEntries(res.body.rows.map((r: any) => [r.id, r]));
 
-    expect(byId[pdfFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20', href: '/project/p1/daily-reports' });
-    expect(byId[photoFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20', href: '/project/p1/daily-reports' });
+    const href = `/project/p1/daily-reports?crew=${crewId}`;
+    expect(byId[pdfFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20 — Crew 1', href });
+    expect(byId[photoFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20 — Crew 1', href });
+    expect(byId[subFid].source).toEqual({
+      type: 'dailyReport', id: subDr.body.id, label: 'Daily Report — 2026-08-20 — Smith & Sons',
+      href: `/project/p1/daily-reports?crew=${sub.id}`,
+    });
+  });
+
+  it('a daily report whose crew is gone keeps its date label and links to the page', async () => {
+    const crewId = (await request(app).get('/api/projects/p1/daily-report-crews')).body[0].id;
+    const dr = await request(app).post('/api/projects/p1/daily-reports').send({ crewId, reportDate: '2026-08-20' });
+    const fid = await upload('dr-orphan', { projectId: 'p1', kind: 'daily-report', sourceType: 'dailyReport', sourceId: dr.body.id, name: 'DailyReport.pdf' });
+    db.prepare('DELETE FROM daily_report_crews WHERE id = ?').run(crewId);
+
+    const row = (await request(app).get('/api/documents')).body.rows.find((r: any) => r.id === fid);
+    expect(row.source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20', href: '/project/p1/daily-reports' });
+  });
+
+  it('resolves a payment attachment to what the payment paid, linking to that payment on the Payments tab', async () => {
+    const inv = await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-12', lines: [] });
+    const onInvoice = await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: inv.body.id, amount: 10 });
+    const payApp = await request(app).post('/api/projects/p1/aia/pay-apps').send({});
+    const onPayApp = await request(app).post('/api/projects/p1/payments').send({ targetType: 'payapp', targetId: payApp.body.id, amount: 20 });
+    const chk = await upload('chk-f', { projectId: 'p1', kind: 'payment-attachment', sourceType: 'payment', sourceId: onInvoice.body.id, name: 'Check.jpg' });
+    const ach = await upload('ach-f', { projectId: 'p1', kind: 'payment-attachment', sourceType: 'payment', sourceId: onPayApp.body.id, name: 'ACH.pdf' });
+    const gone = await upload('gone-f', { projectId: 'p1', kind: 'payment-attachment', sourceType: 'payment', sourceId: 'deleted-payment', name: 'Old.jpg' });
+
+    const res = await request(app).get('/api/documents');
+    const byId = Object.fromEntries(res.body.rows.map((r: any) => [r.id, r]));
+    expect(byId[chk].source).toEqual({
+      type: 'payment', id: onInvoice.body.id, label: 'Payment — Invoice #INV-12',
+      href: `/project/p1/billing?tab=payments&open=${onInvoice.body.id}`,
+    });
+    expect(byId[ach].source).toEqual({
+      type: 'payment', id: onPayApp.body.id, label: `Payment — Pay App #${payApp.body.number}`,
+      href: `/project/p1/billing?tab=payments&open=${onPayApp.body.id}`,
+    });
+    expect(byId[gone].source).toEqual({ type: 'payment', id: 'deleted-payment', label: 'Payment Attachment', href: null });
   });
 
   it('falls back to a generic kind-based label with null href for a dangling sourceId', async () => {

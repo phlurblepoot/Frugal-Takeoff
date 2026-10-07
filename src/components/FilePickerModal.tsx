@@ -12,6 +12,9 @@
 //    from the Existing tab then fetches each file's content first; an upload
 //    hands back the File the user just chose, which is the same bytes without
 //    the round trip.
+//  - `onPickFiles` is for a record that doesn't exist yet (a payment being
+//    recorded): the Upload tab hands back the chosen files UNSTORED, and the
+//    caller stores them once there is something to file them under.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Upload as UploadIcon } from 'lucide-react';
@@ -35,6 +38,7 @@ const PAGE_SIZE = 100;
 const MIMES: Record<NonNullable<FilePickerModalProps['accept']>, string[] | undefined> = {
   pdf: ['application/pdf'],
   image: ['image/'],
+  'image-pdf': ['image/', 'application/pdf'],
   spreadsheet: [
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'application/vnd.ms-excel',
@@ -49,6 +53,7 @@ const MIMES: Record<NonNullable<FilePickerModalProps['accept']>, string[] | unde
 const INPUT_ACCEPT: Record<NonNullable<FilePickerModalProps['accept']>, string | undefined> = {
   pdf: 'application/pdf,.pdf',
   image: 'image/*',
+  'image-pdf': 'image/*,application/pdf,.pdf',
   spreadsheet: '.xlsx,.xls,.csv',
   office: OFFICE_FORMATS.map(f => `.${f.ext}`).join(','),
   any: undefined,
@@ -76,7 +81,7 @@ export interface FilePickerModalProps {
   onClose: () => void;
   /** Optional because a `returnBlobs` caller uses onPickBlobs instead. */
   onPick?: (rows: DocumentRow[]) => void | Promise<void>;
-  accept?: 'pdf' | 'image' | 'spreadsheet' | 'office' | 'any';
+  accept?: 'pdf' | 'image' | 'image-pdf' | 'spreadsheet' | 'office' | 'any';
   multi?: boolean;
   excludeFileIds?: string[];
   initialProjectIds?: string[];
@@ -87,6 +92,10 @@ export interface FilePickerModalProps {
   /** When true, onPickBlobs is called with the bytes instead of onPick. */
   returnBlobs?: boolean;
   onPickBlobs?: (picked: { row: DocumentRow; blob: Blob }[]) => void | Promise<void>;
+  /** Upload tab only: hand the chosen files back without storing them (the
+   *  `upload` config then only decides the tab's accept/multi/capture). For a
+   *  record that doesn't exist yet; the Existing tab still uses onPick. */
+  onPickFiles?: (files: File[]) => void | Promise<void>;
 }
 
 type UploadStatus = 'pending' | 'uploading' | 'done' | 'error';
@@ -117,7 +126,7 @@ const rowFromUpload = (
 
 export const FilePickerModal: React.FC<FilePickerModalProps> = ({
   open, onClose, onPick, accept = 'any', multi = true, excludeFileIds = [], initialProjectIds = [],
-  title = 'Choose files', upload, defaultTab = 'existing', returnBlobs = false, onPickBlobs,
+  title = 'Choose files', upload, defaultTab = 'existing', returnBlobs = false, onPickBlobs, onPickFiles,
 }) => {
   const { toast } = useToast();
   const [q, setQ] = useState('');
@@ -261,6 +270,13 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
     const singleOnly = (upload.multi ?? multi) === false;
     if (singleOnly && chosen.length > 1) toast('Only one file can be added here', { type: 'warning' });
     const files = singleOnly ? chosen.slice(0, 1) : chosen;
+
+    // Staged, not stored: the caller files them itself once its record exists.
+    if (onPickFiles) {
+      await onPickFiles(files);
+      onClose();
+      return;
+    }
 
     setUploading(true);
     setProgress(files.map(f => ({ name: f.name, status: 'pending' as UploadStatus })));

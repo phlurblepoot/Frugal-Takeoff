@@ -11,6 +11,7 @@ import { PayAppPdfControls } from './PayAppPdfControls';
 import { buildAiaXlsxBlob } from './aiaExcel';
 import { resolveAiaExportEnv } from './aiaExportShared';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
+import { formatBillingDate } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import {
   Button, Field, Input, Modal, Select, StatusPill, Skeleton,
@@ -610,7 +611,7 @@ export const AiaPayAppEditor: React.FC<{
                 <TBody>
                   {payments.map(p => (
                     <TR key={p.id}>
-                      <TD className="text-ink-soft">{p.date ? new Date(p.date).toLocaleDateString() : '—'}</TD>
+                      <TD className="text-ink-soft">{formatBillingDate(p.date)}</TD>
                       <TD className="text-ink-faint">{p.note || '—'}</TD>
                       <TD className="text-right tabular-nums text-ink-soft">{formatMoney(Math.round((Number(p.amount) || 0) * 100))}</TD>
                     </TR>

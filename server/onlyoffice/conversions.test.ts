@@ -71,7 +71,7 @@ const mkApp = (as: 'admin' | 'crew' = 'admin', env: Record<string, string> = ENV
   const requireAdmin = (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }));
   registerDataRoutes(a, {
     db, dataDir, dbFile: path.join(dataDir, 'app.db'), authenticateToken, requireAdmin,
-    verifyToken: () => null, broadcastChange: () => {}, onlyoffice: services,
+    verifyToken: () => users[as], broadcastChange: () => {}, onlyoffice: services,
   });
   registerOnlyofficeRoutes(a, {
     env, appJwtSecret: 'app-secret', authenticateToken, requireAdmin, db, dataDir, broadcastChange: () => {}, fetch: fakeFetch, services,
@@ -257,7 +257,7 @@ describe('thumbnails', () => {
 });
 
 describe('photo thumbnails', () => {
-  const thumb = (a: express.Express, id = 'pic') => request(a).get(`/api/images/${id}/thumb`).buffer(true).parse((res, cb) => {
+  const thumb = (a: express.Express, id = 'pic') => request(a).get(`/api/images/${id}/thumb`).set('Authorization', 'Bearer t').buffer(true).parse((res, cb) => {
     const chunks: Buffer[] = [];
     res.on('data', (c: Buffer) => chunks.push(c));
     res.on('end', () => cb(null, Buffer.concat(chunks)));
@@ -270,7 +270,7 @@ describe('photo thumbnails', () => {
     const r = await thumb(mkApp('admin', {}));
     expect(r.status).toBe(200);
     expect(r.headers['content-type']).toBe('image/webp');
-    expect(r.headers['cache-control']).toBe('public, max-age=31536000');
+    expect(r.headers['cache-control']).toBe('private, max-age=31536000');
     const m = await sharp(r.body).metadata();
     expect([m.format, m.width, m.height]).toEqual(['webp', PHOTO_THUMBNAIL_SIZE, 360]);
     expect(r.body.length).toBeLessThan(20_000);
@@ -298,12 +298,12 @@ describe('photo thumbnails', () => {
     putBuffer(db, dataDir, 'bad', Buffer.from('not a jpeg'), 'image/jpeg', { name: 'broken.jpg' });
     putBuffer(db, dataDir, 'doc', Buffer.from('docx'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', { name: 'a.docx' });
     for (const id of ['svg', 'bad', 'bad', 'doc']) {
-      const r = await request(a).get(`/api/images/${id}/thumb`);
+      const r = await request(a).get(`/api/images/${id}/thumb`).set('Authorization', 'Bearer t');
       expect([r.status, r.headers.location]).toEqual([302, `/api/images/${id}/raw`]);
     }
     putBuffer(db, dataDir, 'sig', await photo(300, 100), 'image/png', { kind: SIGNATURE_KIND, name: 'Signature.png' });
-    expect((await request(a).get('/api/images/sig/thumb')).status).toBe(404);
-    expect((await request(a).get('/api/images/nope/thumb')).status).toBe(404);
+    expect((await request(a).get('/api/images/sig/thumb').set('Authorization', 'Bearer t')).status).toBe(404);
+    expect((await request(a).get('/api/images/nope/thumb').set('Authorization', 'Bearer t')).status).toBe(404);
     expect(fs.existsSync(path.join(dataDir, 'thumbnails'))).toBe(false);
   });
 

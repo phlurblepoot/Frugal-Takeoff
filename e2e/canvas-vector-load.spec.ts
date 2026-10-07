@@ -13,7 +13,7 @@ import { test, expect, seedProjectWithVectorPage } from './fixtures/test';
 // `sourcePdfFileId` via pdf.js, not a pre-rasterized `imageId`) that means the
 // source PDF's /raw download is started twice, and the first in-flight fetch
 // gets aborted. Aborted downloads never populate the browser HTTP cache (the
-// server sends Cache-Control: public, max-age=31536000 on /api/images/:id/raw),
+// server sends Cache-Control: private, max-age=31536000 on /api/images/:id/raw),
 // so large plan-set PDFs that should load instantly from cache instead
 // re-downloaded in full on every single visit.
 //

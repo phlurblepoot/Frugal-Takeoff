@@ -15,6 +15,7 @@ import { registerDataRoutes } from './routes';
 import { getMeta, listVersions, putBuffer, saveNewVersion } from './files';
 import { readFileContent } from './fileStore';
 import { removeUserSignatures } from './documentLibrary';
+import { MEDIA_COOKIE } from './auth';
 
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -194,8 +195,11 @@ describe('signatures', () => {
     expect((await read('crew')).status).toBe(200);
     expect((await read('other')).status).toBe(404);
     expect((await read('admin')).status).toBe(404);
-    // Nor through the login-free image route.
-    expect((await request(as('crew')).get(`/api/images/${sig.id}/raw`)).status).toBe(404);
+    // The same through the image URL an <img> loads, signed in by the media cookie.
+    const raw = (who: keyof typeof users) => request(as(who)).get(`/api/images/${sig.id}/raw`).set('Cookie', `${MEDIA_COOKIE}=t`);
+    expect((await raw('crew')).status).toBe(200);
+    expect((await raw('other')).status).toBe(404);
+    expect((await raw('admin')).status).toBe(404);
   });
 
   it('stay out of Documents, survive orphan cleanup, and go when their owner is removed', async () => {

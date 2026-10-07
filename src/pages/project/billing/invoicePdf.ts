@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { Invoice } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import { formatBillingDate } from '../../../utils/billingDates';
 import {
   LetterheadContext,
   drawLetterheadHeader,
@@ -54,27 +55,6 @@ export interface InvoicePdfContext {
   headerEmail?: string;
 }
 
-// Merges PDF attachment bytes onto the end of a generated PDF, in order.
-// Mirrors the proposal generator's attachment merge (proposalGenerator.ts)
-// so invoices get the same "append PDFs in the order the user picked" behavior.
-// An attachment whose bytes can't be parsed as a PDF is skipped (warned, not
-// thrown) rather than failing the whole document.
-export async function appendPdfAttachments(base: Uint8Array, attachments: ArrayBuffer[]): Promise<Uint8Array> {
-  if (!attachments.length) return base;
-  const { PDFDocument } = await import('pdf-lib');
-  const merged = await PDFDocument.load(base, { ignoreEncryption: true });
-  for (const bytes of attachments) {
-    try {
-      const d = await PDFDocument.load(bytes, { ignoreEncryption: true });
-      (await merged.copyPages(d, d.getPageIndices())).forEach(p => merged.addPage(p));
-    } catch (e) {
-      console.warn('[invoice] skipped unreadable attachment', e);
-    }
-  }
-  const out = await merged.save();
-  return out;
-}
-
 export function buildInvoicePdf(ctx: InvoicePdfContext): Uint8Array {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.getWidth();
@@ -94,7 +74,7 @@ export function buildInvoicePdf(ctx: InvoicePdfContext): Uint8Array {
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(60, 60, 60);
   let metaY = y;
   doc.text(`No: ${ctx.invoice.number ?? ''}`, W - M, metaY, { align: 'right' }); metaY += 14;
-  if (ctx.invoice.date) { doc.text(`Date: ${new Date(ctx.invoice.date).toLocaleDateString()}`, W - M, metaY, { align: 'right' }); metaY += 14; }
+  if (ctx.invoice.date) { doc.text(`Date: ${formatBillingDate(ctx.invoice.date)}`, W - M, metaY, { align: 'right' }); metaY += 14; }
   if (ctx.invoice.terms) { doc.text(`Terms: ${ctx.invoice.terms}`, W - M, metaY, { align: 'right' }); metaY += 14; }
 
   y = Math.max(y + 28, metaY) + 12;

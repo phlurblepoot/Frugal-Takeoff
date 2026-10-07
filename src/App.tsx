@@ -29,6 +29,7 @@ import { DocumentEditor } from './pages/DocumentEditor';
 import { TasksPage } from './pages/TasksPage';
 import { TimeKeeping } from './pages/TimeKeeping';
 import { CustomersSplitView } from './pages/customers/CustomersSplitView';
+import { ReportsPage } from './pages/reports/ReportsPage';
 import { ShareView } from './pages/ShareView';
 import { AttachmentViewer } from './pages/AttachmentViewer';
 import { CollaborationProvider } from './context/CollaborationContext';
@@ -211,6 +212,10 @@ const router = createBrowserRouter([
         {
           path: 'time',
           element: <TimeKeeping />,
+        },
+        {
+          path: 'reports',
+          element: <ReportsPage />,
         },
       ],
     },

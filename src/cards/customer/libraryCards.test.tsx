@@ -6,6 +6,7 @@ import React from 'react';
 import { ThemeProvider } from '../../context/ThemeContext';
 import type { CardContext, CardWidth } from '../types';
 import type { CustomerOverview, ProjectSummary, TaskListItem } from '../../utils/store';
+import { useTimeZone } from '../../test/timeZone';
 
 const { getCustomerOverview, getProjectsSummary, getTasks } = vi.hoisted(() => ({
   getCustomerOverview: vi.fn(),
@@ -111,6 +112,18 @@ describe('cu-payments', () => {
 
     expect(screen.getByText('$250.00')).toBeInTheDocument(); // #7 paidCents
     expect(screen.getAllByText(/Roof job/).length).toBeGreaterThan(0); // project context shown on rows
+  });
+
+  describe('west of UTC', () => {
+    useTimeZone('America/Los_Angeles');
+
+    it('dates each row with the day it was picked, invoice or pay app', async () => {
+      getCustomerOverview.mockResolvedValue(overview);
+      mount('cu-payments', 1);
+      await screen.findByText(/#7/);
+      expect(screen.getByText(`Roof job · ${new Date(2026, 5, 1).toLocaleDateString()}`)).toBeInTheDocument();
+      expect(screen.getByText(`Roof job · ${new Date(2026, 1, 1).toLocaleDateString()}`)).toBeInTheDocument();
+    });
   });
 
   it('renders empty state when billing is absent (non-admin payload, belt-and-suspenders)', async () => {

@@ -21,6 +21,8 @@ import { upsertFolders } from './mail/sync/engine';
 import { stageUpload } from './mail/uploads';
 import type { MailContext } from './mail/context';
 import type { EntityChangedEvent } from './realtime/changeFeed';
+import { putBuffer } from './files';
+import { MEDIA_COOKIE } from './auth';
 
 let db: Database.Database;
 let dir: string;
@@ -31,6 +33,11 @@ const PROJECT = {
   pages: [{ id: 'pg1', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
   takeoffs: [],
 };
+
+// Every daily report is filed under a crew; listing a project's crews makes
+// its first one ("Crew 1").
+const firstCrew = async (projectId = 'p1'): Promise<string> =>
+  (await request(app).get(`/api/projects/${projectId}/daily-report-crews`)).body[0].id;
 
 beforeEach(() => {
   dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-rt-'));
@@ -83,16 +90,12 @@ describe('projects routes', () => {
 
   it('GET list returns aggregates newest-first; DELETE removes', async () => {
     await request(app).post('/api/projects').send(PROJECT);
-    await request(app).post('/api/projects').send({
-      ...PROJECT,
-      id: 'p2',
-      createdAt: 2,
-      pages: [{ id: 'pg2', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
-    });
+    // Nothing in it yet (no plan pages), so it can be deleted.
+    await request(app).post('/api/projects').send({ ...PROJECT, id: 'p2', createdAt: 2, pages: [] });
     const list = await request(app).get('/api/projects');
     expect(list.body.map((p: any) => p.id)).toEqual(['p2', 'p1']);
-    await request(app).delete('/api/projects/p1');
-    expect((await request(app).get('/api/projects/p1')).status).toBe(404);
+    await request(app).delete('/api/projects/p2').expect(200);
+    expect((await request(app).get('/api/projects/p2')).status).toBe(404);
   });
 });
 
@@ -107,7 +110,7 @@ describe('images compat routes', () => {
 
   it('GET /api/images/:id/raw streams decoded bytes with mime', async () => {
     await request(app).post('/api/images').send({ id: 'i1', data: PNG });
-    const res = await request(app).get('/api/images/i1/raw');
+    const res = await request(app).get('/api/images/i1/raw').set('Authorization', 'Bearer good-token');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('image/png');
     expect(res.body.toString()).toBe('pngbytes');
@@ -125,7 +128,7 @@ describe('images compat routes', () => {
 
   it('404s for unknown ids', async () => {
     expect((await request(app).get('/api/images/nope')).status).toBe(404);
-    expect((await request(app).get('/api/images/nope/raw')).status).toBe(404);
+    expect((await request(app).get('/api/images/nope/raw?token=good-token')).status).toBe(404);
   });
 });
 
@@ -157,6 +160,153 @@ describe('GET /api/files/:id/content streaming', () => {
   it('rejects missing/bad tokens', async () => {
     expect((await request(app).get('/api/files/f1/content')).status).toBe(401);
     expect((await request(app).get('/api/files/f1/content?token=bad')).status).toBe(401);
+  });
+});
+
+// Photo and file links (spec docs/superpowers/specs/2026-10-07-file-link-security-design.md):
+// /api/images/:id/raw, /thumb and /api/files/:id/content each ask who is
+// signed in — the Authorization header, ?token= or the media cookie — and
+// apply one per-file rule: a signature is its owner's, billing documents are
+// admins'. Without a Document Server a thumb sends the browser on to /raw, so
+// those requests follow one redirect.
+describe('file links', () => {
+  const viewers: Record<string, { id: string; username: string; role: string }> = {
+    'admin-token': { id: 'u-admin', username: 'boss', role: 'admin' },
+    'crew-token': { id: 'u-crew', username: 'crew', role: 'user' },
+    'other-token': { id: 'u-other', username: 'other', role: 'user' },
+  };
+  const LINKS = {
+    raw: (id: string) => `/api/images/${id}/raw`,
+    thumb: (id: string) => `/api/images/${id}/thumb`,
+    content: (id: string) => `/api/files/${id}/content`,
+  };
+  let media: express.Express;
+
+  beforeEach(async () => {
+    media = express();
+    media.use(express.json());
+    registerDataRoutes(media, {
+      db,
+      dataDir: dir,
+      dbFile: path.join(dir, 'app.db'),
+      // The real thing reads the Authorization header only (server/auth.ts).
+      authenticateToken: (req: any, res: any, next: any) => {
+        const user = viewers[String(req.headers.authorization ?? '').split(' ')[1]];
+        if (!user) return res.status(401).json({ error: 'Authentication required' });
+        req.user = user;
+        next();
+      },
+      requireAdmin: (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' })),
+      verifyToken: (token: string) => viewers[token] ?? null,
+      broadcastChange: () => {},
+    });
+    const upload = (id: string, kind: string, mime: string) => request(app).post(`/api/files/${id}?kind=${kind}&name=${id}`)
+      .set('Content-Type', mime).send(Buffer.from(`${id} bytes`));
+    await upload('photo', 'issue-photo', 'image/jpeg');
+    await upload('doc', 'document', 'application/pdf');
+    await upload('inv', 'invoice', 'application/pdf');
+    await upload('check', 'payment-attachment', 'image/jpeg');
+    putBuffer(db, dir, 'sig', Buffer.from('sig bytes'), 'image/png', { kind: 'signature', name: 'Signature.png', createdBy: 'u-crew' });
+  });
+
+  /** A link's status for one viewer, signed in by the media cookie. */
+  const statusFor = async (link: string, token: string) =>
+    (await request(media).get(link).set('Cookie', `${MEDIA_COOKIE}=${token}`).redirects(1)).status;
+
+  it('never let an uploaded SVG or HTML file run script on the app\'s origin', async () => {
+    const upload = (id: string, mime: string, body: string) => request(app).post(`/api/files/${id}?kind=document&name=${id}`)
+      .set('Content-Type', mime).send(Buffer.from(body));
+    await upload('evil-svg', 'image/svg+xml', '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    await upload('evil-html', 'text/html', '<script>alert(localStorage.token)</script>');
+    for (const link of [LINKS.raw, LINKS.content]) {
+      for (const id of ['evil-svg', 'evil-html']) {
+        const res = await request(media).get(link(id)).set('Authorization', 'Bearer crew-token');
+        expect(res.status, `${link(id)}`).toBe(200);
+        expect(res.headers['x-content-type-options']).toBe('nosniff');
+        expect(res.headers['content-security-policy']).toMatch(/^sandbox;/);
+      }
+      // A photo or a PDF opens normally (a sandboxed PDF wouldn't open at all).
+      for (const id of ['photo', 'doc']) {
+        const res = await request(media).get(link(id)).set('Authorization', 'Bearer crew-token');
+        expect(res.headers['x-content-type-options']).toBe('nosniff');
+        expect(res.headers['content-security-policy']).toBeUndefined();
+      }
+    }
+  });
+
+  it('refuse anyone not signed in, on every link', async () => {
+    for (const link of Object.values(LINKS)) {
+      expect((await request(media).get(link('photo'))).status).toBe(401);
+      expect((await request(media).get(link('photo')).set('Authorization', 'Bearer nope')).status).toBe(401);
+      expect((await request(media).get(`${link('photo')}?token=nope`)).status).toBe(401);
+      expect((await request(media).get(link('photo')).set('Cookie', `${MEDIA_COOKIE}=nope`)).status).toBe(401);
+      // Some other cookie is no sign-in either.
+      expect((await request(media).get(link('photo')).set('Cookie', 'other=crew-token')).status).toBe(401);
+    }
+  });
+
+  it('sign in by the Authorization header, ?token= or the media cookie', async () => {
+    for (const link of Object.values(LINKS)) {
+      const ways = [
+        request(media).get(link('photo')).set('Authorization', 'Bearer crew-token'),
+        request(media).get(`${link('photo')}?token=crew-token`),
+        request(media).get(link('photo')).set('Cookie', `theme=dark; ${MEDIA_COOKIE}=crew-token`),
+      ];
+      for (const way of ways) {
+        const res = await way.redirects(1);
+        expect(res.status).toBe(200);
+        expect(res.body.toString()).toBe('photo bytes');
+      }
+    }
+  });
+
+  it('keep billing documents to admins: anyone else gets a 404 on every link, as if they were not there', async () => {
+    for (const link of Object.values(LINKS)) {
+      for (const id of ['inv', 'check']) {
+        expect(await statusFor(link(id), 'crew-token')).toBe(404);
+        expect(await statusFor(link(id), 'admin-token')).toBe(200);
+      }
+      for (const id of ['photo', 'doc']) {
+        expect(await statusFor(link(id), 'crew-token')).toBe(200);
+        expect(await statusFor(link(id), 'admin-token')).toBe(200);
+      }
+    }
+    // The JSON read the editors use follows the same rule.
+    const json = (id: string, token: string) => request(media).get(`/api/images/${id}`).set('Authorization', `Bearer ${token}`);
+    expect((await json('inv', 'crew-token')).status).toBe(404);
+    expect((await json('check', 'crew-token')).status).toBe(404);
+    expect((await json('inv', 'admin-token')).status).toBe(200);
+    expect((await json('photo', 'crew-token')).status).toBe(200);
+  });
+
+  it('show a signature to its owner alone', async () => {
+    for (const link of Object.values(LINKS)) {
+      expect(await statusFor(link('sig'), 'crew-token')).toBe(200);
+      expect(await statusFor(link('sig'), 'other-token')).toBe(404);
+      expect(await statusFor(link('sig'), 'admin-token')).toBe(404);
+    }
+    expect((await request(media).get('/api/images/sig').set('Authorization', 'Bearer other-token')).status).toBe(404);
+  });
+
+  it('are cached privately, never by Cloudflare or another shared cache', async () => {
+    const raw = await request(media).get(LINKS.raw('photo')).set('Cookie', `${MEDIA_COOKIE}=crew-token`);
+    expect(raw.headers['cache-control']).toBe('private, max-age=31536000');
+    // Content is replaced in place by a new version, so it is never reused unchecked.
+    const content = await request(media).get(LINKS.content('doc')).set('Cookie', `${MEDIA_COOKIE}=crew-token`);
+    expect(content.headers['cache-control']).toBe('private, no-cache');
+    const range = await request(media).get(LINKS.content('doc')).set('Cookie', `${MEDIA_COOKIE}=crew-token`).set('Range', 'bytes=0-2');
+    expect([range.status, range.headers['cache-control']]).toEqual([206, 'private, no-cache']);
+  });
+
+  it("send a thumb's browser on to the original with the same sign-in, ?v= and all", async () => {
+    const viaCookie = await request(media).get(`${LINKS.thumb('photo')}?v=3`).set('Cookie', `${MEDIA_COOKIE}=crew-token`);
+    expect([viaCookie.status, viaCookie.headers.location]).toEqual([302, '/api/images/photo/raw']);
+    const original = await request(media).get(viaCookie.headers.location).set('Cookie', `${MEDIA_COOKIE}=crew-token`);
+    expect([original.status, original.body.toString()]).toEqual([200, 'photo bytes']);
+    // A ?token= has no cookie to fall back on, so it goes along.
+    const viaQuery = await request(media).get(`${LINKS.thumb('photo')}?token=crew-token`);
+    expect(viaQuery.headers.location).toBe('/api/images/photo/raw?token=crew-token');
+    expect((await request(media).get(viaQuery.headers.location)).status).toBe(200);
   });
 });
 
@@ -242,7 +392,8 @@ describe('storage + search + orphans', () => {
   it('orphan cleanup spares files only an attachment or photo table names', async () => {
     // Unnamed and project-less, so hidden from Documents: only the join rows
     // vouch for them.
-    for (const id of ['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'loose-img']) {
+    const linked = ['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'co-att', 'rfi-att', 'iss-att', 'dr-att', 'pay-att'];
+    for (const id of [...linked, 'loose-img']) {
       await request(app).post('/api/images').send({ id, data: PNG });
     }
     const link = (table: string, owner: string, fileId: string) =>
@@ -251,10 +402,17 @@ describe('storage + search + orphans', () => {
     link('invoice_photos', 'invoiceId', 'inv-photo');
     link('proposal_attachments', 'proposalId', 'prop-att');
     link('proposal_photos', 'proposalId', 'prop-photo');
+    // Migration 42: an attached PDF is often filed under another project (or
+    // none), so these join rows must vouch for it as well.
+    link('change_order_attachments', 'changeOrderId', 'co-att');
+    link('rfi_attachments', 'rfiId', 'rfi-att');
+    link('issue_attachments', 'issueId', 'iss-att');
+    link('daily_report_attachments', 'dailyReportId', 'dr-att');
+    // Migration 43: a payment can link a photo or PDF filed anywhere.
+    link('payment_attachments', 'paymentId', 'pay-att');
 
     expect((await request(app).get('/api/storage/orphans')).body.count).toBe(1);
-    expect(await survivors(['inv-att', 'inv-photo', 'prop-att', 'prop-photo', 'loose-img']))
-      .toEqual(['inv-att', 'inv-photo', 'prop-att', 'prop-photo']);
+    expect(await survivors([...linked, 'loose-img'])).toEqual(linked);
   });
 
   it('search finds projects, pages, and takeoffs from normalized tables', async () => {
@@ -538,37 +696,192 @@ describe('file versions over HTTP', () => {
   });
 });
 
-// The drafts API went with the old PDF editor (ONLYOFFICE Phase 1), but rows
-// it left behind still belong to their project's files.
-describe('deleteProject drafts cascade', () => {
-  it('removes leftover editor drafts for its files', async () => {
+// Only a project with nothing in it can be deleted; one with documents or
+// records is archived instead (spec
+// docs/superpowers/specs/2026-10-07-project-delete-guard-design.md).
+describe('DELETE /api/projects/:id — only an empty project', () => {
+  const EMPTY = { ...PROJECT, pages: [] };
+  const HAS_DATA = 'This project has documents or records. Archive it instead.';
+  const count = (sql: string, ...args: unknown[]) => (db.prepare(sql).get(...args) as { c: number }).c;
+
+  // An app whose every request is someone who isn't an admin, sharing the db.
+  const memberApp = () => {
+    const m = express();
+    m.use(express.json());
+    registerDataRoutes(m, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'user' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+      broadcastChange: () => {},
+    });
+    return m;
+  };
+
+  it('deletes an empty project as before: its scaffolding goes, the delete is logged and broadcast', async () => {
+    const events: EntityChangedEvent[] = [];
+    const a = express();
+    a.use(express.json());
+    registerDataRoutes(a, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: (e: EntityChangedEvent) => { events.push(e); },
+    });
+    await request(a).post('/api/projects').send({
+      ...EMPTY, planSets: [{ id: 'ps1', name: 'Rev A' }], takeoffs: [{ id: 't1', name: 'Drywall', type: 'area' }],
+    }).expect(200);
+    const crewId = await firstCrew(); // opening Daily Reports makes "Crew 1"
+
+    expect((await request(a).get('/api/projects/p1/delete-check')).body).toEqual({ canDelete: true, summary: {} });
+    await request(a).delete('/api/projects/p1').expect(200, { success: true });
+
+    expect((await request(a).get('/api/projects/p1')).status).toBe(404);
+    expect(count('SELECT COUNT(*) c FROM takeoffs WHERE projectId = ?', 'p1')).toBe(0);
+    expect(count('SELECT COUNT(*) c FROM plan_sets WHERE projectId = ?', 'p1')).toBe(0);
+    expect(count('SELECT COUNT(*) c FROM daily_report_crews WHERE id = ?', crewId)).toBe(0);
+    expect(count(`SELECT COUNT(*) c FROM activity WHERE type = 'project_deleted' AND message = 'Project "Test Project" deleted'`)).toBe(1);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'project', id: 'p1', action: 'deleted' }));
+  });
+
+  it('refuses a project with a document: 409 project_has_data with what is in it, and nothing is removed', async () => {
+    const events: EntityChangedEvent[] = [];
+    const a = express();
+    a.use(express.json());
+    registerDataRoutes(a, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: (e: EntityChangedEvent) => { events.push(e); },
+    });
+    await request(a).post('/api/projects').send(EMPTY);
+    await request(a).post('/api/files/df1?projectId=p1&kind=document&name=D.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
+    events.length = 0;
+
+    const res = await request(a).delete('/api/projects/p1');
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'project_has_data', message: HAS_DATA, summary: { documents: 1 } });
+    expect((await request(a).get('/api/projects/p1')).status).toBe(200);
+    expect((await request(a).get('/api/files/df1/content?token=good-token')).status).not.toBe(404);
+    expect(count('SELECT COUNT(*) c FROM files WHERE id = ?', 'df1')).toBe(1);
+    expect(count(`SELECT COUNT(*) c FROM activity WHERE type = 'project_deleted'`)).toBe(0);
+    expect(events.filter(e => e.action === 'deleted')).toEqual([]);
+  });
+
+  it('delete-check says so beforehand; an unknown project is a 404', async () => {
+    await request(app).post('/api/projects').send(PROJECT); // one plan page
+    await request(app).post('/api/projects/p1/issues').send({ title: 'Crack' });
+    expect((await request(app).get('/api/projects/p1/delete-check')).body)
+      .toEqual({ canDelete: false, summary: { planPages: 1, issues: 1 } });
+    expect((await request(app).get('/api/projects/nope/delete-check')).status).toBe(404);
+  });
+
+  it('archiving does not make a project with data deletable', async () => {
     await request(app).post('/api/projects').send(PROJECT);
+    await request(app).patch('/api/projects/p1').send({ version: 1, archived: true }).expect(200);
+    expect((await request(app).delete('/api/projects/p1')).status).toBe(409);
+    expect((await request(app).get('/api/projects/p1')).body.archived).toBe(true);
+  });
+
+  it('anyone signed in may still delete an empty project; others see admin-only kinds only as a count', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
+    await request(app).post('/api/projects').send({ ...EMPTY, id: 'p2', createdAt: 2 });
+    await request(app).post('/api/projects/p2/invoices').send({ number: 'INV-1', lines: [] });
+    await request(app).post('/api/projects/p2/change-orders').send({ number: 'CO-1' });
+    await request(app).post('/api/projects/p2/rfis').send({ title: 'Which finish?' });
+    const m = memberApp();
+
+    expect((await request(m).get('/api/projects/p2/delete-check')).body)
+      .toEqual({ canDelete: false, summary: { rfis: 1, otherRecords: 2 } });
+    expect((await request(m).delete('/api/projects/p2')).body)
+      .toEqual({ error: 'project_has_data', message: HAS_DATA, summary: { rfis: 1, otherRecords: 2 } });
+    // An admin is told exactly.
+    expect((await request(app).delete('/api/projects/p2')).body.summary).toEqual({ invoices: 1, changeOrders: 1, rfis: 1 });
+
+    await request(m).delete('/api/projects/p1').expect(200);
+    expect((await request(app).get('/api/projects/p1')).status).toBe(404);
+  });
+
+  // The old cascade cases: each of these used to be wiped by a delete; now
+  // each one stops it, and every row is still there afterwards.
+  it('refuses a project with leftover editor drafts on its files, and keeps them', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
     await request(app).post('/api/files/df1?projectId=p1&kind=document&name=D.pdf')
       .set('Content-Type', 'application/pdf').send(Buffer.from('x'));
     db.prepare(`INSERT INTO drafts (userId, fileId, kind, data, updatedAt) VALUES ('u1', 'df1', 'pdf', '{}', 1)`).run();
-    await request(app).delete('/api/projects/p1');
-    expect(db.prepare('SELECT COUNT(*) c FROM drafts WHERE fileId = ?').get('df1')).toEqual({ c: 0 });
+    expect((await request(app).delete('/api/projects/p1')).status).toBe(409);
+    expect(db.prepare('SELECT COUNT(*) c FROM drafts WHERE fileId = ?').get('df1')).toEqual({ c: 1 });
   });
-});
 
-describe('deleteProject billing cascade', () => {
-  it('removes invoices, lines, payments, change orders for the project', async () => {
-    await request(app).post('/api/projects').send(PROJECT); // id p1
+  it('refuses a project with invoices, payments and change orders, and keeps them', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
     const inv = await request(app).post('/api/projects/p1/invoices')
       .send({ number: 'INV-1', date: 1, terms: 'Net 30', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] });
-    const invoiceId = inv.body.id;
-    await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: invoiceId, date: 1, amount: 50, method: 'check' });
+    await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: inv.body.id, date: 1, amount: 50, method: 'check' });
     await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', description: 'Extra', lumpSumAmount: 200 });
-    await request(app).delete('/api/projects/p1');
-    // all billing rows gone
-    for (const sql of [
-      'SELECT COUNT(*) c FROM invoices WHERE projectId = ?',
-      'SELECT COUNT(*) c FROM change_orders WHERE projectId = ?',
+    const res = await request(app).delete('/api/projects/p1');
+    expect(res.status).toBe(409);
+    expect(res.body.summary).toEqual({ invoices: 1, payments: 1, changeOrders: 1 });
+    expect(count('SELECT COUNT(*) c FROM invoices WHERE projectId = ?', 'p1')).toBe(1);
+    expect(count('SELECT COUNT(*) c FROM invoice_lines WHERE invoiceId = ?', inv.body.id)).toBe(1);
+    expect(count('SELECT COUNT(*) c FROM payments WHERE targetId = ?', inv.body.id)).toBe(1);
+    expect(count('SELECT COUNT(*) c FROM change_orders WHERE projectId = ?', 'p1')).toBe(1);
+  });
+
+  it('refuses a project with payments on a pay application, and keeps their attachments', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
+    await request(app).post('/api/files/chk1?projectId=p1&kind=payment-attachment&name=Check.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('jpg'));
+    const payApp = (await request(app).post('/api/projects/p1/aia/pay-apps').send({})).body.id;
+    const onApp = (await request(app).post('/api/projects/p1/payments').send({ targetType: 'payapp', targetId: payApp, amount: 20 })).body.id;
+    await request(app).post(`/api/payments/${onApp}/attachments`).send({ fileId: 'chk1' }).expect(200);
+    const res = await request(app).delete('/api/projects/p1');
+    expect(res.status).toBe(409);
+    expect(res.body.summary).toEqual({ documents: 1, payApps: 1, payments: 1 });
+    expect(db.prepare('SELECT COUNT(*) c FROM payment_attachments').get()).toEqual({ c: 1 });
+    expect(db.prepare('SELECT COUNT(*) c FROM payments').get()).toEqual({ c: 1 });
+  });
+
+  it('refuses a project with change orders, issues, RFIs and daily reports, and keeps their attachments', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
+    await request(app).post('/api/files/spec1?projectId=p1&kind=document&name=Spec.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
+    const co = (await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1' })).body.id;
+    const iss = (await request(app).post('/api/projects/p1/issues').send({ title: 'Crack' })).body.id;
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Which finish?' })).body.id;
+    const crewId = await firstCrew();
+    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ crewId, reportDate: '2026-08-20' })).body.id;
+    await request(app).post(`/api/change-orders/${co}/attachments`).send({ fileId: 'spec1' }).expect(200);
+    await request(app).post(`/api/issues/${iss}/attachments`).send({ fileId: 'spec1' }).expect(200);
+    await request(app).post(`/api/rfis/${rfi}/attachments`).send({ fileId: 'spec1' }).expect(200);
+    await request(app).post(`/api/daily-reports/${dr}/attachments`).send({ fileId: 'spec1' }).expect(200);
+
+    const res = await request(app).delete('/api/projects/p1');
+    expect(res.status).toBe(409);
+    expect(res.body.summary).toEqual({ documents: 1, changeOrders: 1, rfis: 1, issues: 1, dailyReports: 1 });
+    for (const [table, owner, id] of [
+      ['change_order_attachments', 'changeOrderId', co], ['issue_attachments', 'issueId', iss],
+      ['rfi_attachments', 'rfiId', rfi], ['daily_report_attachments', 'dailyReportId', dr],
     ]) {
-      expect((db.prepare(sql).get('p1') as any).c).toBe(0);
+      expect(db.prepare(`SELECT COUNT(*) c FROM ${table} WHERE ${owner} = ?`).get(id), table).toEqual({ c: 1 });
     }
-    expect((db.prepare("SELECT COUNT(*) c FROM payments WHERE targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)").get('p1') as any).c).toBe(0);
-    expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').get('p1') as any).c).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) c FROM daily_report_crews WHERE id = ?').get(crewId)).toEqual({ c: 1 });
+  });
+
+  it('refuses a project with issue and RFI photos, and keeps them', async () => {
+    await request(app).post('/api/projects').send(EMPTY);
+    const iss = await request(app).post('/api/projects/p1/issues').send({ title: 'Crack', description: 'Wall crack' });
+    const rfi = await request(app).post('/api/projects/p1/rfis').send({ title: 'Detail question', question: 'Which finish?' });
+    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
+    await request(app).post(`/api/issues/${iss.body.id}/photos`).send({ fileId: 'ph1' });
+    await request(app).post(`/api/rfis/${rfi.body.id}/photos`).send({ fileId: 'ph1' });
+    expect((await request(app).delete('/api/projects/p1')).status).toBe(409);
+    expect(count('SELECT COUNT(*) c FROM issue_photos WHERE issueId = ?', iss.body.id)).toBe(1);
+    expect(count('SELECT COUNT(*) c FROM rfi_photos WHERE rfiId = ?', rfi.body.id)).toBe(1);
   });
 });
 
@@ -757,6 +1070,114 @@ describe('unified project payment routes (admin-gated)', () => {
     expect(summary.status).toBe(200);
     expect(summary.body.paid.invoicesCents).toBe(30000);
     expect(summary.body.paid.payAppsCents).toBe(12500);
+  });
+});
+
+// The payment detail view (spec
+// docs/superpowers/specs/2026-10-06-payment-attachments-design.md).
+describe('payment detail, edit and attachment routes (admin-gated)', () => {
+  const events: EntityChangedEvent[] = [];
+  let adminApp: express.Express;
+  let invId: string;
+  let payId: string;
+
+  beforeEach(async () => {
+    events.length = 0;
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+    adminApp = express();
+    adminApp.use(express.json());
+    registerDataRoutes(adminApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'a1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: (e: EntityChangedEvent) => { events.push(e); },
+    });
+    invId = (await request(app).post('/api/projects/p1/invoices')
+      .send({ number: 'INV-5', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] })).body.id;
+    payId = (await request(app).post('/api/projects/p1/payments')
+      .send({ targetType: 'invoice', targetId: invId, date: 1000, amount: 40, method: 'check' })).body.id;
+    await request(app).post('/api/files/chk?projectId=p1&kind=payment-attachment&sourceType=payment&sourceId=x&name=Check.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('jpg'));
+    await request(app).post('/api/files/remit?projectId=p1&kind=document&name=Remittance.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
+    await request(app).post('/api/files/sheet?projectId=p1&kind=spreadsheet&name=Ledger.csv')
+      .set('Content-Type', 'text/csv').send(Buffer.from('a,b'));
+  });
+
+  it('rejects non-admins with 403 on every payment route', async () => {
+    const memberApp = express();
+    memberApp.use(express.json());
+    registerDataRoutes(memberApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+      broadcastChange: () => {},
+    });
+    expect((await request(memberApp).get(`/api/payments/${payId}`)).status).toBe(403);
+    expect((await request(memberApp).put(`/api/payments/${payId}`).send({ amount: 1 })).status).toBe(403);
+    expect((await request(memberApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'chk' })).status).toBe(403);
+    expect((await request(memberApp).delete(`/api/payments/${payId}/attachments/chk`)).status).toBe(403);
+    expect((await request(memberApp).delete(`/api/payments/${payId}`)).status).toBe(403);
+    expect((await request(app).get(`/api/payments/${payId}`)).body.amount).toBe(40); // nothing changed
+  });
+
+  it('GET returns the payment with its target label, project and attachments; 404 when unknown', async () => {
+    await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'chk' }).expect(200);
+    await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'remit' }).expect(200);
+    const res = await request(adminApp).get(`/api/payments/${payId}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: payId, targetType: 'invoice', targetId: invId, targetLabel: 'Invoice INV-5', projectId: 'p1', amount: 40 });
+    expect(res.body.attachments).toEqual([
+      expect.objectContaining({ fileId: 'chk', name: 'Check.jpg', mime: 'image/jpeg', kind: 'payment-attachment' }),
+      expect.objectContaining({ fileId: 'remit', name: 'Remittance.pdf', mime: 'application/pdf', kind: 'document' }),
+    ]);
+    expect((await request(adminApp).get('/api/payments/nope')).status).toBe(404);
+    // The project's list counts them for the row's paperclip.
+    expect((await request(adminApp).get('/api/projects/p1/payments')).body[0].attachmentCount).toBe(2);
+  });
+
+  it('PUT edits the payment and broadcasts payment updated with its project', async () => {
+    const res = await request(adminApp).put(`/api/payments/${payId}`).send({ date: 2000, amount: 55.5, method: 'ach', note: 'Wire ref 123' });
+    expect(res.status).toBe(200);
+    expect((await request(adminApp).get(`/api/payments/${payId}`)).body).toMatchObject({ date: 2000, amount: 55.5, method: 'ach', note: 'Wire ref 123' });
+    expect((await request(adminApp).get(`/api/invoices/${invId}`)).body.paidCents).toBe(5550);
+    expect(events).toEqual([expect.objectContaining({ type: 'payment', id: payId, projectId: 'p1', action: 'updated', byUserId: 'a1' })]);
+  });
+
+  it('PUT validates (400) and 404s an unknown payment, broadcasting nothing', async () => {
+    expect((await request(adminApp).put(`/api/payments/${payId}`).send({ amount: 0 })).status).toBe(400);
+    expect((await request(adminApp).put(`/api/payments/${payId}`).send({ amount: 'lots' })).status).toBe(400);
+    expect((await request(adminApp).put('/api/payments/nope').send({ amount: 5 })).status).toBe(404);
+    expect(events).toEqual([]);
+  });
+
+  it('POST/DELETE attachments link and unlink a photo or PDF and broadcast payment updated', async () => {
+    await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'chk' }).expect(200);
+    await request(adminApp).delete(`/api/payments/${payId}/attachments/chk`).expect(200);
+    expect((await request(adminApp).get(`/api/payments/${payId}`)).body.attachments).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'payment', id: payId, projectId: 'p1', action: 'updated' }),
+      expect.objectContaining({ type: 'payment', id: payId, projectId: 'p1', action: 'updated' }),
+    ]);
+  });
+
+  it('attachment routes: 400 without a fileId or for a non-photo/PDF, 404 for an unknown payment or file', async () => {
+    expect((await request(adminApp).post(`/api/payments/${payId}/attachments`).send({})).status).toBe(400);
+    expect((await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'sheet' })).status).toBe(400);
+    expect((await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'ghost' })).status).toBe(404);
+    expect((await request(adminApp).post('/api/payments/nope/attachments').send({ fileId: 'chk' })).status).toBe(404);
+    expect((await request(adminApp).delete('/api/payments/nope/attachments/chk')).status).toBe(404);
+    expect(events).toEqual([]);
+  });
+
+  it('DELETE removes the payment and its attachment rows, broadcasting with the project resolved first', async () => {
+    await request(adminApp).post(`/api/payments/${payId}/attachments`).send({ fileId: 'chk' }).expect(200);
+    events.length = 0;
+    await request(adminApp).delete(`/api/payments/${payId}`).expect(200);
+    expect(db.prepare('SELECT COUNT(*) c FROM payment_attachments WHERE paymentId = ?').get(payId)).toEqual({ c: 0 });
+    expect(events).toEqual([expect.objectContaining({ type: 'payment', id: payId, projectId: 'p1', action: 'deleted' })]);
   });
 });
 
@@ -991,32 +1412,6 @@ describe('AIA billing routes (admin-gated)', () => {
     expect(get.body.architect).toBe('AOR Inc');
     // survives a project reload
     expect(loadProject(db, 'p1').aiaSettings.retainagePercent).toBe(5);
-  });
-});
-
-describe('deleteProject issues cascade', () => {
-  it('removes issues and issue_photos for the project', async () => {
-    await request(app).post('/api/projects').send(PROJECT); // id p1
-    const iss = await request(app).post('/api/projects/p1/issues').send({ title: 'Crack', description: 'Wall crack' });
-    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg')
-      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
-    await request(app).post(`/api/issues/${iss.body.id}/photos`).send({ fileId: 'ph1' });
-    await request(app).delete('/api/projects/p1');
-    expect((db.prepare('SELECT COUNT(*) c FROM issues WHERE projectId = ?').get('p1') as any).c).toBe(0);
-    expect((db.prepare('SELECT COUNT(*) c FROM issue_photos WHERE issueId IN (SELECT id FROM issues WHERE projectId = ?)').get('p1') as any).c).toBe(0);
-  });
-});
-
-describe('deleteProject rfis cascade', () => {
-  it('removes rfis and rfi_photos for the project', async () => {
-    await request(app).post('/api/projects').send(PROJECT); // id p1
-    const rfi = await request(app).post('/api/projects/p1/rfis').send({ title: 'Detail question', question: 'Which finish?' });
-    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg')
-      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
-    await request(app).post(`/api/rfis/${rfi.body.id}/photos`).send({ fileId: 'ph1' });
-    await request(app).delete('/api/projects/p1');
-    expect((db.prepare('SELECT COUNT(*) c FROM rfis WHERE projectId = ?').get('p1') as any).c).toBe(0);
-    expect((db.prepare('SELECT COUNT(*) c FROM rfi_photos WHERE rfiId IN (SELECT id FROM rfis WHERE projectId = ?)').get('p1') as any).c).toBe(0);
   });
 });
 
@@ -1258,6 +1653,121 @@ describe('rfi pending-reply routes', () => {
     const id = await stageReply();
     await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({}).expect(200);
     expect((await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({})).status).toBe(409);
+  });
+});
+
+// PDF attachments on change orders, RFIs, issues and daily reports (migration
+// 42). Each set of routes sits behind the same gate as that record's photo
+// routes: change orders are admin-only, the field records are not.
+describe('PDF attachment routes', () => {
+  let broadcasts: EntityChangedEvent[];
+  let memberApp: express.Express;
+
+  beforeEach(async () => {
+    broadcasts = [];
+    memberApp = express();
+    memberApp.use(express.json({ limit: '50mb' }));
+    registerDataRoutes(memberApp, {
+      db,
+      dataDir: dir,
+      dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
+      requireAdmin: (_req: any, res: any) => res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+      broadcastChange: ev => { broadcasts.push(ev); },
+    });
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+    for (const id of ['spec1', 'spec2']) {
+      await request(app).post(`/api/files/${id}?projectId=p1&kind=document&name=${id}.pdf`)
+        .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4'));
+    }
+    await request(app).post('/api/files/img1?projectId=p1&kind=photo&name=p.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
+  });
+
+  const FIELD_RECORDS = [
+    { label: 'issues', base: '/api/issues', type: 'issue', create: async () => (await request(app).post('/api/projects/p1/issues').send({ title: 'Crack' })).body.id },
+    { label: 'RFIs', base: '/api/rfis', type: 'rfi', create: async () => (await request(app).post('/api/projects/p1/rfis').send({ title: 'Which finish?' })).body.id },
+    { label: 'daily reports', base: '/api/daily-reports', type: 'dailyReport', create: async () => (await request(app).post('/api/projects/p1/daily-reports').send({ crewId: await firstCrew(), reportDate: '2026-08-20' })).body.id },
+  ] as const;
+
+  for (const rec of FIELD_RECORDS) {
+    it(`${rec.label}: a member can add, reorder and remove; each change broadcasts without a version`, async () => {
+      const id = await rec.create();
+      const before = (await request(app).get(`${rec.base}/${id}`)).body;
+
+      await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'spec1' }).expect(200);
+      await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'spec2' }).expect(200);
+      let got = (await request(app).get(`${rec.base}/${id}`)).body;
+      expect(got.attachments).toEqual([
+        expect.objectContaining({ fileId: 'spec1', sortOrder: 0, name: 'spec1.pdf', mime: 'application/pdf' }),
+        expect.objectContaining({ fileId: 'spec2', sortOrder: 1, name: 'spec2.pdf' }),
+      ]);
+      // Like the photos: updatedAt moved (the generated PDF is now out of
+      // date), version did not (a dirty editor elsewhere can still save).
+      expect(got.version).toBe(before.version);
+      expect(got.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
+
+      await request(memberApp).patch(`${rec.base}/${id}/attachments/spec1`).send({ sortOrder: 5 }).expect(200);
+      got = (await request(app).get(`${rec.base}/${id}`)).body;
+      expect(got.attachments.map((a: any) => a.fileId)).toEqual(['spec2', 'spec1']);
+
+      await request(memberApp).delete(`${rec.base}/${id}/attachments/spec2`).expect(200);
+      got = (await request(app).get(`${rec.base}/${id}`)).body;
+      expect(got.attachments.map((a: any) => a.fileId)).toEqual(['spec1']);
+      expect(got.version).toBe(before.version);
+
+      expect(broadcasts).toHaveLength(4);
+      for (const ev of broadcasts) {
+        expect(ev).toMatchObject({ type: rec.type, id, projectId: 'p1', action: 'updated', byUserId: 'm1' });
+        expect(ev).not.toHaveProperty('version');
+      }
+    });
+
+    it(`${rec.label}: refuses a non-PDF (400), an unknown file or record (404), a missing fileId or bad sortOrder (400)`, async () => {
+      const id = await rec.create();
+      expect((await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'img1' })).status).toBe(400);
+      expect((await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'nope' })).status).toBe(404);
+      expect((await request(memberApp).post(`${rec.base}/${id}/attachments`).send({})).status).toBe(400);
+      expect((await request(memberApp).post(`${rec.base}/nope/attachments`).send({ fileId: 'spec1' })).status).toBe(404);
+      expect((await request(memberApp).patch(`${rec.base}/${id}/attachments/spec1`).send({ sortOrder: 0 })).status).toBe(404);
+      await request(memberApp).post(`${rec.base}/${id}/attachments`).send({ fileId: 'spec1' }).expect(200);
+      expect((await request(memberApp).patch(`${rec.base}/${id}/attachments/spec1`).send({ sortOrder: 'first' })).status).toBe(400);
+      expect((await request(app).get(`${rec.base}/${id}`)).body.attachments).toHaveLength(1);
+    });
+  }
+
+  it('change orders: admin-gated like their photos, and each change broadcasts the bumped version', async () => {
+    const id = (await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1' })).body.id;
+    expect((await request(memberApp).post(`/api/change-orders/${id}/attachments`).send({ fileId: 'spec1' })).status).toBe(403);
+    expect((await request(memberApp).patch(`/api/change-orders/${id}/attachments/spec1`).send({ sortOrder: 0 })).status).toBe(403);
+    expect((await request(memberApp).delete(`/api/change-orders/${id}/attachments/spec1`)).status).toBe(403);
+
+    const events: EntityChangedEvent[] = [];
+    const adminApp = express();
+    adminApp.use(express.json());
+    registerDataRoutes(adminApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'a1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: ev => { events.push(ev); },
+    });
+    const before = (await request(adminApp).get(`/api/change-orders/${id}`)).body.version;
+    expect((await request(adminApp).post(`/api/change-orders/${id}/attachments`).send({ fileId: 'img1' })).status).toBe(400);
+    expect((await request(adminApp).post(`/api/change-orders/${id}/attachments`).send({})).status).toBe(400);
+    await request(adminApp).post(`/api/change-orders/${id}/attachments`).send({ fileId: 'spec1' }).expect(200);
+    await request(adminApp).post(`/api/change-orders/${id}/attachments`).send({ fileId: 'spec2' }).expect(200);
+    await request(adminApp).patch(`/api/change-orders/${id}/attachments/spec2`).send({ sortOrder: -1 }).expect(200);
+    let got = (await request(adminApp).get(`/api/change-orders/${id}`)).body;
+    expect(got.attachments.map((a: any) => a.fileId)).toEqual(['spec2', 'spec1']);
+    expect(got.version).toBe(before + 3);
+    await request(adminApp).delete(`/api/change-orders/${id}/attachments/spec1`).expect(200);
+    got = (await request(adminApp).get(`/api/change-orders/${id}`)).body;
+    expect(got.attachments.map((a: any) => a.fileId)).toEqual(['spec2']);
+    expect(got.version).toBe(before + 4);
+    expect(events.map(e => e.version)).toEqual([before + 1, before + 2, before + 3, before + 4]);
+    for (const ev of events) expect(ev).toMatchObject({ type: 'changeOrder', id, projectId: 'p1', action: 'updated' });
   });
 });
 
@@ -1795,23 +2305,28 @@ describe('email send routes', () => {
     expect((await request(emailApp).post(`/api/rfis/${rfi.id}/send`).send({ to: 'a@b.com', fileId: 'primary' })).status).toBe(409);
   });
 
-  it('daily report send: default subject + date-only filename when jobName is blank', async () => {
-    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' })).body;
+  // One date can hold a report per crew, so the crew is in the subject and
+  // the attachment's name.
+  it('daily report send: default subject + crew-and-date filename when jobName is blank', async () => {
+    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ crewId: await firstCrew(), reportDate: '2026-08-20' })).body;
     const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
     expect(res.status).toBe(200);
     const m = provider.sent[0];
-    expect(m.subject).toBe('Daily Report — 2026-08-20');
-    expect(names(m.attachments)).toEqual(['DailyReport-2026-08-20.pdf']);
+    expect(m.subject).toBe('Daily Report — 2026-08-20 — Crew 1');
+    expect(names(m.attachments)).toEqual(['DailyReport-Crew-1-2026-08-20.pdf']);
+    expect(db.prepare(`SELECT message FROM activity WHERE type = 'daily_report_sent'`).get())
+      .toEqual({ message: 'Daily report 2026-08-20 (Crew 1) emailed to gc@example.com' });
   });
 
-  it('daily report send: sanitizes jobName into the attachment filename', async () => {
+  it('daily report send: sanitizes jobName and the crew name into the attachment filename', async () => {
+    const crew = (await request(app).post('/api/projects/p1/daily-report-crews').send({ name: 'Smith / Sons' })).body;
     const dr = (await request(app).post('/api/projects/p1/daily-reports')
-      .send({ reportDate: '2026-08-20', jobName: 'Dania Beach: "Unit 4"' })).body;
+      .send({ crewId: crew.id, reportDate: '2026-08-20', jobName: 'Dania Beach: "Unit 4"' })).body;
     const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
     expect(res.status).toBe(200);
     const m = provider.sent[0];
-    expect(m.subject).toBe('Daily Report — 2026-08-20 — Dania Beach: "Unit 4"');
-    expect(names(m.attachments)).toEqual(['DailyReport-Dania-Beach-Unit-4-2026-08-20.pdf']);
+    expect(m.subject).toBe('Daily Report — 2026-08-20 — Smith / Sons — Dania Beach: "Unit 4"');
+    expect(names(m.attachments)).toEqual(['DailyReport-Dania-Beach-Unit-4-Smith-Sons-2026-08-20.pdf']);
   });
 
   it('rfi send: marks rfi sent with sentAt set after send', async () => {

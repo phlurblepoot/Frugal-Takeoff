@@ -7,6 +7,7 @@ import {
   getChangeOrders, getChangeOrder, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
 } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import { formatBillingDate } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import {
@@ -107,7 +108,7 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
                     <TD className="text-ink-soft">{co.title || '—'}</TD>
                     <TD><ChangeOrderStatusPill status={co.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(co.totalCents)}</TD>
-                    <TD className="text-ink-soft">{co.date ? new Date(co.date).toLocaleDateString() : '—'}</TD>
+                    <TD className="text-ink-soft">{formatBillingDate(co.date)}</TD>
                     <TD onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
                         {docs.byId[co.id]?.file && (

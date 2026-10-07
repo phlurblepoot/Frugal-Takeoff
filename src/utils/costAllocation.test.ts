@@ -10,7 +10,8 @@
 // mixed custom costs, and the non-advanced costPerUnit fallback.
 import { describe, it, expect } from 'vitest';
 import { allocateSubsetCost, allocateSubsetDetails } from './costAllocation';
-import { TakeoffTotals } from '../pages/project/proposal/proposalGenerator';
+import { TakeoffTotals, computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
+import type { Project } from '../types';
 
 // Build a minimal TakeoffTotals fixture; only the fields the allocation
 // functions read (isAdvancedCost, customCosts, totalRealValue, costPerUnit)
@@ -227,5 +228,43 @@ describe('allocateSubsetDetails', () => {
     });
     const detailSum = allocateSubsetDetails(t, 40).reduce((s, d) => s + d.costValue, 0);
     expect(detailSum).toBeCloseTo(allocateSubsetCost(t, 40), 10);
+  });
+});
+
+// A multiplied measurement (× N) counts N times in its takeoff's total, and its
+// row's realValue is that multiplied value — so the Takeoffs tab's page and
+// measurement cost shares (these functions, unchanged) price it N times, flat
+// costs included, and the shares still add up to the takeoff.
+describe('cost shares of a multiplied measurement', () => {
+  // 1 px = 1 ft: a 100 px line is 100 ft; Base counts × 3, Trim once.
+  const project = {
+    id: 'pr', name: 'Job', createdAt: 0, planSets: [],
+    takeoffs: [{
+      id: 't1', name: 'Base', color: '#000', type: 'length', unit: 'ft', isAdvancedCost: true,
+      customCosts: [
+        { id: 'c1', name: 'Mobilization', type: 'flat', cost: 400 },
+        { id: 'c2', name: 'Labor', type: 'unit', costPerUnit: 2 },
+      ],
+    }],
+    pages: [{
+      id: 'p1', name: 'A-1', imageId: '', imageWidth: 0, imageHeight: 0,
+      scaleConfig: { pixelDistance: 1, realWorldDistance: 1, unit: 'ft' },
+      measurements: [
+        { id: 'm1', type: 'length', name: 'Base', color: '#000', takeoffId: 't1', multiplier: 3, points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+        { id: 'm2', type: 'length', name: 'Trim', color: '#000', takeoffId: 't1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+      ],
+    }],
+  } as unknown as Project;
+
+  it('prices the measurement row at its multiplied quantity, flat share included', () => {
+    const [t] = computeTakeoffTotals(project, new Set(['p1']));
+    expect(t.totalRealValue).toBe(400);
+    const [base, trim] = t.pageBreakdown[0].measurements;
+    // 300 of 400 ft: 400 * 300/400 + 300 * 2
+    expect(allocateSubsetCost(t, base.realValue)).toBe(900);
+    // 100 of 400 ft: 400 * 100/400 + 100 * 2
+    expect(allocateSubsetCost(t, trim.realValue)).toBe(300);
+    expect(allocateSubsetCost(t, base.realValue) + allocateSubsetCost(t, trim.realValue))
+      .toBeCloseTo(allocateSubsetCost(t, t.totalRealValue), 10);
   });
 });

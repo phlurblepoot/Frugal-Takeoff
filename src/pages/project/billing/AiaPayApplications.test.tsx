@@ -5,11 +5,12 @@
 // workbook without opening the editor (spec
 // docs/superpowers/specs/2026-08-29-document-actions-rollout-design.md).
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ToastProvider } from '../../../components/Toast';
 import type { AiaPayAppListItem } from '../../../utils/store';
+import { useTimeZone } from '../../../test/timeZone';
 
 const h = vi.hoisted(() => ({
   getPayApps: vi.fn(),
@@ -156,5 +157,27 @@ describe('AiaPayApplications — first application finalizes the SOV', () => {
     fireEvent.click(await screen.findByRole('button', { name: /new application/i }));
     await screen.findByLabelText('Period to');
     expect(screen.queryByText(/finalizes the schedule of values/i)).toBeNull();
+  });
+});
+
+describe('AiaPayApplications — dates west of UTC', () => {
+  useTimeZone('America/Los_Angeles');
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('shows the period-to and application dates as the days they say', async () => {
+    h.getPayApps.mockResolvedValue([app()]);
+    mount();
+    await screen.findByText('#1');
+    expect(screen.getByText(new Date(2026, 5, 30).toLocaleDateString())).toBeInTheDocument();
+    expect(screen.getByText(new Date(2026, 6, 1).toLocaleDateString())).toBeInTheDocument();
+  });
+
+  it('starts a new application\'s date at today on the local calendar', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.UTC(2026, 9, 7, 3, 30)); // Oct 6, 8:30pm in Los Angeles — already Oct 7 in UTC
+    mount();
+    await screen.findByText('#1');
+    fireEvent.click(screen.getByRole('button', { name: 'New application' }));
+    expect(await screen.findByLabelText('Application date')).toHaveValue('2026-10-06');
   });
 });

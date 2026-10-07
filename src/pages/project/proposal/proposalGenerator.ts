@@ -28,6 +28,7 @@ import {
   measurementAreaPx,
   measurementRings,
 } from '../../../utils/math';
+import { measurementMultiplier, formatMultiplied } from '../../../utils/multiplier';
 
 // Converts a data URL (e.g. "data:application/pdf;base64,...") to a fresh Uint8Array.
 export function dataUrlToUint8Array(dataUrl: string): Uint8Array {
@@ -265,10 +266,12 @@ export async function buildHighlightsPdf(
       }
       const isSurfaceArea = takeoff?.type === 'area' && m.type === 'length';
       const allSegPts = [m.points, ...(m.segments ?? []).map(s => s.points)];
+      // A multiplied measurement shows its math: "1250.00 sq ft × 4 = 5000.00 sq ft".
+      const multiplier = measurementMultiplier(m);
       let text = '';
-      if (isSurfaceArea) text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, page.scaleConfig), 0), 'area', page.scaleConfig, takeoff);
-      else if (m.type === 'length') text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0), 'length', page.scaleConfig, takeoff);
-      else text = formatMeasurement(measurementAreaPx(m), 'area', page.scaleConfig, takeoff);
+      if (isSurfaceArea) text = formatMultiplied(allSegPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, page.scaleConfig), 0), multiplier, v => formatMeasurement(v, 'area', page.scaleConfig, takeoff));
+      else if (m.type === 'length') text = formatMultiplied(allSegPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0), multiplier, v => formatMeasurement(v, 'length', page.scaleConfig, takeoff));
+      else text = formatMultiplied(measurementAreaPx(m), multiplier, v => formatMeasurement(v, 'area', page.scaleConfig, takeoff));
 
       if (text) {
         const fontSize = 14 * sf;
@@ -317,7 +320,7 @@ export async function buildHighlightsPdf(
             const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
             const sourceUnit = currentScale?.unit || 'ft';
             if (takeoff.type === 'count') totalRealValue += realValue;
-            else totalRealValue += convertUnit(realValue, sourceUnit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
+            else totalRealValue += convertUnit(realValue, sourceUnit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count') * measurementMultiplier(m);
           }
         }
         if (hasMeasurements) {
@@ -440,6 +443,18 @@ export function normalizeHighlightQuality(value: unknown): HighlightQuality {
   return value === 'email' || value === 'best' ? value : 'best';
 }
 
+// One measurement's row in a takeoff's page breakdown. realValue is what it
+// counts for — its measured baseValue × its multiplier (measurementMultiplier;
+// 1 for most) — and is what every total and cost share adds up.
+export type TakeoffMeasurementTotal = {
+  id: string;
+  name: string;
+  realValue: number;
+  unit: string;
+  baseValue: number;
+  multiplier: number;
+};
+
 // Per-takeoff totals as produced by ProjectView's getTakeoffTotals(): the base
 // takeoff augmented with computed totals + per-page breakdown.
 export type TakeoffTotals = MeasurementTakeoff & {
@@ -450,7 +465,7 @@ export type TakeoffTotals = MeasurementTakeoff & {
     pageName: string;
     realValue: number;
     unit: string;
-    measurements: { id: string; name: string; realValue: number; unit: string }[];
+    measurements: TakeoffMeasurementTotal[];
   }[];
 };
 
@@ -469,7 +484,7 @@ export function computeTakeoffTotals(
     let totalRealValue = 0;
     let displayUnit = takeoff.unit || '';
 
-    const pageBreakdown: { pageId: string; pageName: string; realValue: number; unit: string; measurements: { id: string; name: string; realValue: number; unit: string }[] }[] = [];
+    const pageBreakdown: TakeoffTotals['pageBreakdown'] = [];
 
     pagesToCalculate.forEach(page => {
       const takeoffMeasurements = page.measurements.filter(m => m.takeoffId === takeoff.id);
@@ -477,7 +492,7 @@ export function computeTakeoffTotals(
       if (takeoffMeasurements.length > 0) {
         let pageRealValue = 0;
         let pageUnit = '';
-        const measurementBreakdown: { id: string; name: string; realValue: number; unit: string }[] = [];
+        const measurementBreakdown: TakeoffMeasurementTotal[] = [];
 
         takeoffMeasurements.forEach(m => {
           // Determine which scale to use
@@ -491,6 +506,8 @@ export function computeTakeoffTotals(
 
           let measurementRealValue = 0;
           let measurementUnit = '';
+          // Count markers never multiply.
+          let multiplier = 1;
 
           if (takeoff.type === 'count') {
             measurementRealValue = 1;
@@ -516,17 +533,22 @@ export function computeTakeoffTotals(
 
               measurementRealValue = convertedVal;
               measurementUnit = targetUnit.startsWith('sq ') ? targetUnit : (takeoff.type === 'area' && !targetUnit.startsWith('sq ') ? `sq ${targetUnit}` : targetUnit);
+              multiplier = measurementMultiplier(m);
             }
           }
 
           if (measurementRealValue > 0) {
-            pageRealValue += measurementRealValue;
+            // What the measurement counts for: its measured value × its multiplier.
+            const countedValue = measurementRealValue * multiplier;
+            pageRealValue += countedValue;
             pageUnit = measurementUnit;
             measurementBreakdown.push({
               id: m.id,
               name: m.name,
-              realValue: measurementRealValue,
+              realValue: countedValue,
               unit: measurementUnit,
+              baseValue: measurementRealValue,
+              multiplier,
             });
           }
         });

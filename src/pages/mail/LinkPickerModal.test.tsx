@@ -25,7 +25,7 @@ vi.mock('../../utils/store', async orig => ({
   getPayApps: vi.fn(async () => [{ id: 'pa1', number: 1, projectId: 'p1' }]),
   getIssues: vi.fn(async () => [{ id: 'iss1', number: 4, title: 'Crack', projectId: 'p1' }]),
   getRfis: vi.fn(async () => [{ id: 'r1', number: 12, title: 'Detail', projectId: 'p1' }]),
-  getDailyReports: vi.fn(async () => [{ id: 'd1', reportDate: '2026-08-26', projectId: 'p1' }]),
+  getDailyReports: vi.fn(async () => [{ id: 'd1', reportDate: '2026-08-26', projectId: 'p1', crewId: 'c1', crewName: 'Crew 1' }]),
   getTasks: vi.fn(async () => [{ id: 't1', title: 'Order material', projectId: 'p1' }]),
 }));
 
@@ -101,7 +101,7 @@ describe('LinkPickerModal', () => {
     ['payApp', getPayApps, 'pa1', 'Pay App #1'],
     ['issue', getIssues, 'iss1', 'ISS-004 — Crack'],
     ['rfi', getRfis, 'r1', 'RFI-012 — Detail'],
-    ['dailyReport', getDailyReports, 'd1', 'Daily Report — 2026-08-26'],
+    ['dailyReport', getDailyReports, 'd1', 'Daily Report — 2026-08-26 — Crew 1'], // a date names a report only with its crew
     ['task', getTasks, 't1', 'Order material'],
   ] as const)('item drill (%s) fetches per-project rows and links the chosen one', async (type, fetcher, expectedId, expectedLabel) => {
     setup();
