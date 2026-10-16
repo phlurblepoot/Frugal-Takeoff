@@ -33,6 +33,13 @@ const editorUrl = (fileId: string) => `/tools/edit?fileId=${encodeURIComponent(f
 const isAdmin = () => {
   try { return JSON.parse(localStorage.getItem('user') || '{}').role === 'admin'; } catch { return false; }
 };
+// One-time "type on a form" tip for PDFs, remembered per signed-in user in
+// this browser.
+const PDF_TIP_KEY = 'pdfTextTipDismissed';
+const pdfTipKey = () => {
+  try { return `${PDF_TIP_KEY}:${JSON.parse(localStorage.getItem('user') || '{}').id ?? 'anon'}`; } catch { return `${PDF_TIP_KEY}:anon`; }
+};
+const pdfTipSeen = () => { try { return localStorage.getItem(pdfTipKey()) === '1'; } catch { return false; } };
 // The mobile top bar sits above every page on phones (AppShell); the editor
 // fills whatever is left.
 const FULL_HEIGHT = 'h-[calc(100dvh-3.5rem-env(safe-area-inset-top))] md:h-dvh';
@@ -105,6 +112,12 @@ const EditorView: React.FC<{ fileId: string; actionLink: Record<string, unknown>
   // the picker is open; and the project the document is filed in.
   const [inserting, setInserting] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
+  // One-time tip for a PDF opened for editing.
+  const [pdfTip, setPdfTip] = useState(false);
+  const dismissPdfTip = () => {
+    setPdfTip(false);
+    try { localStorage.setItem(pdfTipKey(), '1'); } catch { /* not remembered */ }
+  };
 
   const insertImages = async (fileIds: string[]) => {
     const c = inserting ?? 'add';
@@ -166,6 +179,7 @@ const EditorView: React.FC<{ fileId: string; actionLink: Record<string, unknown>
         const canRestore = opening.file.mode === 'edit';
         const editing = opening.file.mode === 'edit';
         setProjectId(opening.file.projectId ?? null);
+        setPdfTip(opening.file.ext?.toLowerCase() === 'pdf' && editing && !pdfTipSeen());
         const restart = () => { if (!cancelled) setGeneration(g => g + 1); };
         editor = new window.DocsAPI.DocEditor(placeholder.id, {
           ...opening.config,
@@ -278,6 +292,25 @@ const EditorView: React.FC<{ fileId: string; actionLink: Record<string, unknown>
         </div>
       )}
       {state.phase === 'error' && <OpenError fileId={fileId} state={state} onBack={close} />}
+      {state.phase === 'ready' && pdfTip && (
+        <div
+          role="status"
+          data-testid="pdf-text-tip"
+          className="absolute bottom-4 left-1/2 z-10 flex w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 items-start gap-3 rounded-lg border border-edge bg-surface px-4 py-3 text-sm text-ink shadow-lg"
+        >
+          <p className="min-w-0 flex-1">
+            <span className="font-semibold">Tip:</span> To type on a form without a box: click <b>Edit PDF</b>, then <b>Insert → Text Box</b>.
+          </p>
+          <button
+            type="button"
+            className="shrink-0 rounded p-1 text-ink-faint hover:bg-hover hover:text-ink"
+            aria-label="Dismiss tip"
+            onClick={dismissPdfTip}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
       <InsertImagePicker
         open={inserting !== null}
         onClose={() => setInserting(null)}

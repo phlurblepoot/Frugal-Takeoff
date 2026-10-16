@@ -370,3 +370,40 @@ describe('DocumentEditor — @mentions in comments (Phase 5)', () => {
     expect(ev.onRequestSendNotify).toBeUndefined();
   });
 });
+
+describe('DocumentEditor — one-time PDF text tip', () => {
+  const pdf = (over: Record<string, unknown> = {}) =>
+    opening({ file: { ...opening().file, name: 'Form.pdf', ext: 'pdf', ...over } });
+
+  it('shows the tip when a PDF opens for editing, and remembers the dismissal per user', async () => {
+    h.openInEditor.mockResolvedValue(pdf());
+    const first = mount();
+    expect(await screen.findByTestId('pdf-text-tip')).toHaveTextContent('Edit PDF');
+    fireEvent.click(screen.getByLabelText('Dismiss tip'));
+    expect(screen.queryByTestId('pdf-text-tip')).toBeNull();
+    first.unmount();
+
+    mount();
+    await waitFor(() => expect(screen.getByTestId('document-editor-host')).toBeInTheDocument());
+    await waitFor(() => expect(constructed).toHaveLength(2));
+    expect(screen.queryByTestId('pdf-text-tip')).toBeNull();
+
+    // A different user still sees it.
+    localStorage.setItem('user', JSON.stringify({ id: 'u2', username: 'sam', role: 'user' }));
+    mount();
+    expect(await screen.findByTestId('pdf-text-tip')).toBeInTheDocument();
+  });
+
+  it('does not show for other file types or view-only PDFs', async () => {
+    mount();
+    await waitFor(() => expect(constructed).toHaveLength(1));
+    expect(screen.queryByTestId('pdf-text-tip')).toBeNull();
+  });
+
+  it('does not show for a PDF opened view-only', async () => {
+    h.openInEditor.mockResolvedValue(pdf({ mode: 'view' }));
+    mount();
+    await waitFor(() => expect(constructed).toHaveLength(1));
+    expect(screen.queryByTestId('pdf-text-tip')).toBeNull();
+  });
+});
