@@ -46,7 +46,7 @@ export const ProjectTabBar: React.FC<{ projectId: string; isAdmin: boolean }> = 
         return (
           <button
             key={s.id}
-            onClick={() => navigate(`${base}${s.path}`)}
+            onClick={() => navigate(`${base}${s.path}`, { state: { stay: true } })}
             className={`flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               active ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink'
             }`}
