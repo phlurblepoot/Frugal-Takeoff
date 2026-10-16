@@ -29,6 +29,15 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.5.1',
+    date: 'October 16, 2026',
+    changes: [
+      'Fix: sharing a file to the app while signed out now brings you back to the share page with your files after you sign in, instead of the dashboard.',
+      'Change: the owner name on a new lien release now starts as the project name.',
+      'Change: lien release PDFs no longer print the reference line under the letterhead, and the signature and notary blocks fit on the first page.',
+    ],
+  },
+  {
     version: '4.5.0',
     date: 'October 15, 2026',
     changes: [
