@@ -8,7 +8,9 @@ import {
   ValidationError, ConflictError, NotFoundError, ProjectHasDataError, PROJECT_HAS_DATA_MESSAGE,
 } from './projectStore';
 import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions, removeFile, isDirectUploadKind, type FileMeta } from './files';
-import { pathFor, statFile, deleteFileContent } from './fileStore';
+import { pathFor, statFile, deleteFileContent, readFileContent } from './fileStore';
+import { mergePdfs, appendPages, PdfMergeError, type AppendSource, type InsertPosition } from './pdfMerge';
+import { randomUUID } from 'crypto';
 import { logActivity, listActivity } from './activity';
 import {
   listInvoices, getInvoice, createInvoice, saveInvoice, deleteInvoice,
@@ -1452,6 +1454,56 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
+  // Merge PDFs: the chosen documents, in the order given, become one new
+  // document. Registered before POST /api/files/:id so "merge-pdf" is not read
+  // as a file id.
+  app.post('/api/files/merge-pdf', express.json(), authenticateToken, async (req, res) => {
+    try {
+      const ids = req.body?.ids;
+      if (!Array.isArray(ids) || ids.length < 2 || ids.length > 50 || ids.some((i: unknown) => typeof i !== 'string' || !i)) {
+        return res.status(400).json({ error: 'Pick 2 to 50 PDFs to merge' });
+      }
+      const viewer = (req as any).user ?? {};
+      const metas: FileMeta[] = [];
+      const bufs: Buffer[] = [];
+      for (const id of ids as string[]) {
+        const meta = getMeta(db, id);
+        if (!meta || !mayViewFile(meta, viewer)) return res.status(404).json({ error: 'File not found' });
+        if (meta.mime !== 'application/pdf') return res.status(400).json({ error: `${meta.name ?? id} is not a PDF` });
+        const buf = readFileContent(dataDir, id);
+        if (!buf) return res.status(404).json({ error: 'File not found' });
+        metas.push(meta);
+        bufs.push(buf);
+      }
+      const merged = await mergePdfs(bufs);
+      const first = metas[0];
+      const sameProject = metas.every(m => m.projectId === first.projectId);
+      const sameCustomer = metas.every(m => m.customerId === first.customerId);
+      const rawName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+      const pickedProject = typeof req.body?.projectId === 'string' && req.body.projectId ? req.body.projectId : undefined;
+      const base = (first.name ?? 'Document').replace(/\.pdf$/i, '');
+      const name = rawName ? (/\.pdf$/i.test(rawName) ? rawName : `${rawName}.pdf`) : `${base} (merged).pdf`;
+      const result = putBuffer(db, dataDir, randomUUID(), merged, 'application/pdf', {
+        kind: 'document',
+        name,
+        // The dialog can pick the project when the PDFs span several.
+        projectId: pickedProject ?? (sameProject ? first.projectId ?? undefined : undefined),
+        customerId: sameCustomer ? first.customerId ?? undefined : undefined,
+        createdBy: viewer.id,
+      });
+      deps.onlyoffice?.thumbnails.enqueue(result.id);
+      deps.broadcastChange({
+        type: 'file', id: result.id, projectId: result.projectId ?? undefined,
+        action: 'created', ...requestMeta(req),
+      });
+      res.json({ success: true, fileId: result.id, name });
+    } catch (e) {
+      if (e instanceof PdfMergeError) return res.status(400).json({ error: e.message });
+      console.error('Error merging PDFs:', e);
+      res.status(500).json({ error: 'Failed to merge PDFs' });
+    }
+  });
+
   app.post(
     '/api/files/:id',
     express.raw({ limit: '100mb', type: () => true }),
@@ -1572,6 +1624,49 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       }
     }
   );
+
+  // Append pages: chosen pages of other PDFs go into this PDF (start, end, or
+  // after page N), saved as a new version of it.
+  app.post('/api/files/:id/append-pdf', express.json(), authenticateToken, async (req, res) => {
+    try {
+      const viewer = (req as any).user ?? {};
+      const target = getMeta(db, req.params.id);
+      if (!target || target.parentFileId || !mayViewFile(target, viewer)) return res.status(404).json({ error: 'File not found' });
+      if (target.mime !== 'application/pdf') return res.status(400).json({ error: 'This is not a PDF' });
+      const rawSources = req.body?.sources;
+      if (!Array.isArray(rawSources) || rawSources.length < 1 || rawSources.length > 50) {
+        return res.status(400).json({ error: 'Pick 1 to 50 PDFs to add pages from' });
+      }
+      const rawPos = req.body?.position;
+      let position: InsertPosition = 'end';
+      if (rawPos === 'start' || rawPos === 'end') position = rawPos;
+      else if (rawPos && typeof rawPos === 'object' && Number.isInteger(rawPos.afterPage)) position = { afterPage: rawPos.afterPage };
+      else if (rawPos !== undefined) return res.status(400).json({ error: 'Position must be start, end or after a page' });
+      const targetBuf = readFileContent(dataDir, target.id);
+      if (!targetBuf) return res.status(404).json({ error: 'File not found' });
+      const sources: AppendSource[] = [];
+      for (const s of rawSources) {
+        if (!s || typeof s.id !== 'string' || (s.pages !== undefined && typeof s.pages !== 'string')) {
+          return res.status(400).json({ error: 'Each source needs an id and optional pages' });
+        }
+        const meta = getMeta(db, s.id);
+        if (!meta || !mayViewFile(meta, viewer)) return res.status(404).json({ error: 'File not found' });
+        if (meta.mime !== 'application/pdf') return res.status(400).json({ error: `${meta.name ?? s.id} is not a PDF` });
+        const buf = readFileContent(dataDir, s.id);
+        if (!buf) return res.status(404).json({ error: 'File not found' });
+        sources.push({ bytes: buf, pages: s.pages });
+      }
+      const out = await appendPages(targetBuf, sources, position);
+      const result = saveNewVersion(db, dataDir, target.id, out, 'application/pdf', viewer.id, 'editor');
+      deps.onlyoffice?.thumbnails.enqueue(target.id);
+      deps.broadcastChange({ type: 'file', id: target.id, projectId: target.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, fileId: target.id, ...result });
+    } catch (e) {
+      if (e instanceof PdfMergeError) return res.status(400).json({ error: e.message });
+      console.error('Error appending PDF pages:', e);
+      res.status(500).json({ error: 'Failed to add pages' });
+    }
+  });
 
   app.get('/api/files/:id/versions', authenticateToken, (req, res) => {
     try {

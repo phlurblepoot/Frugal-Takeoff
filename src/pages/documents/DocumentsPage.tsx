@@ -17,6 +17,8 @@ import { useToast } from '../../components/Toast';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { DocumentsBulkBar } from './DocumentsBulkBar';
+import { AppendPagesModal } from './AppendPagesModal';
+import { MergePdfsModal } from './MergePdfsModal';
 import { useShare } from '../../components/ShareLinkModal';
 import { DocumentsFilterBar } from './DocumentsFilterBar';
 import { downloadBlob, DocumentsTable } from './DocumentsTable';
@@ -92,6 +94,8 @@ export const DocumentsPage: React.FC<{ projectId?: string }> = ({ projectId: loc
 
   const [rows, setRows] = useState<DocumentRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [appendTarget, setAppendTarget] = useState<DocumentRow | null>(null);
+  const [mergeRows, setMergeRows] = useState<DocumentRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -293,6 +297,11 @@ export const DocumentsPage: React.FC<{ projectId?: string }> = ({ projectId: loc
     await refresh(Math.max(rows.length, PAGE_SIZE));
   };
 
+  // Merge the selected PDFs, in the order they are listed, into one new
+  // document (server/pdfMerge.ts); the new row shows up after the refresh.
+  // The Merge PDFs dialog (order, name, project) opens first; it does the merge.
+  const mergePdfRows = async (targets: DocumentRow[]) => { setMergeRows(targets); };
+
   const bulkDownload = async (targets: DocumentRow[]) => {
     let ok = 0;
     for (const row of targets) {
@@ -410,6 +419,28 @@ export const DocumentsPage: React.FC<{ projectId?: string }> = ({ projectId: loc
         onChangeKind={changeKindBulk}
         onDelete={deleteRows}
         onShare={shareRows}
+        onMergePdfs={mergePdfRows}
+        onAppendPages={setAppendTarget}
+      />
+      <MergePdfsModal
+        open={!!mergeRows}
+        rows={mergeRows ?? []}
+        onClose={() => setMergeRows(null)}
+        onDone={async (count, name) => {
+          toast(`Merged ${count} PDFs into ${name}`, { type: 'success' });
+          clearSelection();
+          await refresh(Math.max(rows.length, PAGE_SIZE));
+        }}
+      />
+      <AppendPagesModal
+        open={!!appendTarget}
+        target={appendTarget}
+        onClose={() => setAppendTarget(null)}
+        onDone={async t => {
+          toast(`Pages added to ${t.name ?? "the PDF"} as a new version`, { type: "success" });
+          clearSelection();
+          await refresh(Math.max(rows.length, PAGE_SIZE));
+        }}
       />
 
       {loading ? (

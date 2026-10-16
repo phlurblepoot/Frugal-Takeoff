@@ -80,3 +80,61 @@ describe('DocumentsBulkBar share (ONLYOFFICE Phase 7)', () => {
     expect(screen.getByTestId('documents-bulk-share')).toHaveAttribute('title', 'Share up to 50 documents in one link');
   });
 });
+
+describe('DocumentsBulkBar merge PDFs', () => {
+  const pdf1 = row({ id: 'p1', name: 'one.pdf' });
+  const pdf2 = row({ id: 'p2', name: 'two.pdf' });
+  const img = row({ id: 'im', name: 'x.jpg', mime: 'image/jpeg', kind: 'photo' });
+
+  it('hands the handler only the selected PDFs', () => {
+    const onMergePdfs = vi.fn(async () => {});
+    render(
+      <DocumentsBulkBar
+        selected={[pdf1, img, pdf2]} customTypes={[]} archivedView={false}
+        onClear={vi.fn()} onDownload={vi.fn()} onArchive={vi.fn()} onChangeKind={vi.fn()}
+        onDelete={vi.fn()} onMergePdfs={onMergePdfs}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: 'Merge PDFs (2)' });
+    expect(btn).toBeEnabled();
+    fireEvent.click(btn);
+    expect(onMergePdfs).toHaveBeenCalledWith([pdf1, pdf2]);
+  });
+
+  it('is disabled with fewer than two PDFs selected', () => {
+    render(
+      <DocumentsBulkBar
+        selected={[pdf1, img]} customTypes={[]} archivedView={false}
+        onClear={vi.fn()} onDownload={vi.fn()} onArchive={vi.fn()} onChangeKind={vi.fn()}
+        onDelete={vi.fn()} onMergePdfs={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Merge PDFs (1)' })).toBeDisabled();
+  });
+});
+
+describe('DocumentsBulkBar append pages', () => {
+  const renderAppend = (selected: DocumentRow[]) => {
+    const onAppendPages = vi.fn();
+    render(
+      <DocumentsBulkBar
+        selected={selected} customTypes={[]} archivedView={false} onClear={vi.fn()}
+        onDownload={vi.fn(async () => {})} onArchive={vi.fn(async () => {})}
+        onChangeKind={vi.fn(async () => {})} onDelete={vi.fn(async () => {})}
+        onAppendPages={onAppendPages}
+      />,
+    );
+    return onAppendPages;
+  };
+
+  it('opens Append pages for exactly one selected PDF', () => {
+    const onAppendPages = renderAppend([docA]);
+    fireEvent.click(screen.getByTestId('documents-bulk-append'));
+    expect(onAppendPages).toHaveBeenCalledWith(docA);
+  });
+
+  it('is disabled for two rows or a non-PDF', () => {
+    renderAppend([docA, invoice]);
+    expect(screen.getByTestId('documents-bulk-append')).toBeDisabled();
+  });
+});
