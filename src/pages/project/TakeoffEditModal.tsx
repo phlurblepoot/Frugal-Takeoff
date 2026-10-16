@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { MeasurementTakeoff } from '../../types';
 import { UNIT_LABELS } from '../../utils/math';
 import { CustomCostRow } from '../../components/CustomCostRow';
+import { NumberInput } from '../../components/ui';
 
 interface TakeoffEditModalProps {
   editingTakeoff: MeasurementTakeoff;
@@ -147,8 +148,7 @@ export function TakeoffEditModal({
             </div>
             <div>
               <label className="block text-sm font-medium text-ink mb-1.5">Cost Per Unit ($)</label>
-              <input
-                type="number"
+              <NumberInput allowEmpty unstyled
                 min="0"
                 step="0.01"
                 disabled={isEditTakeoffAdvanced}

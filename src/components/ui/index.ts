@@ -8,6 +8,7 @@ export {
 } from './StatusPill';
 export type { PillTone } from './StatusPill';
 export { Field, Input, Select, Textarea, Checkbox } from './Form';
+export { NumberInput } from './NumberInput';
 export { Modal } from './Modal';
 export type { ModalProps } from './Modal';
 export { Table, THead, TBody, TR, TH, TD } from './Table';

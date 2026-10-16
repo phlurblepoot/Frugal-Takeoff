@@ -17,7 +17,7 @@ import { exportAiaXlsx, sanitizeFilename } from './aiaExcel';
 import { resolveAiaExportEnv, buildBlankSovContext } from './aiaExportShared';
 import { SplitSovLineModal } from './SplitSovLineModal';
 import {
-  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Skeleton,
+  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, NumberInput, Select, Skeleton,
   StatusPill, Table, TBody, TD, TH, THead, TR,
 } from '../../../components/ui';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
@@ -389,8 +389,8 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
             <TD className="text-ink-faint" colSpan={perLine ? 2 : 1}>—</TD>
           ) : (
             <>
-              <TD className="w-32"><Input type="number" value={eValue} onChange={e => setEValue(e.target.value)} placeholder="0.00" /></TD>
-              {perLine && <TD className="w-24"><Input type="number" value={eRetainage} onChange={e => setERetainage(e.target.value)} placeholder={`base ${baseRetainagePercent}%`} /></TD>}
+              <TD className="w-32"><NumberInput allowEmpty  value={eValue} onChange={e => setEValue(e.target.value)} placeholder="0.00" /></TD>
+              {perLine && <TD className="w-24"><NumberInput allowEmpty  value={eRetainage} onChange={e => setERetainage(e.target.value)} placeholder={`base ${baseRetainagePercent}%`} /></TD>}
             </>
           )}
           <TD>
@@ -560,8 +560,8 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
             )}
             {nType === 'item' && (
               <>
-                <div className="w-full sm:w-auto"><Field label="Scheduled value" htmlFor="sov-value"><Input id="sov-value" type="number" value={nValue} onChange={e => setNValue(e.target.value)} className="w-full sm:w-32" placeholder="0.00" /></Field></div>
-                {perLine && <div className="w-full sm:w-auto"><Field label="Retainage %" htmlFor="sov-ret"><Input id="sov-ret" type="number" value={nRetainage} onChange={e => setNRetainage(e.target.value)} className="w-full sm:w-28" placeholder={`base ${baseRetainagePercent}%`} /></Field></div>}
+                <div className="w-full sm:w-auto"><Field label="Scheduled value" htmlFor="sov-value"><NumberInput allowEmpty id="sov-value" value={nValue} onChange={e => setNValue(e.target.value)} className="w-full sm:w-32" placeholder="0.00" /></Field></div>
+                {perLine && <div className="w-full sm:w-auto"><Field label="Retainage %" htmlFor="sov-ret"><NumberInput allowEmpty id="sov-ret" value={nRetainage} onChange={e => setNRetainage(e.target.value)} className="w-full sm:w-28" placeholder={`base ${baseRetainagePercent}%`} /></Field></div>}
               </>
             )}
             <Button variant="secondary" onClick={addLine} className="w-full sm:w-auto"><Plus size={14} />Add line</Button>

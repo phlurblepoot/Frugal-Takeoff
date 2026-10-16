@@ -12,7 +12,7 @@ import { formatBillingDate, todayDay } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import {
-  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Skeleton,
+  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, NumberInput, Select, Skeleton,
   Table, TBody, TD, TH, THead, TR,
 } from '../../../components/ui';
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
@@ -161,7 +161,7 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
                 )}
               </Select>
             </Field>
-            <Field label="Amount" htmlFor="pay-amt"><Input id="pay-amt" type="number" value={amount} onChange={e => setAmount(e.target.value)} className="w-28" placeholder="0.00" /></Field>
+            <Field label="Amount" htmlFor="pay-amt"><NumberInput allowEmpty id="pay-amt" value={amount} onChange={e => setAmount(e.target.value)} className="w-28" placeholder="0.00" /></Field>
             <Field label="Date" htmlFor="pay-date"><Input id="pay-date" type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40" /></Field>
             <Field label="Method" htmlFor="pay-method">
               <Select id="pay-method" value={method} onChange={e => setMethod(e.target.value)}>

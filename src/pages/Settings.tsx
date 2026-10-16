@@ -16,7 +16,7 @@ import { useTheme, AccentKey } from '../context/ThemeContext';
 import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
-import { Field, Input } from '../components/ui';
+import { Field, Input, NumberInput } from '../components/ui';
 
 // ── Changelog data ────────────────────────────────────────────────────────────
 
@@ -27,6 +27,13 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '4.1.14',
+    date: 'October 15, 2026',
+    changes: [
+      'Number boxes are friendlier everywhere. An empty box shows a faded 0 instead of a real 0 you have to delete first, clearing a box no longer writes a 0 behind your back, and if you click away from a box left empty it goes back to its previous value. Boxes where empty is a real answer (for example a cleared retainage or an optional amount) still stay empty. This covers invoices, change orders, pay applications, the schedule of values, payments, proposals, daily reports, takeoff, canvas, backup and email settings.',
+    ],
+  },
   {
     version: '4.1.13',
     date: 'October 15, 2026',
@@ -1192,8 +1199,7 @@ const PreferencesTab: React.FC = () => {
               </p>
             </div>
             <div className="w-24 shrink-0">
-              <Input
-                type="number"
+              <NumberInput allowEmpty
                 min="0"
                 step="1"
                 value={aiIdleMinutes}
@@ -1713,7 +1719,7 @@ const AiaTemplateTab: React.FC = () => {
             </div>
             <div>
               <Field label="First data row">
-                <Input type="number" min={1} value={mapping.g703StartRow}
+                <NumberInput min={1} value={mapping.g703StartRow}
                   onChange={e => setMapping(m => ({ ...m, g703StartRow: parseInt(e.target.value) || 1 }))} placeholder="2" />
               </Field>
             </div>

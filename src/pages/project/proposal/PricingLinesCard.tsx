@@ -7,7 +7,7 @@ import { ArrowDown, ArrowUp, Plus, RotateCcw, Trash2, TriangleAlert } from 'luci
 import { v4 as uuidv4 } from 'uuid';
 import type { ProposalLine } from '../../../utils/store';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import { Button, Card, CardBody, CardHeader, Checkbox, Input, Select } from '../../../components/ui';
+import { Button, Card, CardBody, CardHeader, Checkbox, Input, NumberInput, Select } from '../../../components/ui';
 import { formatCurrency, type TakeoffTotals } from './proposalGenerator';
 import { isOverridden, lineFromTakeoff, measurementSummary, proposalTotals, toCents } from './proposalMath';
 import type { ManualLineMemory } from './proposalPrefs';
@@ -16,7 +16,7 @@ const money = (cents: number) => formatCurrency(cents / 100);
 
 // Amount fields are edited in dollars but stored in integer cents, so the
 // input keeps its own text while focused and only converts on commit.
-// The control is <input type="number">, so the browser has already rejected
+// The control is <NumberInput allowEmpty unstyled>, so the browser has already rejected
 // anything that isn't a number by the time this runs — a cleared or unparsable
 // field returns null and the caller restores the previous amount rather than
 // silently pricing the line at $0.
@@ -93,10 +93,9 @@ const LineRow: React.FC<{
           disabled={readOnly}
           onChange={e => onUpdate({ description: e.target.value })}
         />
-        <Input
+        <NumberInput allowEmpty
           className="w-32 text-right"
           aria-label="Amount"
-          type="number"
           step="0.01"
           value={amountText}
           disabled={readOnly}

@@ -19,8 +19,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ChevronDown, Cloud, DatabaseBackup, Download, HardDrive, Play, RefreshCw, Save } from 'lucide-react';
 import {
   Button, Card, CardBody, CardHeader, Checkbox, Field, Input, ProgressBar, Select, Skeleton, StatusPill,
-  Table, TBody, TD, TH, THead, TR,
-} from '../../components/ui';
+  Table, TBody, TD, TH, THead, TR, NumberInput } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
@@ -127,7 +126,7 @@ const SchedulePanel: React.FC<{
     </div>
     {note && <p className="text-xs text-ink-faint">{note}</p>}
     <Field label={keepLabel} htmlFor={keepId} hint={keepHint}>
-      <Input id={keepId} type="number" min={1} value={keep} onChange={e => onKeep(Number(e.target.value))} />
+      <NumberInput id={keepId} min={1} value={keep} onChange={e => onKeep(Number(e.target.value))} />
     </Field>
   </div>
 );

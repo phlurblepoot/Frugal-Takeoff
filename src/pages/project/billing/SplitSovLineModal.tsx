@@ -8,7 +8,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { AiaSovLine, splitSovLine } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
-import { Button, Input, Modal } from '../../../components/ui';
+import { Button, Input, Modal, NumberInput } from '../../../components/ui';
 
 interface Part { description: string; percent: string }
 
@@ -86,7 +86,7 @@ export const SplitSovLineModal: React.FC<{ line: AiaSovLine | null; onClose: () 
             {parts.map((p, i) => (
               <div key={i} className="flex items-center gap-2">
                 <Input data-testid="split-part-description" value={p.description} onChange={e => setPart(i, { description: e.target.value })} className="flex-1" aria-label={`Part ${i + 1} description`} />
-                <Input data-testid="split-part-percent" type="number" step="0.01" min="0" value={p.percent} onChange={e => setPart(i, { percent: e.target.value })} className="w-24 text-right" aria-label={`Part ${i + 1} percent`} />
+                <NumberInput allowEmpty data-testid="split-part-percent" step="0.01" min="0" value={p.percent} onChange={e => setPart(i, { percent: e.target.value })} className="w-24 text-right" aria-label={`Part ${i + 1} percent`} />
                 <span className="w-6 text-ink-faint">%</span>
                 <span className="w-28 text-right tabular-nums text-ink-soft">{formatMoney(cents[i] ?? 0)}</span>
                 <button onClick={() => setParts(ps => ps.filter((_, j) => j !== i))} disabled={parts.length <= 2} title="Remove part"

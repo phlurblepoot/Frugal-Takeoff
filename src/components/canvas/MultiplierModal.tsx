@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { MAX_MULTIPLIER, MIN_MULTIPLIER, parseMultiplierInput } from '../../utils/multiplier';
+import { NumberInput } from '../ui';
 
 interface MultiplierModalProps {
   measurementName: string;
@@ -32,10 +33,9 @@ export const MultiplierModal: React.FC<MultiplierModalProps> = ({ measurementNam
         </div>
         <div className="p-6">
           <label htmlFor="multiplier-input" className="block text-xs font-medium text-ink-soft mb-1">Counts ×</label>
-          <input
+          <NumberInput unstyled
             id="multiplier-input"
             data-testid="multiplier-input"
-            type="number"
             inputMode="numeric"
             min={MIN_MULTIPLIER}
             max={MAX_MULTIPLIER}

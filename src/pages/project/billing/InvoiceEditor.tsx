@@ -9,7 +9,7 @@ import {
 import { formatMoney } from '../../../utils/money';
 import { billingDay, formatBillingDate } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
-import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR, Textarea } from '../../../components/ui';
+import { Button, Field, Input, Modal, NumberInput, Table, TBody, TD, TH, THead, TR, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { PdfAttachmentsCard } from '../../../components/documents/PdfAttachmentsCard';
@@ -259,8 +259,8 @@ export const InvoiceEditor: React.FC<{
             {lines.map((l, i) => (
               <TR key={i}>
                 <TD><Input value={l.description} onChange={e => setLine(i, { description: e.target.value })} /></TD>
-                <TD className="w-20"><Input type="number" value={String(l.qty)} onChange={e => setLine(i, { qty: parseFloat(e.target.value) || 0 })} /></TD>
-                <TD className="w-28"><Input type="number" value={String(l.unitPrice)} onChange={e => setLine(i, { unitPrice: parseFloat(e.target.value) || 0 })} /></TD>
+                <TD className="w-20"><NumberInput value={String(l.qty)} onChange={e => setLine(i, { qty: parseFloat(e.target.value) || 0 })} /></TD>
+                <TD className="w-28"><NumberInput value={String(l.unitPrice)} onChange={e => setLine(i, { unitPrice: parseFloat(e.target.value) || 0 })} /></TD>
                 <TD className="text-ink-soft">{formatMoney(lineCents(l))}</TD>
                 <TD><button onClick={() => removeLine(i)} title="Remove" className="rounded-md p-1 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button></TD>
               </TR>

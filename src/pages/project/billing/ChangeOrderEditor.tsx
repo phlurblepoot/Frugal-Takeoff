@@ -10,7 +10,7 @@ import {
 import { formatMoney } from '../../../utils/money';
 import { billingDay } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
-import { Button, Field, Input, Modal, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
+import { Button, Field, Input, Modal, NumberInput, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { PdfAttachmentsCard } from '../../../components/documents/PdfAttachmentsCard';
@@ -239,7 +239,7 @@ export const ChangeOrderEditor: React.FC<{
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Field label="Number" htmlFor="co-num"><Input id="co-num" value={number} onChange={e => setNumber(e.target.value)} /></Field>
         <Field label="Date" htmlFor="co-date"><Input id="co-date" type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
-        <Field label="Schedule impact (days)" htmlFor="co-impact"><Input id="co-impact" type="number" value={scheduleImpactDays} onChange={e => setScheduleImpactDays(e.target.value)} placeholder="0" /></Field>
+        <Field label="Schedule impact (days)" htmlFor="co-impact"><NumberInput allowEmpty id="co-impact" value={scheduleImpactDays} onChange={e => setScheduleImpactDays(e.target.value)} placeholder="0" /></Field>
       </div>
 
       <div className="mt-3">
@@ -261,8 +261,8 @@ export const ChangeOrderEditor: React.FC<{
             {lines.map((l, i) => (
               <TR key={i}>
                 <TD><Input value={l.description} onChange={e => setLine(i, { description: e.target.value })} /></TD>
-                <TD className="w-20"><Input type="number" value={String(l.qty)} onChange={e => setLine(i, { qty: parseFloat(e.target.value) || 0 })} /></TD>
-                <TD className="w-28"><Input type="number" value={String(l.unitPrice)} onChange={e => setLine(i, { unitPrice: parseFloat(e.target.value) || 0 })} /></TD>
+                <TD className="w-20"><NumberInput value={String(l.qty)} onChange={e => setLine(i, { qty: parseFloat(e.target.value) || 0 })} /></TD>
+                <TD className="w-28"><NumberInput value={String(l.unitPrice)} onChange={e => setLine(i, { unitPrice: parseFloat(e.target.value) || 0 })} /></TD>
                 <TD className="text-ink-soft">{formatMoney(lineCents(l))}</TD>
                 <TD><button onClick={() => removeLine(i)} title="Remove" className="rounded-md p-1 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button></TD>
               </TR>
@@ -272,7 +272,7 @@ export const ChangeOrderEditor: React.FC<{
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Field label="Lump sum" htmlFor="co-lump"><Input id="co-lump" type="number" value={lumpSumAmount} onChange={e => setLumpSumAmount(e.target.value)} placeholder="0.00" /></Field>
+        <Field label="Lump sum" htmlFor="co-lump"><NumberInput allowEmpty id="co-lump" value={lumpSumAmount} onChange={e => setLumpSumAmount(e.target.value)} placeholder="0.00" /></Field>
       </div>
 
       <div className="mt-4 flex justify-end gap-6 border-t border-edge pt-3 text-sm">
