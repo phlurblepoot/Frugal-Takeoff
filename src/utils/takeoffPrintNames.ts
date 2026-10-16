@@ -17,4 +17,4 @@ export const takeoffPrintName = (projectName: string, kind: 'pdf' | 'excel', whe
 };
 
 export const takeoffPrintsUrl = (projectId: string) =>
-  `/documents?projectIds=${projectId}&kinds=takeoff-print,takeoff-export`;
+  `/project/${projectId}/documents?kinds=takeoff-print,takeoff-export`;

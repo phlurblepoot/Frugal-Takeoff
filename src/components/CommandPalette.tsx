@@ -150,7 +150,7 @@ export const CommandPalette: React.FC = () => {
       { id: 'ctx:new-task', type: 'action' as const, title: 'New task', subtitle: 'Project', icon: <ListTodo size={16} />, run: () => navigate('/tasks?new=1') },
       { id: 'ctx:overview', type: 'action' as const, title: 'Project overview', subtitle: 'Project', icon: <LayoutGrid size={16} />, run: () => navigate(`/project/${projectId}`) },
       { id: 'ctx:takeoff', type: 'action' as const, title: 'Takeoff & estimate', subtitle: 'Project', icon: <Ruler size={16} />, run: () => navigate(`/project/${projectId}/takeoff`) },
-      { id: 'ctx:documents', type: 'action' as const, title: 'Documents', subtitle: 'Project', icon: <FolderOpen size={16} />, run: () => navigate(`/documents?projectIds=${projectId}`) },
+      { id: 'ctx:documents', type: 'action' as const, title: 'Documents', subtitle: 'Project', icon: <FolderOpen size={16} />, run: () => navigate(`/project/${projectId}/documents`) },
       { id: 'ctx:punch', type: 'action' as const, title: 'Punch & checklists', subtitle: 'Project', icon: <ClipboardCheck size={16} />, run: () => navigate(`/project/${projectId}/punch`) },
       { id: 'ctx:issues', type: 'action' as const, title: 'Issues', subtitle: 'Project', icon: <AlertCircle size={16} />, run: () => navigate(`/project/${projectId}/issues`) },
       { id: 'ctx:rfis', type: 'action' as const, title: 'RFIs', subtitle: 'Project', icon: <MessageCircleQuestion size={16} />, run: () => navigate(`/project/${projectId}/rfis`) },

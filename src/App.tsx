@@ -9,7 +9,7 @@ import { ProjectView } from './pages/ProjectView';
 import { CanvasView } from './pages/CanvasView';
 import { ProjectLayout } from './pages/project/ProjectLayout';
 import { ProjectOverview } from './pages/project/ProjectOverview';
-import { DocumentsPage, ProjectDocumentsRedirect } from './pages/documents/DocumentsPage';
+import { DocumentsPage, ProjectDocuments } from './pages/documents/DocumentsPage';
 import { MailPage } from './pages/mail/MailPage';
 import { ProjectNotes } from './pages/project/ProjectNotes';
 import { ProjectTime } from './pages/project/ProjectTime';
@@ -145,7 +145,7 @@ const router = createBrowserRouter([
             { path: 'takeoff', element: <ProjectView /> },
             { path: 'proposal', element: <ProposalsList /> },
             { path: 'proposal/:proposalId', element: <ProposalEditor /> },
-            { path: 'documents', element: <ProjectDocumentsRedirect /> },
+            { path: 'documents', element: <ProjectDocuments /> },
             { path: 'notes', element: <ProjectNotes /> },
             { path: 'time', element: <ProjectTime /> },
             { path: 'punch', element: <ProjectPunch /> },
