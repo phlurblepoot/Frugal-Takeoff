@@ -2,7 +2,8 @@
 // (ONLYOFFICE Phase 5, added 2026-09-27). It shows what the server pushes
 // (server/push.ts) and opens the right page when one is tapped.
 //
-// Deliberately nothing else: no caching, no offline copy, so a new release is
+// Also catches the Android share-sheet POST (bottom of this file). Otherwise
+// deliberately nothing else: no caching, no offline copy, so a new release is
 // never hidden behind an old one.
 
 self.addEventListener('install', () => { self.skipWaiting(); });
@@ -44,5 +45,33 @@ self.addEventListener('notificationclick', event => {
     const url = new URL(link, self.location.origin);
     if (id) url.searchParams.set('fromNotification', id);
     await self.clients.openWindow(url.href);
+  })());
+});
+
+// Share into the app (Android share sheet). The manifest's share_target POSTs
+// here; there is no server route for it. Park the files in the cache for the
+// share page (src/pages/ShareTargetPage.tsx), then redirect to it. Keep the
+// cache name in step with the page.
+const SHARE_CACHE = 'share-target-v1';
+
+self.addEventListener('fetch', event => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== 'POST' || url.origin !== self.location.origin || url.pathname !== '/share-target') return;
+  event.respondWith((async () => {
+    try {
+      const form = await event.request.formData();
+      const cache = await caches.open(SHARE_CACHE);
+      for (const key of await cache.keys()) await cache.delete(key);
+      const files = form.getAll('files').filter(f => typeof f !== 'string');
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        await cache.put('/share-target/file/' + i, new Response(f, {
+          headers: { 'Content-Type': f.type || 'application/octet-stream', 'X-File-Name': encodeURIComponent(f.name || 'shared-file') },
+        }));
+      }
+      const note = { title: String(form.get('title') || ''), text: String(form.get('text') || ''), url: String(form.get('url') || '') };
+      await cache.put('/share-target/meta', new Response(JSON.stringify(note), { headers: { 'Content-Type': 'application/json' } }));
+    } catch { /* fall through to the page, which shows nothing to file */ }
+    return Response.redirect('/share-target?shared=1', 303);
   })());
 });

@@ -6,7 +6,7 @@ export interface Addr { addr: string; name?: string }
 
 /** The closed set of app entities a mail thread can be linked to (server/mail/links.ts ItemType). */
 export type ItemType =
-  | 'proposal' | 'invoice' | 'changeOrder' | 'payApp' | 'issue' | 'rfi'
+  | 'proposal' | 'invoice' | 'changeOrder' | 'lienRelease' | 'payApp' | 'issue' | 'rfi'
   | 'dailyReport' | 'punch' | 'task' | 'project' | 'customer';
 
 export type MailAccountStatus = 'ok' | 'syncing' | 'auth_error' | 'needs_review' | 'disabled';
@@ -142,6 +142,12 @@ export interface BodyPayload {
   text: string;
   blockedRemoteImages: number;
   attachments: AttachmentMeta[];
+  /** True when remote images were let through (asked for, or sender trusted). */
+  imagesAllowed?: boolean;
+  /** Lower-cased sender address, for "always load from". */
+  sender?: string | null;
+  /** The signed-in user always loads images from `sender`. */
+  senderTrusted?: boolean;
 }
 
 /** GET /api/mail/messages/:id/body can 202 while a just-sent message's Graph
@@ -164,6 +170,21 @@ export interface SendRequest {
   replyTo?: { accountId: string; threadKey: string };
   links?: Array<{ itemType: ItemType; itemId: string }>;
   draftProviderId?: string;
+}
+
+/** GET /api/mail/messages/:id/draft — a draft reopened in the composer.
+ *  `draftId` is the provider id the draft routes and send's draftProviderId take. */
+export interface OpenedDraft {
+  messageId: string;
+  accountId: string;
+  draftId: string;
+  to: Addr[];
+  cc: Addr[];
+  bcc: Addr[];
+  subject: string;
+  html: string;
+  attachments: Array<{ uploadId: string; name: string; size: number }>;
+  replyTo: { accountId: string; threadKey: string } | null;
 }
 
 export interface SendResult {

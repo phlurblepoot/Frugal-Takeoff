@@ -781,6 +781,87 @@ describe('mail routes', () => {
     expect((await request(app).get('/api/mail/setup-info')).status).toBe(403);
   });
 
+  it('draft saves carry staged uploads and keep them, and reject oversize totals', async () => {
+    const up = await request(app).post('/api/mail/uploads').query({ name: 'a.txt' }).set('content-type', 'text/plain').send(Buffer.from('hello'));
+    expect(up.status).toBe(200);
+    const d = await request(app).post('/api/mail/drafts').send({ accountId: acct.id, to: [], subject: 's', html: '', attachments: [{ uploadId: up.body.uploadId }] });
+    expect(d.status).toBe(200);
+    const saved = provider.drafts.get(d.body.draftId);
+    expect(saved?.attachments.map(x => x.name)).toEqual(['a.txt']);
+    expect(saved?.attachments[0].content.toString()).toBe('hello');
+    const again = await request(app).put(`/api/mail/drafts/${d.body.draftId}`).send({ accountId: acct.id, to: [], subject: 's', html: '', attachments: [{ uploadId: up.body.uploadId }] });
+    expect(again.status).toBe(200);   // still staged after the first save
+    const bad = await request(app).post('/api/mail/drafts').send({ accountId: acct.id, to: [], subject: 's', html: '', attachments: [{ uploadId: '00000000-0000-0000-0000-000000000000' }] });
+    expect(bad.status).toBe(400);
+    const big = await request(app).post('/api/mail/uploads').query({ name: 'big.bin' }).set('content-type', 'application/octet-stream').send(Buffer.alloc(14 * 1024 * 1024));
+    const big2 = await request(app).post('/api/mail/uploads').query({ name: 'big2.bin' }).set('content-type', 'application/octet-stream').send(Buffer.alloc(14 * 1024 * 1024));
+    const over = await request(app).post('/api/mail/drafts').send({ accountId: acct.id, to: [], subject: 's', html: '', attachments: [{ uploadId: big.body.uploadId }, { uploadId: big2.body.uploadId }] });
+    expect(over.status).toBe(413);
+  });
+
+  it('reopens a reply draft with its content and attachments, keeps it threaded, and send removes it', async () => {
+    const draftEnv = env('dr1', {
+      messageIdHeader: 'dr1@bb.com', inReplyTo: 'm1@teg.com', references: ['m1@teg.com'],
+      from: { addr: 'me@bb.com' }, to: [{ addr: 'gc@teg.com', name: 'Mike' }], cc: [{ addr: 'pm@teg.com' }],
+      subject: 'Re: CO 4', date: '2026-08-11T10:00:00.000Z', isRead: true, isDraft: true, folderProviderIds: ['DRAFTS'],
+      html: '<p style="color:red">Draft text <img src="https://x/logo.png"><script>alert(1)</script></p>',
+      attachments: [{ attId: 'da1', name: 'takeoff.pdf', mime: 'application/pdf', size: 4 }],
+      attachmentBytes: { da1: Buffer.from('%PDF') },
+    });
+    provider.seed([env('m1'), draftEnv]);
+    upsertEnvelopes(ctx, acct, [draftEnv]);
+    const row = db.prepare("SELECT id, threadKey FROM mail_messages WHERE providerMessageId = 'dr1'").get() as { id: string; threadKey: string };
+    const parentThread = (db.prepare("SELECT threadKey FROM mail_messages WHERE providerMessageId = 'm1'").get() as { threadKey: string }).threadKey;
+
+    const r = await request(app).get(`/api/mail/messages/${row.id}/draft`);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      accountId: acct.id, draftId: 'dr1', subject: 'Re: CO 4',
+      to: [{ addr: 'gc@teg.com', name: 'Mike' }], cc: [{ addr: 'pm@teg.com' }],
+      replyTo: { accountId: acct.id, threadKey: parentThread },
+    });
+    // Lightly cleaned: styles and remote images stay, script goes.
+    expect(r.body.html).toContain('style="color:red"');
+    expect(r.body.html).toContain('src="https://x/logo.png"');
+    expect(r.body.html).not.toContain('script');
+    // The draft's attachment comes back as a staged upload the next save can carry.
+    expect(r.body.attachments).toEqual([{ uploadId: expect.any(String), name: 'takeoff.pdf', size: 4 }]);
+    const uploadId = r.body.attachments[0].uploadId;
+
+    // Saving updates the SAME provider draft and answers the parent, never the draft itself.
+    const put = await request(app).put('/api/mail/drafts/dr1').send({
+      accountId: acct.id, to: [{ addr: 'gc@teg.com' }], subject: 'Re: CO 4', html: '<p>edited</p>',
+      attachments: [{ uploadId }], replyTo: r.body.replyTo,
+    });
+    expect(put.status).toBe(200);
+    expect(put.body.draftId).toBe('dr1');
+    const saved = provider.drafts.get('dr1')!;
+    expect(saved.inReplyTo).toBe('m1@teg.com');
+    expect(saved.references).toEqual(['m1@teg.com']);
+    expect(saved.attachments.map(a => [a.name, a.content.toString()])).toEqual([['takeoff.pdf', '%PDF']]);
+
+    const seen: Array<{ type: string; id: string }> = [];
+    ctx.broadcastChange = ev => { seen.push(ev); };
+    const s = await request(app).post('/api/mail/send').send({
+      accountId: acct.id, to: [{ addr: 'gc@teg.com' }], subject: 'Re: CO 4', html: '<p>edited</p>',
+      attachments: [{ uploadId }], replyTo: r.body.replyTo, draftProviderId: 'dr1',
+    });
+    expect(s.status).toBe(200);
+    // The draft's local row is gone at once (not at the next sync), and the change was broadcast.
+    expect(db.prepare("SELECT 1 FROM mail_messages WHERE providerMessageId = 'dr1'").get()).toBeUndefined();
+    expect(seen.some(e => e.type === 'mailThread')).toBe(true);
+    expect(provider.sent.at(-1)!.inReplyTo).toBe('m1@teg.com');
+    expect(s.body.threadKey).toBe(parentThread);
+    expect(provider.drafts.has('dr1')).toBe(false);
+  });
+
+  it('opening a draft refuses a non-draft and another user\'s message', async () => {
+    const id = firstMessageId();
+    expect((await request(app).get(`/api/mail/messages/${id}/draft`)).status).toBe(400);
+    currentUser = { id: 'u2', role: 'user' };
+    expect((await request(app).get(`/api/mail/messages/${id}/draft`)).status).toBe(404);
+  });
+
   it('drafts routes are scoped to the caller\'s own account', async () => {
     currentUser = { id: 'u2', role: 'user' };
     expect((await request(app).post('/api/mail/drafts').send({ accountId: acct.id, to: [], subject: 'x', html: '' })).status).toBe(404);
@@ -1750,5 +1831,18 @@ describe('mail _test fixture routes', () => {
     // The other thread is untouched.
     const other = await request(fakeApp).get(`/api/mail/threads/${accountId}/${threadKeys[1]}`);
     expect(other.body.thread.messageCount).toBe(1);
+  });
+});
+
+describe('trusted image senders (per user)', () => {
+  it('stores, lists and removes a sender for the signed-in user only', async () => {
+    expect((await request(app).put('/api/mail/image-senders').send({ addr: 'Bob@Example.com ' })).status).toBe(204);
+    expect((await request(app).get('/api/mail/image-senders')).body.senders).toEqual(['bob@example.com']);
+    currentUser = { id: 'u2', role: 'user' };
+    expect((await request(app).get('/api/mail/image-senders')).body.senders).toEqual([]);
+    currentUser = { id: 'u1', role: 'user' };
+    expect((await request(app).delete('/api/mail/image-senders').query({ addr: 'bob@example.com' })).status).toBe(204);
+    expect((await request(app).get('/api/mail/image-senders')).body.senders).toEqual([]);
+    expect((await request(app).put('/api/mail/image-senders').send({ addr: 'nope' })).status).toBe(400);
   });
 });

@@ -12,12 +12,13 @@ import { formatBillingDate, todayDay } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import {
-  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Skeleton,
+  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, NumberInput, Select, Skeleton,
   Table, TBody, TD, TH, THead, TR,
 } from '../../../components/ui';
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
 import { useDropZone } from '../../../hooks/useDropZone';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
+import { LienReleaseLauncher } from './LienReleaseLauncher';
 import { PAYMENT_ATTACHMENT_KIND, PAYMENT_METHODS, PaymentDetailModal, paymentMethodLabel } from './PaymentDetailModal';
 
 // A photo or PDF picked for a payment that isn't recorded yet: a new file
@@ -161,7 +162,7 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
                 )}
               </Select>
             </Field>
-            <Field label="Amount" htmlFor="pay-amt"><Input id="pay-amt" type="number" value={amount} onChange={e => setAmount(e.target.value)} className="w-28" placeholder="0.00" /></Field>
+            <Field label="Amount" htmlFor="pay-amt"><NumberInput allowEmpty id="pay-amt" value={amount} onChange={e => setAmount(e.target.value)} className="w-28" placeholder="0.00" /></Field>
             <Field label="Date" htmlFor="pay-date"><Input id="pay-date" type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40" /></Field>
             <Field label="Method" htmlFor="pay-method">
               <Select id="pay-method" value={method} onChange={e => setMethod(e.target.value)}>
@@ -232,6 +233,7 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
                           <Paperclip size={13} />{p.attachmentCount}
                         </span>
                       )}
+                      <LienReleaseLauncher projectId={projectId} paymentId={p.id} variant={{ paymentType: 'progress', conditional: false }} label="Unconditional release for this payment" buttonVariant="ghost" testId={`payment-lien-release-${p.id}`} />
                       <button onClick={() => { void remove(p.id); }} title="Delete" aria-label="Delete payment" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
                     </div>
                   </TD>

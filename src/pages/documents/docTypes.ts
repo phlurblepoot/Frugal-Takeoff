@@ -36,6 +36,7 @@ const KIND_META: Record<string, KindMeta> = {
   invoice:              { label: 'Invoice',            tone: 'emerald' },
   'change-order':       { label: 'Change Order',       tone: 'amber' },
   'change-order-photo': { label: 'Change Order Photo', tone: 'amber' },
+  'lien-release':       { label: 'Lien Release',       tone: 'emerald' },
   'payapp-export':      { label: 'Pay App Export',     tone: 'emerald' },
   'payapp-pdf':         { label: 'Pay App PDF',        tone: 'emerald' },
   'issue-report':       { label: 'Issue',              tone: 'red' },

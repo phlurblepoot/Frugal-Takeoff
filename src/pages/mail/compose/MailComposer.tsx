@@ -29,7 +29,7 @@ import type { Addr, ItemType, MailAccount, MessageRow, SendRequest, SendResult }
 import { RecipientsField, mergeAddrs, parseAddr, type RecipientsFieldHandle } from './RecipientsField';
 import { RichTextEditor } from './RichTextEditor';
 import { useDraftAutosave, type DraftSnapshot } from './useDraftAutosave';
-import { forwardSubject, quoteForForward, quoteForReply, replyAllRecipients, replySubject } from './quote';
+import { forwardSubject, quoteForForward, quoteForReply, replyAllRecipients, replySubject, splitDraftQuote } from './quote';
 
 export type ComposerAttachment =
   | { kind: 'file'; fileId: string; name: string; size?: number; itemType?: ItemType; itemId?: string }
@@ -66,6 +66,11 @@ export interface MailComposerProps {
    *  false through the initial seed (including the async always-Cc merge)
    *  and only flips once something the user actually did would be lost. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** A draft reopened from the mailbox (spec §9). Its content arrives in
+   *  `initial`; this says which provider draft to keep updating, in which
+   *  account, and which thread it answers. A resumed draft gets no signature
+   *  and no always-Cc (it already has whatever it was saved with). */
+  resumeDraft?: { accountId: string; draftId: string; replyTo?: { accountId: string; threadKey: string } | null };
 }
 
 /**
@@ -80,6 +85,8 @@ export function itemTypeFromSource(sourceType?: string | null): ItemType | undef
     case 'invoice': return 'invoice';
     case 'change-order':
     case 'changeOrder': return 'changeOrder';
+    case 'lien-release':
+    case 'lienRelease': return 'lienRelease';
     case 'issue': return 'issue';
     case 'rfi': return 'rfi';
     case 'daily-report':
@@ -124,7 +131,7 @@ const CHIP = 'inline-flex max-w-full items-center gap-1.5 rounded-lg border bord
 
 export const MailComposer: React.FC<MailComposerProps> = ({
   open, onClose, variant, accounts, defaultAccountId, mode = 'new', replyTo, initial,
-  onSend, onSent, primaryAttachment, existingThread, title, extraHeader, onOpenInModal, onDirtyChange,
+  onSend, onSent, primaryAttachment, existingThread, title, extraHeader, onOpenInModal, onDirtyChange, resumeDraft,
 }) => {
   const { toast } = useToast();
 
@@ -166,7 +173,8 @@ export const MailComposer: React.FC<MailComposerProps> = ({
   useEffect(() => {
     if (!open) return;
 
-    const acct = accounts.find(a => a.id === defaultAccountId)
+    const acct = (resumeDraft ? accounts.find(a => a.id === resumeDraft.accountId) : undefined)
+      ?? accounts.find(a => a.id === defaultAccountId)
       ?? accounts.find(isSendable)
       ?? accounts[0]
       ?? null;
@@ -198,7 +206,14 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     // The signature is stamped once, here — not re-applied when the From
     // select changes, which would silently rewrite text the user may have
     // already edited around.
-    const sig = acct?.signatureHtml?.trim() ? `<br><br>--<br>${acct.signatureHtml}` : '';
+    const sig = !resumeDraft && acct?.signatureHtml?.trim() ? `<br><br>--<br>${acct.signatureHtml}` : '';
+    // A resumed draft's quote goes back beside the editor, where it was.
+    let seedHtml = initial?.html ?? '';
+    if (resumeDraft) {
+      const split = splitDraftQuote(seedHtml);
+      seedHtml = split.body;
+      quote = split.quote;
+    }
 
     setAccountId(acct?.id ?? '');
     setTo(seedTo);
@@ -206,7 +221,7 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     setBcc(initial?.bcc ?? []);
     setShowCcBcc(seedCc.length > 0 || (initial?.bcc?.length ?? 0) > 0);
     setSubject(seedSubject);
-    setHtml(`${initial?.html ?? ''}${sig}`);
+    setHtml(`${seedHtml}${sig}`);
     setQuoteHtml(quote);
     setQuoteRemoved(false);
     setQuoteOpen(false);
@@ -217,6 +232,10 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     setSeeded(false);
 
     let cancelled = false;
+    if (resumeDraft) {
+      setSeeded(true);
+      return () => { cancelled = true; };
+    }
     void (async () => {
       try {
         const raw = await getAlwaysCc();
@@ -253,9 +272,21 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     [quoteHtml],
   );
 
+  // The thread this message answers: the message being replied to, or the
+  // thread a resumed reply draft was saved against. Forwards start a thread.
+  const replyThread = useMemo(() => {
+    if (replyTo && (mode === 'reply' || mode === 'replyAll')) return { accountId: replyTo.accountId, threadKey: replyTo.threadKey };
+    if (resumeDraft?.replyTo) return { accountId: resumeDraft.replyTo.accountId, threadKey: resumeDraft.replyTo.threadKey };
+    return null;
+  }, [replyTo, mode, resumeDraft]);
+
   const snapshot = useMemo<DraftSnapshot>(
-    () => ({ to, cc, bcc, subject, html: composedHtml }),
-    [to, cc, bcc, subject, composedHtml],
+    () => ({
+      to, cc, bcc, subject, html: composedHtml,
+      attachments: attachments.map(a => (a.kind === 'upload' ? { uploadId: a.uploadId } : { fileId: a.fileId, name: a.name })),
+      ...(replyThread ? { replyTo: replyThread } : {}),
+    }),
+    [to, cc, bcc, subject, composedHtml, attachments, replyThread],
   );
   const draft = useDraftAutosave({
     accountId: accountId || null,
@@ -269,6 +300,7 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     // discard-confirm on the next navigation. Deliberately excludes
     // `!sending` that `enabled` above includes.
     dirtyEnabled: open && seeded && !onSend,
+    initialDraft: resumeDraft ? { accountId: resumeDraft.accountId, draftId: resumeDraft.draftId } : null,
     get: () => snapshot,
   });
 
@@ -344,11 +376,12 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     if (draft.draftId) req.draftProviderId = draft.draftId;
 
     if (replyTo) req.replyTo = { accountId: replyTo.accountId, threadKey: replyTo.threadKey };
+    else if (resumeDraft?.replyTo) req.replyTo = { accountId: resumeDraft.replyTo.accountId, threadKey: resumeDraft.replyTo.threadKey };
     else if (existingThread && useExistingThread) {
       req.replyTo = { accountId: existingThread.accountId, threadKey: existingThread.threadKey };
     }
     return req;
-  }, [accountId, subject, composedHtml, attachments, replyTo, existingThread, useExistingThread, draft.draftId]);
+  }, [accountId, subject, composedHtml, attachments, replyTo, resumeDraft, existingThread, useExistingThread, draft.draftId]);
 
   const canSend = (to.length > 0 || parseAddr(toPending) !== null) && !sending && uploading === 0;
 
@@ -624,7 +657,7 @@ export const MailComposer: React.FC<MailComposerProps> = ({
       width={expanded ? 'full' : 'lg'}
       title={
         <span className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="shrink-0">{title ?? (mode === 'forward' ? 'Forward' : mode === 'new' ? 'New message' : 'Reply')}</span>
+          <span className="shrink-0">{title ?? (resumeDraft ? 'Edit draft' : mode === 'forward' ? 'Forward' : mode === 'new' ? 'New message' : 'Reply')}</span>
           {fromSelect}
           <button
             type="button"

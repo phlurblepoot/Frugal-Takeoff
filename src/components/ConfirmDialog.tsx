@@ -59,7 +59,6 @@ export const ConfirmProvider: React.FC<{ children: React.ReactNode }> = ({ child
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={() => close(false)}
             role="dialog"
             aria-modal="true"
             aria-label={pending.title || 'Confirm'}

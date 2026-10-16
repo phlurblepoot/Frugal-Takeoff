@@ -17,6 +17,7 @@ import { ChangeOrdersSection } from './billing/ChangeOrdersSection';
 import { AiaPayApplications } from './billing/AiaPayApplications';
 import { PaymentsSection } from './billing/PaymentsSection';
 import { InvoicesSection } from './billing/InvoicesSection';
+import { LienReleasesSection } from './billing/LienReleasesSection';
 
 export { lineCents, draftTotalCents } from './billing/InvoiceEditor';
 
@@ -27,6 +28,7 @@ const BILLING_TABS = [
   { value: 'change-orders', label: 'Change Orders' },
   { value: 'pay-apps', label: 'Pay Applications' },
   { value: 'invoices', label: 'Invoices' },
+  { value: 'lien-releases', label: 'Lien Releases' },
   { value: 'payments', label: 'Payments' },
   { value: 'settings', label: 'Settings' },
 ] as const;
@@ -73,7 +75,7 @@ export const ProjectBilling: React.FC = () => {
     // any — it needs their count.
     getPayApps(projectId).then(setPayApps).catch(() => setPayApps([]));
   };
-  useLiveQuery(load, { types: ['invoice', 'changeOrder', 'payment', 'aiaSov', 'aiaPayApp', 'project'], projectId });
+  useLiveQuery(load, { types: ['invoice', 'changeOrder', 'lienRelease', 'payment', 'aiaSov', 'aiaPayApp', 'project'], projectId });
 
   // Refresh the always-visible summary totals whenever the active tab changes,
   // so edits made in any tab (e.g. SOV / change orders affecting the contract
@@ -168,6 +170,9 @@ export const ProjectBilling: React.FC = () => {
         )}
         {projectId && activeTab === 'invoices' && (
           <InvoicesSection projectId={projectId} onChange={reloadSummary} />
+        )}
+        {projectId && activeTab === 'lien-releases' && (
+          <LienReleasesSection projectId={projectId} onChange={reloadSummary} />
         )}
         {projectId && activeTab === 'payments' && (
           <PaymentsSection projectId={projectId} onChange={reloadSummary} />

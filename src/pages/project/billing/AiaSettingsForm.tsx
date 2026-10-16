@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { AiaPayApp, AiaSettings, AiaSovLine, resolveRetainageMode, saveAiaSettings } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import { Button, Card, CardBody, Field, Input, Textarea } from '../../../components/ui';
+import { Button, Card, CardBody, Field, Input, NumberInput, Textarea } from '../../../components/ui';
 
 const numOrUndefined = (v: string): number | undefined => {
   const n = parseFloat(v);
@@ -108,7 +108,7 @@ export const AiaSettingsForm: React.FC<{
       <CardBody id="aia-settings-body" className="border-t border-edge">
         <div className="mb-3">
           <Field label="Retainage %" htmlFor="aia-ret" hint="Per-line reveals a retainage column on the Schedule of Values; pay applications follow this choice.">
-            <Input id="aia-ret" type="number" value={retainagePercent} onChange={e => setRetainagePercent(e.target.value)} placeholder="10" className="max-w-xs" />
+            <NumberInput allowEmpty id="aia-ret" value={retainagePercent} onChange={e => setRetainagePercent(e.target.value)} placeholder="10" className="max-w-xs" />
           </Field>
           <div className="mt-2 inline-flex rounded-lg border border-edge p-0.5">
             <button

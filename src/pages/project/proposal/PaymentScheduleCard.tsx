@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, TriangleAlert } from 'lucide-react';
 import type { PaymentScheduleRow } from '../../../utils/store';
-import { Button, Card, CardBody, CardHeader, Checkbox, Input, Select } from '../../../components/ui';
+import { Button, Card, CardBody, CardHeader, Checkbox, Input, NumberInput, Select } from '../../../components/ui';
 import { formatCurrency } from './proposalGenerator';
 import { scheduleAmountCents, toCents } from './proposalMath';
 
@@ -34,9 +34,8 @@ const NumberField: React.FC<{
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <Input
+    <NumberInput allowEmpty
       className="w-24 text-right"
-      type="number"
       step="0.01"
       aria-label={ariaLabel}
       value={text}
@@ -46,7 +45,7 @@ const NumberField: React.FC<{
   );
 };
 
-// These are <input type="number">, so the browser has already filtered out
+// These are <NumberInput allowEmpty unstyled>, so the browser has already filtered out
 // anything unparsable; an empty box is the only realistic "no value" case.
 const parseNumber = (text: string): number | null => {
   if (!text.trim()) return null;

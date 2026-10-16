@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { BodyPayload } from './types';
 
-const h = vi.hoisted(() => ({ body: vi.fn(), getMailToken: vi.fn(() => 'tok en/123') }));
+const h = vi.hoisted(() => ({ body: vi.fn(), trustImageSender: vi.fn(), untrustImageSender: vi.fn(), getMailToken: vi.fn(() => 'tok en/123') }));
 vi.mock('../../utils/mailApi', () => ({ mailApi: h, getMailToken: h.getMailToken }));
 
 import { MessageBodyFrame, buildFrameDoc } from './MessageBodyFrame';
@@ -218,5 +218,35 @@ describe('MessageBodyFrame', () => {
     await waitFor(() => expect(frame()).toBeInTheDocument());
     rerender(<MessageBodyFrame messageId="m2" />);
     await waitFor(() => expect(h.body).toHaveBeenCalledWith('m2', { images: false }));
+  });
+});
+
+describe('remote images in the frame', () => {
+  it('CSP only admits remote images when allowed', () => {
+    expect(buildFrameDoc('<p>x</p>', 'n', 'https://app.test')).not.toMatch(/data: https:/);
+    expect(buildFrameDoc('<p>x</p>', 'n', 'https://app.test', true)).toMatch(/img-src https:\/\/app\.test data: https: http:;/);
+  });
+
+  it('Load images produces a frame whose CSP allows remote images', async () => {
+    h.body.mockResolvedValueOnce(payload({ blockedRemoteImages: 1 }));
+    h.body.mockResolvedValueOnce(payload({ html: '<img src="https://x.test/a.png">', imagesAllowed: true }));
+    render(<MessageBodyFrame messageId="m1" />);
+    await waitFor(() => expect(screen.getByText(/Remote images blocked/i)).toBeInTheDocument());
+    expect(frame().getAttribute('srcdoc')).not.toMatch(/data: https:/);
+    fireEvent.click(screen.getByRole('button', { name: /Load images/i }));
+    await waitFor(() => expect(frame().getAttribute('srcdoc')).toMatch(/data: https: http:/));
+  });
+
+  it('Always load from sender saves trust and refetches; trusted senders can be untrusted', async () => {
+    h.trustImageSender.mockResolvedValue(undefined);
+    h.untrustImageSender.mockResolvedValue(undefined);
+    h.body.mockResolvedValueOnce(payload({ blockedRemoteImages: 1, sender: 'a@b.com' }));
+    h.body.mockResolvedValueOnce(payload({ imagesAllowed: true, sender: 'a@b.com', senderTrusted: true }));
+    h.body.mockResolvedValueOnce(payload({ blockedRemoteImages: 1, sender: 'a@b.com' }));
+    render(<MessageBodyFrame messageId="m1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /Always load from a@b\.com/i }));
+    await waitFor(() => expect(h.trustImageSender).toHaveBeenCalledWith('a@b.com'));
+    fireEvent.click(await screen.findByRole('button', { name: /Stop loading/i }));
+    await waitFor(() => expect(h.untrustImageSender).toHaveBeenCalledWith('a@b.com'));
   });
 });

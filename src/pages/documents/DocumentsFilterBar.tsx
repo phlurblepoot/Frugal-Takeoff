@@ -23,6 +23,7 @@ export const DocumentsFilterBar: React.FC<{
   // Admin-only exclusive view (spec docs/superpowers/specs/2026-08-17-documents-clutter-design.md);
   // the toggle itself isn't rendered at all for a non-admin, matching the
   // Billing-kind gating pattern used elsewhere in the app.
+  hideProjectFilter?: boolean;
   isAdmin: boolean;
   unassigned: boolean;
   onUnassignedChange: (unassigned: boolean) => void;
@@ -30,7 +31,7 @@ export const DocumentsFilterBar: React.FC<{
   q, onQChange, projectOptions, projectIds, onProjectIdsChange,
   customerOptions, customerIds, onCustomerIdsChange,
   kindOptions, kinds, onKindsChange, archived, onArchivedChange,
-  isAdmin, unassigned, onUnassignedChange,
+  isAdmin, unassigned, onUnassignedChange, hideProjectFilter,
 }) => {
   // Local box tracks keystrokes instantly; the URL-driven `q` (and therefore
   // the fetch) only updates after a pause, so typing never fights re-renders.
@@ -61,10 +62,12 @@ export const DocumentsFilterBar: React.FC<{
           className="h-9 w-56 pl-8"
         />
       </div>
-      <MultiSelectDropdown
-        label="Project" testId="doc-filter-project" emptyLabel="All projects"
-        options={projectOptions} selected={projectIds} onChange={onProjectIdsChange}
-      />
+      {!hideProjectFilter && (
+        <MultiSelectDropdown
+          label="Project" testId="doc-filter-project" emptyLabel="All projects"
+          options={projectOptions} selected={projectIds} onChange={onProjectIdsChange}
+        />
+      )}
       <MultiSelectDropdown
         label="Customer" testId="doc-filter-customer" emptyLabel="All customers"
         options={customerOptions} selected={customerIds} onChange={onCustomerIdsChange}

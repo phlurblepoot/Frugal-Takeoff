@@ -5,14 +5,14 @@
 // mutations (patchFile/deleteFile calls + refresh); this component only
 // decides what's enabled via selectionPolicy and confirms before delete.
 import React, { useEffect, useRef, useState } from 'react';
-import { Archive, ArchiveRestore, Download, Share2, Tag, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Download, FilePlus2, Merge, Share2, Tag, Trash2, X } from 'lucide-react';
 import { DocumentRow } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { CustomDocType, retypeOptions } from './docTypes';
 import { selectionPolicy } from './documentsPolicy';
 
-type Busy = 'download' | 'archive' | 'retype' | 'delete' | null;
+type Busy = 'download' | 'merge' | 'archive' | 'retype' | 'delete' | null;
 
 export const DocumentsBulkBar: React.FC<{
   selected: DocumentRow[];
@@ -27,7 +27,11 @@ export const DocumentsBulkBar: React.FC<{
   onDelete: (rows: DocumentRow[]) => Promise<void>;
   /** One public link to all of them (ONLYOFFICE Phase 7). */
   onShare?: (rows: DocumentRow[]) => void;
-}> = ({ selected, customTypes, archivedView, onClear, onDownload, onArchive, onChangeKind, onDelete, onShare }) => {
+  /** Joins the selected PDFs (in list order) into one new document. */
+  onMergePdfs?: (rows: DocumentRow[]) => Promise<void>;
+  /** With exactly one PDF selected: opens Append pages for it. */
+  onAppendPages?: (row: DocumentRow) => void;
+}> = ({ selected, customTypes, archivedView, onClear, onDownload, onArchive, onChangeKind, onDelete, onShare, onMergePdfs, onAppendPages }) => {
   const { toast } = useToast();
   const confirm = useConfirm();
   const [busy, setBusy] = useState<Busy>(null);
@@ -54,6 +58,15 @@ export const DocumentsBulkBar: React.FC<{
 
   const { downloadable, archivable, deletable, retypeable } = selectionPolicy(selected);
   const typeOptions = retypeOptions(customTypes);
+  const pdfs = selected.filter(r => r.mime === 'application/pdf');
+
+  const handleMerge = async () => {
+    if (!onMergePdfs) return;
+    setBusy('merge');
+    try { await onMergePdfs(pdfs); }
+    catch { toast('Failed to merge PDFs', { type: 'error' }); }
+    finally { setBusy(null); }
+  };
 
   const handleChangeKind = async (kind: string) => {
     setTypeMenuOpen(false);
@@ -121,6 +134,28 @@ export const DocumentsBulkBar: React.FC<{
             className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-slate-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Share2 size={14} />Share
+          </button>
+        )}
+        {onMergePdfs && (
+          <button
+            data-testid="documents-bulk-merge"
+            onClick={handleMerge}
+            disabled={busy !== null || pdfs.length < 2 || pdfs.length > 50}
+            title={pdfs.length < 2 ? 'Select two or more PDFs' : 'Join the selected PDFs into one new document'}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-slate-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Merge size={14} />{busy === 'merge' ? 'Merging…' : `Merge PDFs (${pdfs.length})`}
+          </button>
+        )}
+        {onAppendPages && (
+          <button
+            data-testid="documents-bulk-append"
+            onClick={() => onAppendPages(pdfs[0])}
+            disabled={busy !== null || selected.length !== 1 || pdfs.length !== 1}
+            title={selected.length === 1 && pdfs.length === 1 ? 'Add pages from other PDFs into this one' : 'Select one PDF'}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-slate-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <FilePlus2 size={14} />Append pages
           </button>
         )}
         <button

@@ -15,12 +15,18 @@ import type { Addr } from '../types';
 
 export const DRAFT_DEBOUNCE_MS = 3000;
 
+/** Attachment as persisted on a draft: an app file or a staged upload. */
+export type DraftAttachment = { fileId: string; name?: string } | { uploadId: string };
+
 export interface DraftSnapshot {
   to: Addr[];
   cc: Addr[];
   bcc: Addr[];
   subject: string;
   html: string;
+  attachments?: DraftAttachment[];
+  /** The thread a reply draft answers; the server writes its threading headers from it. */
+  replyTo?: { accountId: string; threadKey: string };
 }
 
 export type DraftStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -40,6 +46,9 @@ export interface DraftAutosaveOptions {
    *  omitted (callers that don't autosave — item sends — don't need dirty
    *  tracked separately either). */
   dirtyEnabled?: boolean;
+  /** A draft reopened from the mailbox: saves in its account update it in
+   *  place instead of creating a new one, and send/discard remove it. */
+  initialDraft?: { accountId: string; draftId: string } | null;
   get: () => DraftSnapshot;
 }
 
@@ -56,8 +65,10 @@ export interface DraftAutosaveState {
   discard: () => Promise<void>;
 }
 
-export function useDraftAutosave({ accountId, enabled, dirtyEnabled, get }: DraftAutosaveOptions): DraftAutosaveState {
-  const [draftId, setDraftId] = useState<string | null>(null);
+export function useDraftAutosave({ accountId, enabled, dirtyEnabled, initialDraft, get }: DraftAutosaveOptions): DraftAutosaveState {
+  const seedFor = (acct: string | null): string | null =>
+    initialDraft && acct && initialDraft.accountId === acct ? initialDraft.draftId : null;
+  const [draftId, setDraftId] = useState<string | null>(() => seedFor(accountId));
   const [status, setStatus] = useState<DraftStatus>('idle');
   const [savedAt, setSavedAt] = useState<Date | null>(null);
 
@@ -92,13 +103,18 @@ export function useDraftAutosave({ accountId, enabled, dirtyEnabled, get }: Draf
   // row. Without this, closing a composer without sending and opening a new one
   // would autosave the new message on top of the old draft, and switching the
   // From account would PUT the previous account's draft id against the new one.
+  // A session is keyed on `dirtyActive`, not `active`: a send attempt pauses
+  // `active` but not the session, and a failed send must keep the draft id it
+  // had (a reopened draft's id included) or the next save forks a second copy.
+  // A reopened draft starts from its own id in its own account.
   useEffect(() => {
-    if (!active) return;
-    draftIdRef.current = null;
-    setDraftId(null);
+    if (!dirtyActive) return;
+    const seed = seedFor(accountId);
+    draftIdRef.current = seed;
+    setDraftId(seed);
     setStatus('idle');
     setSavedAt(null);
-  }, [active, accountId]);
+  }, [dirtyActive, accountId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!active || !accountId) return;

@@ -9,7 +9,7 @@ import {
 import { formatMoney } from '../../../utils/money';
 import { billingDay, formatBillingDate } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
-import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR, Textarea } from '../../../components/ui';
+import { Button, Field, Input, Modal, NumberInput, Table, TBody, TD, TH, THead, TR, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { PdfAttachmentsCard } from '../../../components/documents/PdfAttachmentsCard';
@@ -18,8 +18,10 @@ import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { buildInvoicePdf } from './invoicePdf';
+import { LienReleaseLauncher } from './LienReleaseLauncher';
 import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
+import { useDiscardGuard } from '../../../components/ui/useDiscardGuard';
 
 export const lineCents = (l: { description?: string; qty: number; unitPrice: number }): number =>
   Math.round((Number(l.qty) || 0) * (Number(l.unitPrice) || 0) * 100);
@@ -67,6 +69,7 @@ export const InvoiceEditor: React.FC<{
     notes !== (invoice.notes ?? '') ||
     date !== initialDate ||
     lineContentKey(lines) !== lineContentKey(invoice.lines);
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   const collab = useCollabEditing({
     type: 'invoice',
@@ -190,9 +193,9 @@ export const InvoiceEditor: React.FC<{
   };
 
   return (
-    <Modal open onClose={onClose} title={`Invoice ${invoice.number ?? ''}`} width="lg"
+    <Modal open onClose={onClose} dirty={dirty} title={`Invoice ${invoice.number ?? ''}`} width="lg"
       footer={<>
-        <div className="mr-auto">
+        <div className="mr-auto flex flex-wrap items-center gap-2">
           <DocumentActionsBar
             source={{ sourceType: 'invoice', sourceId: invoice.id }}
             kind="invoice"
@@ -224,8 +227,9 @@ export const InvoiceEditor: React.FC<{
               },
             }}
           />
+          <LienReleaseLauncher projectId={projectId} source={{ sourceType: 'invoice', sourceId: invoice.id }} testId="invoice-lien-release" />
         </div>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save invoice'}</Button>
       </>}
     >
@@ -259,8 +263,8 @@ export const InvoiceEditor: React.FC<{
             {lines.map((l, i) => (
               <TR key={i}>
                 <TD><Input value={l.description} onChange={e => setLine(i, { description: e.target.value })} /></TD>
-                <TD className="w-20"><Input type="number" value={String(l.qty)} onChange={e => setLine(i, { qty: parseFloat(e.target.value) || 0 })} /></TD>
-                <TD className="w-28"><Input type="number" value={String(l.unitPrice)} onChange={e => setLine(i, { unitPrice: parseFloat(e.target.value) || 0 })} /></TD>
+                <TD className="w-20"><NumberInput value={String(l.qty)} onChange={e => setLine(i, { qty: parseFloat(e.target.value) || 0 })} /></TD>
+                <TD className="w-28"><NumberInput value={String(l.unitPrice)} onChange={e => setLine(i, { unitPrice: parseFloat(e.target.value) || 0 })} /></TD>
                 <TD className="text-ink-soft">{formatMoney(lineCents(l))}</TD>
                 <TD><button onClick={() => removeLine(i)} title="Remove" className="rounded-md p-1 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button></TD>
               </TR>

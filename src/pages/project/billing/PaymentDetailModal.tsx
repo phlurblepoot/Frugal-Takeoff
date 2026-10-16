@@ -16,7 +16,7 @@ import {
 import { billingDay } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import { Button, Field, Input, Modal, Select, Skeleton } from '../../../components/ui';
+import { Button, Field, Input, NumberInput, Modal, Select, Skeleton } from '../../../components/ui';
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
 import { useAttachFiles } from '../../../components/documents/useAttachFiles';
 import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
@@ -181,7 +181,7 @@ export const PaymentDetailModal: React.FC<PaymentDetailModalProps> = ({ paymentI
 
   return (
     <>
-      <Modal open onClose={onClose} title="Payment" width="lg"
+      <Modal open onClose={onClose} dirty={dirty} title="Payment" width="lg"
         footer={<>
           <Button variant="ghost" className="mr-auto text-red-600 dark:text-red-400" onClick={remove} disabled={!payment}>
             <Trash2 size={14} />Delete payment
@@ -202,7 +202,7 @@ export const PaymentDetailModal: React.FC<PaymentDetailModalProps> = ({ paymentI
                 <Input id="pay-edit-date" type="date" value={values.date} onChange={e => edit({ date: e.target.value })} />
               </Field>
               <Field label="Amount" htmlFor="pay-edit-amt">
-                <Input id="pay-edit-amt" type="number" value={values.amount} onChange={e => edit({ amount: e.target.value })} placeholder="0.00" />
+                <NumberInput allowEmpty id="pay-edit-amt" value={values.amount} onChange={e => edit({ amount: e.target.value })} placeholder="0.00" />
               </Field>
               <Field label="Method" htmlFor="pay-edit-method">
                 <Select id="pay-edit-method" value={values.method} onChange={e => edit({ method: e.target.value })}>

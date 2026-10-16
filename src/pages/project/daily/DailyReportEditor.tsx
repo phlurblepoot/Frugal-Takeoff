@@ -9,7 +9,7 @@ import {
 } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
+import { Button, Field, Input, Modal, Textarea, NumberInput } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { PdfAttachmentsCard } from '../../../components/documents/PdfAttachmentsCard';
@@ -21,6 +21,7 @@ import { dailyReportTitle, formatReportDate, formatStartTime, manCountTotal, nor
 import { buildDailyReportPdf, dailyReportFileName } from './dailyReportPdf';
 import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
+import { useDiscardGuard } from '../../../components/ui/useDiscardGuard';
 
 export const DailyReportEditor: React.FC<{
   report: DailyReport;
@@ -69,6 +70,7 @@ export const DailyReportEditor: React.FC<{
     issues !== (report.issues ?? '');
 
   const dirty = isDirty();
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   const collab = useCollabEditing({ type: 'dailyReport', id: report.id, isDirty, onFresh: onSaved });
 
@@ -249,7 +251,7 @@ export const DailyReportEditor: React.FC<{
 
   return (
     // The title names the crew: each crew is its own set of reports.
-    <Modal open onClose={onClose} title={dailyReportTitle(report)} width="lg"
+    <Modal open onClose={onClose} dirty={dirty} title={dailyReportTitle(report)} width="lg"
       footer={<>
         <div className="mr-auto">
           <DocumentActionsBar
@@ -283,7 +285,7 @@ export const DailyReportEditor: React.FC<{
             }}
           />
         </div>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >
@@ -338,7 +340,7 @@ export const DailyReportEditor: React.FC<{
                     classes start with w-full, which in this flex row out-muscled
                     a passed w-20 and made the count box the WIDE one. */}
                 <div className="w-20 flex-none">
-                  <Input type="number" min={0} value={l.count} onChange={e => updateManCount(i, { count: Number(e.target.value) })} />
+                  <NumberInput min={0} value={l.count} onChange={e => updateManCount(i, { count: Number(e.target.value) })} />
                 </div>
                 <button onClick={() => removeManCountLine(i)} title="Remove" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
               </div>

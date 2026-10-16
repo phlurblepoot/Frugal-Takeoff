@@ -3,7 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers, DatabaseBackup, FileText, FilePlus2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
+import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType, getDefaultProjectTab, setDefaultProjectTab } from '../utils/store';
+import { PROJECT_SECTIONS } from './project/ProjectTabBar';
 import { UsersView } from './UsersView';
 import { MailAccountsTab } from './settings/MailAccountsTab';
 import { BackupTab } from './settings/BackupTab';
@@ -16,7 +17,7 @@ import { useTheme, AccentKey } from '../context/ThemeContext';
 import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
-import { Field, Input } from '../components/ui';
+import { Field, Input, NumberInput } from '../components/ui';
 
 // ── Changelog data ────────────────────────────────────────────────────────────
 
@@ -27,6 +28,83 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '4.5.1',
+    date: 'October 16, 2026',
+    changes: [
+      'Fix: sharing a file to the app while signed out now brings you back to the share page with your files after you sign in, instead of the dashboard.',
+      'Change: the owner name on a new lien release now starts as the project name.',
+      'Change: lien release PDFs no longer print the reference line under the letterhead, and the signature and notary blocks fit on the first page.',
+    ],
+  },
+  {
+    version: '4.5.0',
+    date: 'October 15, 2026',
+    changes: [
+      'Change: forms and dialogs no longer close when you click outside them, so a stray click cannot throw away what you were typing. Photo viewers and menus still close on an outside click.',
+      'New: forms that track unsaved changes (billing documents, daily reports, issues, punch items, RFIs and tasks) ask "Discard changes?" before closing from the X, Esc or the Close button.',
+    ],
+  },
+  {
+    version: '4.4.0',
+    date: 'October 15, 2026',
+    changes: [
+      'New: Florida lien releases. From a pay application, invoice or payment, or from Documents > New, create a waiver and release of lien that follows the Florida statute wording (progress or final, conditional or unconditional). Each release has its own number (LR-1, LR-2), keeps its own copy of the lienor details, and can be saved as a PDF, sent by email or signed with your saved signature.',
+      'New: Settings > Company legal details. Enter your legal name, entity type and state of formation once and they fill in every new lien release, including the notary sentence. Each release can still be edited on its own.',
+      'New: starting a lien release warns you before generating if the amount is more than what has been paid, since an unconditional waiver should only follow payment you have received.',
+    ],
+  },
+  {
+    version: '4.3.0',
+    date: 'October 15, 2026',
+    changes: [
+      'New: email drafts keep their attachments. Files you attach while writing are saved with the draft, and a draft can carry up to 25 MB in total, the same limit Gmail uses.',
+      'New: open a draft from the Drafts folder to keep writing it. Click it and the composer opens with the recipients, subject, text and attachments in place. Discard deletes the draft; closing the window keeps it.',
+      'Fix: sending a draft now removes it from the Drafts list straight away instead of at the next sync.',
+    ],
+  },
+  {
+    version: '4.2.0',
+    date: 'October 15, 2026',
+    changes: [
+      'New: merge PDFs. Select two or more PDFs on the Documents page and choose "Merge PDFs". A window lists them in order, you can drag them (or use the arrows) to reorder, name the result, and pick the project if they come from different projects.',
+      'New: add pages from one PDF into another. Choose which pages (blank means all, or something like "1-3, 5") and where they go.',
+      'New: favorite projects. Tap the star on a project in the list or beside its name at the top of the project. The Projects page has a Recent / Favorites switch, and it remembers your choice.',
+      'New: Settings > Preferences > Projects lets you pick which tab a project opens on. Clicking the Overview tab itself still works.',
+      'New: share into the app from your phone. On Android, Share a PDF, photo or document and choose this app. Pick a project and a document type (a sensible one is chosen for you) and it is filed. If you are signed out you sign in first and your files are waiting.',
+      'New: the first time a PDF opens in the editor, a small tip explains how to type on a form that has no box: click Edit PDF, then Insert, then Text Box. You can dismiss it and it will not come back.',
+      'Fix: a number box holding 0 now shows empty with the faded 0, so typing 5 gives 5 instead of 05. Boxes whose faded text means something else (for example "base 10%") still show a real 0.',
+    ],
+  },
+  {
+    version: '4.1.14',
+    date: 'October 15, 2026',
+    changes: [
+      'Number boxes are friendlier everywhere. An empty box shows a faded 0 instead of a real 0 you have to delete first, clearing a box no longer writes a 0 behind your back, and if you click away from a box left empty it goes back to its previous value. Boxes where empty is a real answer (for example a cleared retainage or an optional amount) still stay empty. This covers invoices, change orders, pay applications, the schedule of values, payments, proposals, daily reports, takeoff, canvas, backup and email settings.',
+    ],
+  },
+  {
+    version: '4.1.13',
+    date: 'October 15, 2026',
+    changes: [
+      'Pop-up windows no longer close when you click outside them, so a stray click can\'t throw away what you typed. Esc, the X and Cancel still close them. Windows with a form can ask "Discard changes?" before closing when something was edited.',
+    ],
+  },
+  {
+    version: '4.1.12',
+    date: 'October 15, 2026',
+    changes: [
+      'Fix: "Load images" on an email now actually shows the pictures. The message frame was blocking them even after you asked to load them.',
+      'New: when images are blocked, a new button, "Always load from <sender>", turns on images for every email from that sender. It is saved to your own account, so it doesn\'t change what anyone else sees. A small "Stop loading" button next to it turns it back off.',
+    ],
+  },
+  {
+    version: '4.1.11',
+    date: 'October 15, 2026',
+    changes: [
+      'A project\'s Documents tab now stays inside the project. Before, opening it jumped to the main Documents page and the project\'s top bar and tabs disappeared. Now the project header and tabs stay put and the list shows only that project\'s documents, with the same search, filters, upload and actions as before. The project and Unassigned filters are hidden there since the project is already chosen. The main Documents page works as it did, and links to a project\'s documents (the command palette, takeoff prints) go to the project\'s tab.',
+    ],
+  },
   {
     version: '4.1.10',
     date: 'October 7, 2026',
@@ -882,6 +960,9 @@ function accentSwatchColor(hue: number) {
 const PreferencesTab: React.FC = () => {
   const { mode, accentColor, customAccentHex, reducedMotion, timeAmbience, solidSurfaces, toggleMode, setAccentColor, setCustomAccent, setReducedMotion, setTimeAmbience, setSolidSurfaces } = useTheme();
   const { toast } = useToast();
+  const isAdminUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}').role === 'admin'; } catch { return false; } })();
+  const [openTab, setOpenTab] = useState<string>('overview');
+  useEffect(() => { getDefaultProjectTab().then(setOpenTab); }, []);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -1062,6 +1143,34 @@ const PreferencesTab: React.FC = () => {
 
       <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
         <div className="p-6 border-b border-edge">
+          <h2 className="text-lg font-bold text-ink">Projects</h2>
+          <p className="text-sm text-ink-soft">Choose which tab a project opens on.</p>
+        </div>
+        <div className="p-6">
+          <label className="flex items-center justify-between gap-4">
+            <span className="text-sm font-semibold text-ink">Open projects on</span>
+            <select
+              aria-label="Open projects on"
+              value={openTab}
+              onChange={async e => {
+                const next = e.target.value;
+                const prev = openTab;
+                setOpenTab(next);
+                try { await setDefaultProjectTab(next); }
+                catch { setOpenTab(prev); toast('Could not save this setting.', { type: 'error' }); }
+              }}
+              className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm text-ink"
+            >
+              {PROJECT_SECTIONS.filter(s => !s.adminOnly || isAdminUser).map(s => (
+                <option key={s.id} value={s.id}>{s.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
           <h2 className="text-lg font-bold text-ink">Accent Colour</h2>
           <p className="text-sm text-ink-soft">Applied to buttons, active states, and interactive elements.</p>
         </div>
@@ -1170,8 +1279,7 @@ const PreferencesTab: React.FC = () => {
               </p>
             </div>
             <div className="w-24 shrink-0">
-              <Input
-                type="number"
+              <NumberInput allowEmpty
                 min="0"
                 step="1"
                 value={aiIdleMinutes}
@@ -1691,7 +1799,7 @@ const AiaTemplateTab: React.FC = () => {
             </div>
             <div>
               <Field label="First data row">
-                <Input type="number" min={1} value={mapping.g703StartRow}
+                <NumberInput min={1} value={mapping.g703StartRow}
                   onChange={e => setMapping(m => ({ ...m, g703StartRow: parseInt(e.target.value) || 1 }))} placeholder="2" />
               </Field>
             </div>
@@ -1906,6 +2014,9 @@ export const Settings: React.FC = () => {
     appName: 'Takeoff Pro',
     logoUrl: '',
     companyName: '',
+    companyLegalName: '',
+    companyEntityType: '',
+    companyStateOfFormation: '',
     companyPhone: '',
     companyEmail: '',
     companyAddress: '',
@@ -2111,6 +2222,46 @@ export const Settings: React.FC = () => {
                           </p>
                         </div>
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-edge">
+                    <h2 className="text-lg font-bold text-ink">Company legal details</h2>
+                    <p className="text-sm text-ink-soft">Printed on lien releases (the lienor and the notary sentence). Each release keeps its own copy, which you can change there.</p>
+                  </div>
+                  <div className="p-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                      <Field label="Legal name" hint="Falls back to the company name when empty.">
+                        <Input
+                          value={serverSettings.companyLegalName || ''}
+                          onChange={e => setServerSettings({ ...serverSettings, companyLegalName: e.target.value })}
+                          placeholder="e.g. Acme Contracting, LLC"
+                        />
+                      </Field>
+                      <Field label="Entity type">
+                        <select
+                          aria-label="Entity type"
+                          value={serverSettings.companyEntityType || ''}
+                          onChange={e => setServerSettings({ ...serverSettings, companyEntityType: e.target.value })}
+                          className="w-full rounded-lg border border-edge bg-raised px-3 py-2 text-sm text-ink"
+                        >
+                          <option value="">Not set</option>
+                          <option value="llc">LLC</option>
+                          <option value="corporation">Corporation</option>
+                          <option value="partnership">Partnership</option>
+                          <option value="sole_proprietor">Sole proprietor</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </Field>
+                      <Field label="State of formation">
+                        <Input
+                          value={serverSettings.companyStateOfFormation || ''}
+                          onChange={e => setServerSettings({ ...serverSettings, companyStateOfFormation: e.target.value })}
+                          placeholder="e.g. Florida"
+                        />
+                      </Field>
                     </div>
                   </div>
                 </div>

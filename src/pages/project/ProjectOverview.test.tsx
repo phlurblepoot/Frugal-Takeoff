@@ -3,6 +3,11 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+const st = vi.hoisted(() => ({ tab: 'overview' }));
+vi.mock('../../utils/store', () => ({
+  peekDefaultProjectTab: () => st.tab,
+  getDefaultProjectTab: async () => st.tab,
+}));
 import type { CardContext, CardPage } from '../../cards';
 
 const h = vi.hoisted(() => ({ useProjectOutlet: vi.fn() }));
@@ -31,9 +36,23 @@ function mount(initialEntry = '/project/p1') {
 beforeEach(() => {
   h.useProjectOutlet.mockReset();
   localStorage.clear();
+  st.tab = 'overview';
 });
 
 describe('ProjectOverview', () => {
+  it('lands on the user default tab instead of the overview', () => {
+    st.tab = 'takeoff';
+    h.useProjectOutlet.mockReturnValue({ summary: null, refreshSummary: vi.fn() });
+    mount();
+    expect(screen.getByTestId('takeoff-page')).toBeInTheDocument();
+  });
+
+  it('stays on the overview when the default is overview', () => {
+    h.useProjectOutlet.mockReturnValue({ summary: { id: 'p1', name: 'Test Project', version: 1, status: 'in_progress' }, refreshSummary: vi.fn() });
+    mount();
+    expect(screen.queryByTestId('takeoff-page')).not.toBeInTheDocument();
+  });
+
   it('forwards a legacy ?tab= bookmark straight to the takeoff route', () => {
     h.useProjectOutlet.mockReturnValue({ summary: null, refreshSummary: vi.fn() });
     mount('/project/p1?tab=takeoffs');

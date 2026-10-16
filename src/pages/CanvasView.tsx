@@ -23,6 +23,7 @@ import { measurementMultiplier, multiplierPatch, multipliersMatch } from '../uti
 import { MultiplierModal } from '../components/canvas/MultiplierModal';
 import { computeTakeoffTotals } from './project/proposal/proposalGenerator';
 import { CLIENT_SESSION_ID } from '../utils/clientSession';
+import { NumberInput } from '../components/ui';
 
 const STANDARD_SCALES = [
   { label: '1/32" = 1\'-0"', pixelDistance: 144, realWorldDistance: 32, unit: 'ft' },
@@ -2877,8 +2878,7 @@ function HeightsModal({
             <div className="flex items-center gap-4">
               <label className="text-sm font-medium text-ink w-20">Height</label>
               <div className="flex-1 relative">
-                <input
-                  type="number"
+                <NumberInput allowEmpty unstyled
                   value={globalHeight}
                   onChange={e => setGlobalHeight(e.target.value)}
                   className="w-full border border-edge-strong rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-2 focus:ring-accent-500"
@@ -2895,8 +2895,7 @@ function HeightsModal({
             <div key={i} className="flex items-center gap-4">
               <label className="text-sm font-medium text-ink w-20">Point {i + 1}</label>
               <div className="flex-1 relative">
-                <input
-                  type="number"
+                <NumberInput allowEmpty unstyled
                   value={heights[i]}
                   onChange={e => {
                     const newHeights = [...heights];

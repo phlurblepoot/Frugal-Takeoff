@@ -535,6 +535,135 @@ describe('MailComposer', () => {
     }
   });
 
+  // T18 left this untested: attachments are part of the draft snapshot, so
+  // adding or removing one is an edit like any other and is autosaved.
+  it('autosaves when an attachment is added, and again when it is removed', async () => {
+    vi.useFakeTimers();
+    try {
+      setup();
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await Promise.resolve(); });
+      // A subject keeps the post-removal state apart from the empty one the
+      // composer opened with (which, by design, is never saved).
+      fireEvent.change(subject(), { target: { value: 'Takeoff notes' } });
+
+      const input = screen.getByTestId('composer-file-input') as HTMLInputElement;
+      const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+      await act(async () => { fireEvent.change(input, { target: { files: [file] } }); });
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByText('notes.txt')).toBeInTheDocument();
+
+      await act(async () => { vi.advanceTimersByTime(3000); });
+      await act(async () => { await Promise.resolve(); });
+      expect(h.saveDraft).toHaveBeenCalledTimes(1);
+      expect(h.saveDraft.mock.calls[0][0]).toMatchObject({ accountId: 'a1', attachments: [{ uploadId: 'u1' }] });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove notes.txt' }));
+      await act(async () => { vi.advanceTimersByTime(3000); });
+      await act(async () => { await Promise.resolve(); });
+      expect(h.saveDraft).toHaveBeenCalledTimes(2);
+      expect(h.saveDraft.mock.calls[1][0]).toMatchObject({ attachments: [] });
+      expect(h.saveDraft.mock.calls[1][1]).toBe('d1');   // the same draft, updated in place
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe('resuming a draft', () => {
+    const resume = (over: Partial<MailComposerProps> = {}) => setup({
+      mode: 'new',
+      defaultAccountId: 'a1',
+      accounts: [account({ signatureHtml: '<b>Nathan</b>' }), ACCOUNTS[1]],
+      initial: {
+        to: [{ addr: 'bob@acme.com' }], cc: [{ addr: 'pm@acme.com' }], subject: 'Re: Roof detail',
+        html: '<p>My half-written reply</p><br><br><div class="ft-quote" style="color:#555">Bob wrote:<br><p>Original</p></div>',
+        attachments: [{ kind: 'upload', uploadId: 'up-1', name: 'takeoff.pdf', size: 4 }],
+      },
+      resumeDraft: { accountId: 'a1', draftId: 'prov-d7', replyTo: { accountId: 'a1', threadKey: 'tk-1' } },
+      ...over,
+    });
+
+    it('opens with the draft\'s content and attachments, no signature, no always-Cc, quote beside the editor', async () => {
+      h.getAlwaysCc.mockResolvedValue('office@bigbearplaster.com');
+      resume();
+      await waitFor(() => expect(screen.getByTestId('composer-quote')).toBeInTheDocument());
+      expect(body().value).toBe('<p>My half-written reply</p>');
+      expect(subject().value).toBe('Re: Roof detail');
+      expect(pills()).toContain('bob@acme.com');
+      expect(pills()).toContain('pm@acme.com');
+      expect(pills()).not.toContain('office@bigbearplaster.com');
+      expect(h.getAlwaysCc).not.toHaveBeenCalled();
+      expect(screen.getByText('takeoff.pdf')).toBeInTheDocument();
+      expect(screen.getByText('Edit draft')).toBeInTheDocument();
+    });
+
+    it('does not save on open, then updates the same provider draft with its thread and attachments', async () => {
+      vi.useFakeTimers();
+      try {
+        h.saveDraft.mockResolvedValue({ draftId: 'prov-d7' });
+        resume();
+        await act(async () => { await Promise.resolve(); });
+        await act(async () => { vi.advanceTimersByTime(10000); });
+        expect(h.saveDraft).not.toHaveBeenCalled();
+
+        fireEvent.change(body(), { target: { value: '<p>My finished reply</p>' } });
+        await act(async () => { vi.advanceTimersByTime(3000); });
+        await act(async () => { await Promise.resolve(); });
+        expect(h.saveDraft).toHaveBeenCalledTimes(1);
+        const [saved, id] = h.saveDraft.mock.calls[0];
+        expect(id).toBe('prov-d7');
+        expect(saved).toMatchObject({
+          accountId: 'a1', subject: 'Re: Roof detail',
+          attachments: [{ uploadId: 'up-1' }],
+          replyTo: { accountId: 'a1', threadKey: 'tk-1' },
+        });
+        // The quote is saved back exactly as it was.
+        expect(saved.html).toBe('<p>My finished reply</p><br><br><div class="ft-quote" style="color:#555">Bob wrote:<br><p>Original</p></div>');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a follow-up save adopts the id the provider hands back (IMAP re-keys every save)', async () => {
+      vi.useFakeTimers();
+      try {
+        h.saveDraft.mockResolvedValueOnce({ draftId: 'Drafts/41' }).mockResolvedValueOnce({ draftId: 'Drafts/42' });
+        resume();
+        await act(async () => { await Promise.resolve(); });
+        fireEvent.change(subject(), { target: { value: 'Re: Roof detail v2' } });
+        await act(async () => { vi.advanceTimersByTime(3000); });
+        await act(async () => { await Promise.resolve(); });
+        fireEvent.change(subject(), { target: { value: 'Re: Roof detail v3' } });
+        await act(async () => { vi.advanceTimersByTime(3000); });
+        await act(async () => { await Promise.resolve(); });
+        expect(h.saveDraft.mock.calls.map(c => c[1])).toEqual(['prov-d7', 'Drafts/41']);
+        await act(async () => { fireEvent.click(sendBtn()); });
+        expect((h.send.mock.calls[0][0] as SendRequest).draftProviderId).toBe('Drafts/42');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('sends as a reply in its thread and hands over the draft id so the draft is removed', async () => {
+      resume();
+      await waitFor(() => expect(screen.getByTestId('composer-quote')).toBeInTheDocument());
+      await act(async () => { fireEvent.click(sendBtn()); });
+      const req = h.send.mock.calls[0][0] as SendRequest;
+      expect(req.draftProviderId).toBe('prov-d7');
+      expect(req.replyTo).toEqual({ accountId: 'a1', threadKey: 'tk-1' });
+      expect(req.attachments).toEqual([{ uploadId: 'up-1' }]);
+      expect(req.html).toContain('class="ft-quote"');
+      expect(h.deleteDraft).not.toHaveBeenCalled();
+    });
+
+    it('discard deletes the reopened draft', async () => {
+      resume();
+      await waitFor(() => expect(screen.getByTestId('composer-quote')).toBeInTheDocument());
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Discard' })); });
+      expect(h.deleteDraft).toHaveBeenCalledWith('a1', 'prov-d7');
+    });
+  });
+
   it('renders nothing while closed', () => {
     setup({ open: false });
     expect(screen.queryByLabelText('To')).toBeNull();

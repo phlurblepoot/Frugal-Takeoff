@@ -3,6 +3,7 @@ import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { X } from 'lucide-react';
+import { useDiscardGuard } from './useDiscardGuard';
 
 const WIDTHS = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl', full: 'max-w-[95vw]' } as const;
 
@@ -58,24 +59,30 @@ export interface ModalProps {
   footer?: React.ReactNode;
   width?: keyof typeof WIDTHS;
   children: React.ReactNode;
+  /** Opt-in: when true, Esc and the X ask "discard changes?" before onClose runs. */
+  dirty?: boolean;
 }
 
 export const Modal: React.FC<ModalProps> = ({
-  open, onClose, title, footer, width = 'md', children,
+  open, onClose, title, footer, width = 'md', children, dirty = false,
 }) => {
   const labelId = React.useId();
   const panelRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Esc and the X go through here. Clicking the backdrop does nothing on purpose:
+  // an outside click must never throw away what someone was typing.
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   // Note: the listener re-registers if `onClose` changes identity each render
   // (inline arrows). Harmless, but stable handlers via useCallback are nicer.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') void requestClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, requestClose]);
 
   // Focus management: move focus into the dialog when it opens, keep Tab inside
   // it while it is open, and hand focus back to whatever opened it on close.
@@ -132,7 +139,6 @@ export const Modal: React.FC<ModalProps> = ({
           transition={{ duration: 0.15 }}
           data-testid="modal-overlay"
           className="fixed inset-0 z-[250] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-          onClick={onClose}
         >
           <motion.div
             ref={panelRef}
@@ -145,13 +151,12 @@ export const Modal: React.FC<ModalProps> = ({
             tabIndex={-1}
             aria-labelledby={title !== undefined ? labelId : undefined}
             className={`flex max-h-[90dvh] w-full ${WIDTHS[width]} flex-col rounded-xl border border-edge bg-raised shadow-xl`}
-            onClick={(e) => e.stopPropagation()}
           >
             {title !== undefined && (
               <div className="flex shrink-0 items-center justify-between border-b border-edge px-5 py-4">
                 <h2 id={labelId} className="text-base font-semibold text-ink">{title}</h2>
                 <button
-                  onClick={onClose}
+                  onClick={() => void requestClose()}
                   aria-label="Close dialog"
                   className="flex min-h-11 min-w-11 items-center justify-center rounded-lg p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0"
                 >

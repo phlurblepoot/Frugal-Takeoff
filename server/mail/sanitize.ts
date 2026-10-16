@@ -28,6 +28,16 @@ const REMOTE_FETCH_ATTRS = ['src', 'background', 'poster', 'dynsrc', 'lowsrc'] a
 // `img` is in the selector on its own so a srcless <img> is still dropped, as before.
 const REMOTE_ATTR_SELECTOR = ['img', ...REMOTE_FETCH_ATTRS.map(a => `[${a}]`)].join(',');
 
+const SAFE_REMOTE_URL = /^https?:\/\/[^\s"'()\\]+$/i;
+function onlyRemoteUrls(decl: string): boolean {
+  if (/image-set|expression|@import|\\/i.test(decl)) return false;
+  const urls = Array.from(decl.matchAll(/url\s*\(\s*(['"]?)([^'")]*)\1\s*\)/gi));
+  if (!urls.length) return false;
+  // Every "url(" must have parsed as a complete url(...) token.
+  if ((decl.match(/url\s*\(/gi) || []).length !== urls.length) return false;
+  return urls.every(m => SAFE_REMOTE_URL.test(m[2].trim()));
+}
+
 export function sanitizeEmailHtml(
   html: string,
   opts: { attachmentUrl: (contentId: string) => string | null; allowRemoteImages: boolean }
@@ -63,7 +73,11 @@ export function sanitizeEmailHtml(
     const style = el.getAttribute('style') || '';
     if (/url\s*\(/i.test(style)) {
       if (!opts.allowRemoteImages && REMOTE.test(style.replace(/.*url\s*\(\s*['"]?/i, ''))) blocked++;
-      el.setAttribute('style', style.replace(/[a-z-]*\s*:\s*[^;]*url\s*\([^)]*\)[^;]*;?/gi, ''));
+      // With images on, a declaration whose every url() is a plain http(s)
+      // address stays (the frame's CSP is what permits the fetch); anything
+      // else (data:, cid:, relative, image-set tricks) goes.
+      el.setAttribute('style', style.replace(/[a-z-]*\s*:\s*[^;]*url\s*\([^)]*\)[^;]*;?/gi, (decl) =>
+        opts.allowRemoteImages && onlyRemoteUrls(decl) ? decl : ''));
     }
   });
   clean.querySelectorAll('a').forEach((a) => {
@@ -74,6 +88,22 @@ export function sanitizeEmailHtml(
   const wrapper = doc.createElement('div');
   wrapper.append(...Array.from(clean.childNodes));
   return { html: wrapper.innerHTML, blockedRemoteImages: blocked };
+}
+
+/**
+ * The light clean a draft body gets before it goes back into the composer's
+ * editor. Unlike sanitizeEmailHtml this keeps inline styles and remote images
+ * (the user wrote this mail; the editor is not a tracking surface the way the
+ * reader is) and never folds quoted history. Active content is still removed,
+ * and `cid:` images are dropped because their parts come back as attachments.
+ */
+export function cleanDraftHtml(html: string): string {
+  const clean = purify.sanitize(html || '', SANITIZE_CONFIG) as unknown as HTMLElement;
+  clean.querySelectorAll('img').forEach((img) => {
+    const src = (img.getAttribute('src') || '').trim();
+    if (!src || /^cid:/i.test(src)) img.remove();
+  });
+  return clean.innerHTML;
 }
 
 // ── quoted history ─────────────────────────────────────────────────────────

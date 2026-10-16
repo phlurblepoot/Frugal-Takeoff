@@ -22,6 +22,6 @@ describe('takeoff print names', () => {
   });
 
   it('builds the filtered documents url', () => {
-    expect(takeoffPrintsUrl('p1')).toBe('/documents?projectIds=p1&kinds=takeoff-print,takeoff-export');
+    expect(takeoffPrintsUrl('p1')).toBe('/project/p1/documents?kinds=takeoff-print,takeoff-export');
   });
 });

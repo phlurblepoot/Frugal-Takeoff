@@ -4,10 +4,10 @@
 // lists) drive every filter so the page is deep-linkable both ways: this page
 // writes them on every filter change, and any other page (e.g. the retired
 // per-project Documents nav entry) can land here pre-filtered by composing
-// the same query string — see ProjectDocumentsRedirect below.
+// the same query string.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, useParams, useSearchParams } from 'react-router-dom';
-import { FilePlus2, FolderOpen, Upload } from 'lucide-react';
+import { useParams, useSearchParams } from 'react-router-dom';
+import { ChevronDown, FilePlus2, FileSignature, FolderOpen, Upload } from 'lucide-react';
 import { Customer } from '../../types';
 import {
   DocumentRow, ProjectSummary, deleteFile, fetchFileBlob, getCustomers, getDocumentTypes,
@@ -17,12 +17,15 @@ import { useToast } from '../../components/Toast';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { DocumentsBulkBar } from './DocumentsBulkBar';
+import { AppendPagesModal } from './AppendPagesModal';
+import { MergePdfsModal } from './MergePdfsModal';
 import { useShare } from '../../components/ShareLinkModal';
 import { DocumentsFilterBar } from './DocumentsFilterBar';
 import { downloadBlob, DocumentsTable } from './DocumentsTable';
 import { MultiSelectOption } from './MultiSelectDropdown';
 import { UploadDocumentsModal } from './UploadDocumentsModal';
 import { NewDocumentModal } from './NewDocumentModal';
+import { NewLienReleaseModal } from './NewLienReleaseModal';
 import { isNewDocumentType, type NewDocumentType } from '../../utils/officeFormats';
 import { CustomDocType, KIND_OPTIONS } from './docTypes';
 
@@ -65,11 +68,17 @@ export const applyFilterPatch = (prev: URLSearchParams, patch: FilterPatch): URL
 // than introducing a new cross-cutting import.
 const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
 
-export const DocumentsPage: React.FC = () => {
+// `projectId` set = the project's own Documents tab (rendered inside
+// ProjectLayout): the list is pinned to that project, ignores any projectIds in
+// the URL, and hides the Project filter and the admin Unassigned view.
+export const DocumentsPage: React.FC<{ projectId?: string }> = ({ projectId: lockedProjectId }) => {
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const projectIds = useMemo(() => csvParam(searchParams, 'projectIds'), [searchParams]);
+  const projectIds = useMemo(
+    () => (lockedProjectId ? [lockedProjectId] : csvParam(searchParams, 'projectIds')),
+    [searchParams, lockedProjectId],
+  );
   const customerIds = useMemo(() => csvParam(searchParams, 'customerIds'), [searchParams]);
   const kinds = useMemo(() => csvParam(searchParams, 'kinds'), [searchParams]);
   const q = searchParams.get('q') ?? '';
@@ -78,7 +87,7 @@ export const DocumentsPage: React.FC = () => {
   // Ignored server-side for a non-admin regardless of what's in the URL, but
   // also gated client-side so a non-admin who hand-edits the URL never even
   // sends the param or sees the (unrendered) toggle reflect it.
-  const unassigned = admin && searchParams.get('unassigned') === '1';
+  const unassigned = !lockedProjectId && admin && searchParams.get('unassigned') === '1';
 
   const setFilter = (patch: FilterPatch) => {
     setSearchParams(prev => applyFilterPatch(prev, patch), { replace: true });
@@ -86,6 +95,8 @@ export const DocumentsPage: React.FC = () => {
 
   const [rows, setRows] = useState<DocumentRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [appendTarget, setAppendTarget] = useState<DocumentRow | null>(null);
+  const [mergeRows, setMergeRows] = useState<DocumentRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -101,6 +112,16 @@ export const DocumentsPage: React.FC = () => {
   // type (the command palette's "New Word document" etc.); the param is
   // dropped once read so Back and a reload don't reopen it.
   const [newDocType, setNewDocType] = useState<NewDocumentType | null>(null);
+  // "New" is a menu for admins (the second entry is billing, admin-only).
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const [lienOpen, setLienOpen] = useState(false);
+  const newMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!newMenuOpen) return;
+    const away = (e: MouseEvent) => { if (!newMenuRef.current?.contains(e.target as Node)) setNewMenuOpen(false); };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [newMenuOpen]);
   const newParam = searchParams.get('new');
   useEffect(() => {
     if (!newParam) return;
@@ -287,6 +308,11 @@ export const DocumentsPage: React.FC = () => {
     await refresh(Math.max(rows.length, PAGE_SIZE));
   };
 
+  // Merge the selected PDFs, in the order they are listed, into one new
+  // document (server/pdfMerge.ts); the new row shows up after the refresh.
+  // The Merge PDFs dialog (order, name, project) opens first; it does the merge.
+  const mergePdfRows = async (targets: DocumentRow[]) => { setMergeRows(targets); };
+
   const bulkDownload = async (targets: DocumentRow[]) => {
     let ok = 0;
     for (const row of targets) {
@@ -337,7 +363,7 @@ export const DocumentsPage: React.FC = () => {
     }
   };
 
-  const filtering = projectIds.length > 0 || customerIds.length > 0 || kinds.length > 0 || q.trim() !== '' || archived || unassigned;
+  const filtering = (!lockedProjectId && projectIds.length > 0) || customerIds.length > 0 || kinds.length > 0 || q.trim() !== '' || archived || unassigned;
 
   return (
     <div
@@ -359,9 +385,29 @@ export const DocumentsPage: React.FC = () => {
           <h1 className="text-xl font-bold text-ink">Documents</h1>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" data-testid="documents-new" onClick={() => setNewDocType('docx')}>
-            <FilePlus2 size={15} />New document
-          </Button>
+          <div className="relative" ref={newMenuRef}>
+            <Button
+              variant="secondary" data-testid="documents-new"
+              aria-haspopup={admin ? 'menu' : undefined} aria-expanded={admin ? newMenuOpen : undefined}
+              onClick={() => (admin ? setNewMenuOpen(o => !o) : setNewDocType('docx'))}
+            >
+              <FilePlus2 size={15} />New document{admin && <ChevronDown size={13} />}
+            </Button>
+            {admin && newMenuOpen && (
+              <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-64 rounded-lg border border-edge bg-raised py-1 shadow-lg">
+                <button role="menuitem" type="button" data-testid="documents-new-document"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-ink hover:bg-hover"
+                  onClick={() => { setNewMenuOpen(false); setNewDocType('docx'); }}>
+                  <FilePlus2 size={14} />Document, spreadsheet or PDF form
+                </button>
+                <button role="menuitem" type="button" data-testid="documents-new-lien-release"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-ink hover:bg-hover"
+                  onClick={() => { setNewMenuOpen(false); setLienOpen(true); }}>
+                  <FileSignature size={14} />Release of lien
+                </button>
+              </div>
+            )}
+          </div>
           <Button
             data-testid="documents-upload"
             onClick={() => { setUploadInitialFiles(undefined); setUploadOpen(true); }}
@@ -388,7 +434,8 @@ export const DocumentsPage: React.FC = () => {
         // this is a single setSearchParams call rather than two racing ones —
         // see applyFilterPatch's round-trip unit tests for why that matters.
         onArchivedChange={v => setFilter({ archived: v, ...(v ? { unassigned: false } : {}) })}
-        isAdmin={admin}
+        hideProjectFilter={!!lockedProjectId}
+        isAdmin={admin && !lockedProjectId}
         unassigned={unassigned}
         onUnassignedChange={v => setFilter({ unassigned: v, ...(v ? { archived: false } : {}) })}
       />
@@ -403,6 +450,28 @@ export const DocumentsPage: React.FC = () => {
         onChangeKind={changeKindBulk}
         onDelete={deleteRows}
         onShare={shareRows}
+        onMergePdfs={mergePdfRows}
+        onAppendPages={setAppendTarget}
+      />
+      <MergePdfsModal
+        open={!!mergeRows}
+        rows={mergeRows ?? []}
+        onClose={() => setMergeRows(null)}
+        onDone={async (count, name) => {
+          toast(`Merged ${count} PDFs into ${name}`, { type: 'success' });
+          clearSelection();
+          await refresh(Math.max(rows.length, PAGE_SIZE));
+        }}
+      />
+      <AppendPagesModal
+        open={!!appendTarget}
+        target={appendTarget}
+        onClose={() => setAppendTarget(null)}
+        onDone={async t => {
+          toast(`Pages added to ${t.name ?? "the PDF"} as a new version`, { type: "success" });
+          clearSelection();
+          await refresh(Math.max(rows.length, PAGE_SIZE));
+        }}
       />
 
       {loading ? (
@@ -448,6 +517,14 @@ export const DocumentsPage: React.FC = () => {
         initialFiles={uploadInitialFiles}
       />
 
+      {admin && (
+        <NewLienReleaseModal
+          open={lienOpen}
+          onClose={() => setLienOpen(false)}
+          initialProjectId={projectIds.length === 1 ? projectIds[0] : undefined}
+        />
+      )}
+
       <NewDocumentModal
         open={newDocType !== null}
         onClose={() => setNewDocType(null)}
@@ -459,9 +536,10 @@ export const DocumentsPage: React.FC = () => {
   );
 };
 
-// Route-level redirect: the per-project Documents nav entry keeps working,
-// landing on the global page pre-filtered to that project (spec §Decisions).
-export const ProjectDocumentsRedirect: React.FC = () => {
+// Route element for /project/:projectId/documents: the same list as the global
+// page, scoped to the project and shown inside ProjectLayout so the top bar and
+// tabs stay.
+export const ProjectDocuments: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
-  return <Navigate to={`/documents?projectIds=${encodeURIComponent(projectId ?? '')}`} replace />;
+  return <DocumentsPage projectId={projectId} />;
 };

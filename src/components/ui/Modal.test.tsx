@@ -3,6 +3,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { Modal, __trapDepth } from './Modal';
+import { ConfirmProvider } from '../ConfirmDialog';
 
 describe('Modal', () => {
   it('renders nothing when closed', () => {
@@ -29,12 +30,32 @@ describe('Modal', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('calls onClose on overlay click but not on panel click', () => {
+  it('does not close on overlay click, but the X button closes', () => {
     const onClose = vi.fn();
     render(<Modal open onClose={onClose} title="Hi">body</Modal>);
-    fireEvent.click(screen.getByText('body')); // inside the panel
-    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('body'));
     fireEvent.click(screen.getByTestId('modal-overlay'));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('Close dialog'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('dirty: Esc and X ask first, and close only when confirmed', async () => {
+    const onClose = vi.fn();
+    render(
+      <ConfirmProvider>
+        <Modal open onClose={onClose} title="Hi" dirty>body</Modal>
+      </ConfirmProvider>
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(await screen.findByText('Discard changes?')).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Keep editing'));
+    await act(async () => {});
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('Close dialog'));
+    fireEvent.click(await screen.findByText('Discard'));
+    await act(async () => {});
     expect(onClose).toHaveBeenCalledTimes(1);
   });
   // Focus management (Plan 3 Task 10 a11y pass). Before this, opening a modal

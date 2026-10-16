@@ -14,7 +14,7 @@
 // blank on an edit — leaving it blank keeps the one already stored.
 import React, { useEffect, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
-import { Button, Checkbox, Field, Input, Modal } from '../../components/ui';
+import { Button, Checkbox, Field, Input, Modal, NumberInput } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { mailApi, type ImapAccountInput } from '../../utils/mailApi';
 import type { MailAccount } from '../mail/types';
@@ -180,7 +180,7 @@ export const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ open, onClose,
               onChange={e => set('imapHost', e.target.value)} placeholder="imap.company.com" />
           </Field>
           <Field label="IMAP port" htmlFor="imap-port">
-            <Input id="imap-port" type="number" inputMode="numeric" value={form.imapPort}
+            <NumberInput id="imap-port" inputMode="numeric" value={form.imapPort}
               onChange={e => set('imapPort', e.target.value)} />
           </Field>
         </div>
@@ -193,7 +193,7 @@ export const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ open, onClose,
               onChange={e => set('smtpHost', e.target.value)} placeholder="smtp.company.com" />
           </Field>
           <Field label="SMTP port" htmlFor="smtp-port">
-            <Input id="smtp-port" type="number" inputMode="numeric" value={form.smtpPort}
+            <NumberInput id="smtp-port" inputMode="numeric" value={form.smtpPort}
               onChange={e => set('smtpPort', e.target.value)} />
           </Field>
         </div>

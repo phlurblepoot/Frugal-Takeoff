@@ -360,6 +360,7 @@ const PROJECT_DATA_QUERIES: [string, string][] = [
   ['invoices', 'SELECT COUNT(*) AS c FROM invoices WHERE projectId = @id'],
   ['payments', `SELECT COUNT(*) AS c FROM payments WHERE ${PROJECT_PAYMENTS.replace(/\?/g, '@id')}`],
   ['changeOrders', 'SELECT COUNT(*) AS c FROM change_orders WHERE projectId = @id'],
+  ['lienReleases', 'SELECT COUNT(*) AS c FROM lien_releases WHERE projectId = @id'],
   ['payApps', 'SELECT COUNT(*) AS c FROM aia_pay_apps WHERE projectId = @id'],
   ['sovLines', 'SELECT COUNT(*) AS c FROM aia_sov_lines WHERE projectId = @id'],
   ['rfis', 'SELECT COUNT(*) AS c FROM rfis WHERE projectId = @id'],
@@ -385,7 +386,7 @@ export function projectDataSummary(db: Database.Database, id: string): { hasData
 
 // Kinds only admins see elsewhere (billing, proposals, everyone's time) —
 // someone else is told they exist, not how many of each.
-const ADMIN_ONLY_DATA_KINDS = ['proposals', 'invoices', 'payments', 'changeOrders', 'payApps', 'sovLines', 'timeEntries'];
+const ADMIN_ONLY_DATA_KINDS = ['proposals', 'invoices', 'payments', 'changeOrders', 'lienReleases', 'payApps', 'sovLines', 'timeEntries'];
 
 export function visibleDataSummary(summary: ProjectDataSummary, isAdmin: boolean): ProjectDataSummary {
   if (isAdmin) return summary;
@@ -429,6 +430,7 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     // A record's PDF attachments (migration 42) go before the record itself.
     db.prepare('DELETE FROM change_order_attachments WHERE changeOrderId IN (SELECT id FROM change_orders WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM change_orders WHERE projectId = ?').run(id);
+    db.prepare('DELETE FROM lien_releases WHERE projectId = ?').run(id);
     // Issue rows (Phase 4b) — photos and attachments link to issues, delete them first.
     db.prepare('DELETE FROM issue_photos WHERE issueId IN (SELECT id FROM issues WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM issue_attachments WHERE issueId IN (SELECT id FROM issues WHERE projectId = ?)').run(id);

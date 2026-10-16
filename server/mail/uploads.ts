@@ -24,3 +24,9 @@ export function sweepUploads(dataDir: string, maxAgeMs = 3_600_000): void {
   const cutoff = Date.now() - maxAgeMs;
   for (const f of fs.readdirSync(d)) { const p = path.join(d, f); try { if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p); } catch { /* ignore */ } }
 }
+/** Marks a staged upload as in use (a saved draft carries it) so the sweeper keeps it. */
+export function touchUpload(dataDir: string, uploadId: string): void {
+  if (!/^[0-9a-f-]{36}$/.test(uploadId)) return;
+  const d = dirOf(dataDir); const now = new Date();
+  for (const ext of ['.bin', '.json']) { try { fs.utimesSync(path.join(d, uploadId + ext), now, now); } catch { /* gone */ } }
+}

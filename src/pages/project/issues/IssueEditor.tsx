@@ -17,6 +17,7 @@ import { IssueStatusPill, ISSUE_STATUS_META } from '../../../components/ui/Issue
 import { buildIssuePdf } from './issuePdf';
 import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
+import { useDiscardGuard } from '../../../components/ui/useDiscardGuard';
 
 export const IssueEditor: React.FC<{
   issue: Issue;
@@ -35,6 +36,7 @@ export const IssueEditor: React.FC<{
   const [saving, setSaving] = useState(false);
 
   const dirty = title.trim() !== (issue.title ?? '') || description !== (issue.description ?? '');
+  const requestClose = useDiscardGuard(dirty, onClose);
   const padded = String(issue.number).padStart(3, '0');
   // One name for the stored document and the email attachment — they upsert
   // onto the same document row, so a differing name would flip the stored name
@@ -139,7 +141,7 @@ export const IssueEditor: React.FC<{
   };
 
   return (
-    <Modal open onClose={onClose} title={`ISS-${padded}`} width="lg"
+    <Modal open onClose={onClose} dirty={dirty} title={`ISS-${padded}`} width="lg"
       footer={<>
         <div className="mr-auto">
           <DocumentActionsBar
@@ -174,7 +176,7 @@ export const IssueEditor: React.FC<{
             }}
           />
         </div>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >

@@ -27,7 +27,7 @@ vi.mock('../../utils/store', async (importOriginal) => ({
   getDocumentTypes: vi.fn().mockResolvedValue([]),
 }));
 
-import { DocumentsPage } from './DocumentsPage';
+import { DocumentsPage, ProjectDocuments } from './DocumentsPage';
 
 function mount() {
   return render(
@@ -81,5 +81,27 @@ describe('DocumentsPage live refresh', () => {
     });
     await new Promise(r => setTimeout(r, 500));
     expect(getDocuments).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ProjectDocuments (project Documents tab)', () => {
+  beforeEach(() => {
+    getDocuments.mockReset();
+    getDocuments.mockResolvedValue({ rows: [], total: 0 });
+  });
+
+  it('pins the list to the route project, ignores projectIds in the URL, and hides the Project filter', async () => {
+    render(
+      <MemoryRouter initialEntries={['/project/p1/documents?projectIds=p9']}>
+        <Routes><Route path="/project/:projectId/documents" element={<ProjectDocuments />} /></Routes>
+      </MemoryRouter>
+    );
+    await rtlWaitFor(() => expect(getDocuments).toHaveBeenCalled());
+    for (const [args] of getDocuments.mock.calls) {
+      expect(args.projectIds).toEqual(['p1']);
+      expect(args.unassigned).toBe(false);
+    }
+    expect(screen.queryByTestId('doc-filter-project')).toBeNull();
+    expect(screen.getByTestId('doc-filter-customer')).toBeTruthy();
   });
 });

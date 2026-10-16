@@ -8,6 +8,7 @@ import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
+import { useDiscardGuard } from '../../../components/ui/useDiscardGuard';
 
 interface Props {
   item: PunchItem;
@@ -29,6 +30,7 @@ export const PunchItemEditor: React.FC<Props> = ({ item, projectId, onClose, onS
   const [saving, setSaving] = useState(false);
 
   const dirty = area !== item.area || description !== item.description;
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   const collab = useCollabEditing({
     type: 'punch',
@@ -62,9 +64,9 @@ export const PunchItemEditor: React.FC<Props> = ({ item, projectId, onClose, onS
   };
 
   return (
-    <Modal open onClose={onClose} title="Punch item" width="lg"
+    <Modal open onClose={onClose} dirty={dirty} title="Punch item" width="lg"
       footer={<>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >

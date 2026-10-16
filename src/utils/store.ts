@@ -114,7 +114,15 @@ export const handleResponse = async (res: Response) => {
   if (res.status === 401) {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    window.location.href = '/login';
+    // Already on the sign-in page (another request's 401 got here first, or
+    // this page moved there itself): leave its address alone, or a reload to
+    // plain /login would drop the ?next= return target.
+    if (window.location.pathname !== '/login') {
+      // Shared files are waiting on the share page; sign in and come straight back.
+      window.location.href = window.location.pathname === '/share-target'
+        ? `/login?next=${encodeURIComponent('/share-target?shared=1')}`
+        : '/login';
+    }
     throw new Error('Session expired. Please log in again.');
   }
   if (!res.ok) {
@@ -1407,6 +1415,18 @@ export const patchFile = async (
   return await res.json();
 };
 
+// Merge PDFs: the chosen PDFs, in order, saved as one new document. Returns
+// the new document's id and name.
+export const mergePdfFiles = async (ids: string[], name?: string, projectId?: string): Promise<{ fileId: string; name: string }> => {
+  const res = await fetchWithRetry('/api/files/merge-pdf', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ ids, ...(name ? { name } : {}), ...(projectId ? { projectId } : {}) }),
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
 // Admin-managed custom document types (spec §Data model: settings.documentTypes
 // JSON [{id,label}], files store the id). Saved through the general settings
 // PUT path like every other admin setting — see Settings.tsx's other cards.
@@ -1716,6 +1736,79 @@ export const removeCOAttachment = async (coId: string, fileId: string): Promise<
 };
 export const sendChangeOrder = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res); return res.json();
+};
+// ── Lien releases (Florida; server/lienReleaseRoutes.ts) ─────────────────────
+export type LienRelease = import('../pages/project/billing/lienReleaseWording').LienRelease;
+export interface LienReleasePrefill {
+  paymentType: 'progress' | 'final';
+  conditional: boolean;
+  sourceType: 'payapp' | 'invoice' | null;
+  sourceId: string | null;
+  lienorName: string;
+  lienorEntityType?: LienRelease['lienorEntityType'];
+  lienorState?: string | null;
+  customerName: string;
+  ownerName: string;
+  propertyDescription: string;
+  amountCents: number;
+  throughDate: string | null;
+  releaseDate: string;
+  signerName: string;
+  signerTitle: string | null;
+  conditionKind: 'check' | 'funds' | null;
+  checkMaker: string | null;
+  exceptions: string | null;
+  /** The pay app or invoice it starts from: label, billed, paid, balance. */
+  source: { label: string; totalCents: number; paidCents: number; balanceCents: number; contractSumToDateCents?: number } | null;
+  warnings: string[];
+}
+export type LienReleaseInput = Partial<Omit<LienRelease, 'id' | 'projectId' | 'number' | 'status' | 'createdAt' | 'updatedAt'>>;
+export interface LienReleasePrefillQuery {
+  sourceType?: 'payapp' | 'invoice';
+  sourceId?: string;
+  paymentId?: string;
+  paymentType?: 'progress' | 'final';
+  conditional?: boolean;
+}
+export const getLienReleases = async (projectId: string): Promise<LienRelease[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/lien-releases`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getLienRelease = async (id: string): Promise<LienRelease> => {
+  const res = await fetchWithRetry(`/api/lien-releases/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getLienReleasePrefill = async (projectId: string, q: LienReleasePrefillQuery): Promise<LienReleasePrefill> => {
+  const params = new URLSearchParams();
+  if (q.sourceType) params.set('sourceType', q.sourceType);
+  if (q.sourceId) params.set('sourceId', q.sourceId);
+  if (q.paymentId) params.set('paymentId', q.paymentId);
+  if (q.paymentType) params.set('paymentType', q.paymentType);
+  if (q.conditional !== undefined) params.set('conditional', q.conditional ? '1' : '0');
+  const res = await fetchWithRetry(`/api/projects/${projectId}/lien-releases/prefill?${params}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createLienRelease = async (projectId: string, input: LienReleaseInput): Promise<{ id: string; number: string; version: number }> => {
+  const res = await billingJson('POST', `/api/projects/${projectId}/lien-releases`, input);
+  await handleResponse(res); return res.json();
+};
+export const saveLienRelease = async (id: string, input: LienReleaseInput): Promise<{ version: number }> => {
+  const res = await billingJson('PUT', `/api/lien-releases/${id}`, input);
+  if (res.status === 409) throw new ConflictError(id);
+  await handleResponse(res); return res.json();
+};
+export const setLienReleaseStatus = async (id: string, status: 'void' | 'draft'): Promise<void> => {
+  const res = await billingJson('PATCH', `/api/lien-releases/${id}/status`, { status }); await handleResponse(res);
+};
+export const makeLienReleaseUnconditional = async (id: string): Promise<{ id: string; number: string; version: number }> => {
+  const res = await billingJson('POST', `/api/lien-releases/${id}/unconditional`, {});
+  await handleResponse(res); return res.json();
+};
+export const deleteLienRelease = async (id: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/lien-releases/${id}`); await handleResponse(res);
+};
+export const sendLienRelease = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await billingJson('POST', `/api/lien-releases/${id}/send`, payload); await handleResponse(res); return res.json();
 };
 export const getBillingSummary = async (projectId: string): Promise<BillingSummary> =>
   dedupeInFlight(`billing-summary:${projectId}`, async () => {
@@ -2525,6 +2618,77 @@ export const getAlwaysCc = async (): Promise<string> => {
   }
 };
 
+// ── Default project tab ──────────────────────────────────────────────────────
+// Per-user pref `defaultProjectTab` (a project section id, e.g. 'documents').
+// Cached for the session so opening several projects reads the server once.
+export const DEFAULT_PROJECT_TAB_PREF = 'defaultProjectTab';
+let defaultProjectTabCache: string | null = null;
+export const peekDefaultProjectTab = (): string | null => defaultProjectTabCache;
+export const getDefaultProjectTab = async (): Promise<string> => {
+  if (defaultProjectTabCache !== null) return defaultProjectTabCache;
+  try {
+    const prefs = await getUserPreferences();
+    defaultProjectTabCache = prefs[DEFAULT_PROJECT_TAB_PREF] || 'overview';
+  } catch {
+    return 'overview';
+  }
+  return defaultProjectTabCache;
+};
+export const setDefaultProjectTab = async (tab: string): Promise<void> => {
+  await saveUserPreferences({ [DEFAULT_PROJECT_TAB_PREF]: tab });
+  defaultProjectTabCache = tab;
+};
+
+// ── Favorite projects ────────────────────────────────────────────────────────
+// Per-user pref `favoriteProjects` (JSON array of project ids). Cached for the
+// session; subscribers (stars on cards and in the project top bar) re-render
+// when it changes.
+export const FAVORITE_PROJECTS_PREF = 'favoriteProjects';
+let favoriteProjectsCache: string[] | null = null;
+let favoriteProjectsLoading: Promise<string[]> | null = null;
+const favoriteListeners = new Set<() => void>();
+const emitFavorites = () => favoriteListeners.forEach(l => l());
+export const peekFavoriteProjects = (): string[] | null => favoriteProjectsCache;
+export const subscribeFavoriteProjects = (fn: () => void): (() => void) => {
+  favoriteListeners.add(fn);
+  return () => { favoriteListeners.delete(fn); };
+};
+export const parseFavoriteProjects = (raw: string | undefined): string[] => {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch { return []; }
+};
+export const getFavoriteProjects = async (): Promise<string[]> => {
+  if (favoriteProjectsCache !== null) return favoriteProjectsCache;
+  if (!favoriteProjectsLoading) {
+    favoriteProjectsLoading = getUserPreferences()
+      .then(prefs => {
+        // A toggle that landed while loading wins over the fetched value.
+        if (favoriteProjectsCache === null) favoriteProjectsCache = parseFavoriteProjects(prefs[FAVORITE_PROJECTS_PREF]);
+        emitFavorites();
+        return favoriteProjectsCache;
+      })
+      .catch(() => [] as string[])
+      .finally(() => { favoriteProjectsLoading = null; });
+  }
+  return favoriteProjectsLoading;
+};
+export const toggleFavoriteProject = async (projectId: string): Promise<void> => {
+  const prev = favoriteProjectsCache ?? await getFavoriteProjects();
+  const next = prev.includes(projectId) ? prev.filter(id => id !== projectId) : [...prev, projectId];
+  favoriteProjectsCache = next;
+  emitFavorites();
+  try {
+    await saveUserPreferences({ [FAVORITE_PROJECTS_PREF]: JSON.stringify(next) });
+  } catch (e) {
+    favoriteProjectsCache = prev;
+    emitFavorites();
+    throw e;
+  }
+};
+
 // ── Customers ────────────────────────────────────────────────────────────────
 
 export interface CustomerProjectCounts {
@@ -2806,4 +2970,22 @@ export const sendTestPush = async (): Promise<{ sent: number; removed: number; f
   const res = await fetchWithRetry('/api/push/test', { method: 'POST', headers: { ...getAuthHeaders() } });
   await handleResponse(res);
   return res.json();
+};
+
+export type AppendPosition = 'start' | 'end' | { afterPage: number };
+
+// Append pages: chosen pages of other PDFs go into this PDF, saved as a new
+// version of it. `pages` is text like "1-3, 5"; blank means every page.
+export const appendPdfPages = async (
+  id: string,
+  sources: { id: string; pages?: string }[],
+  position: AppendPosition,
+): Promise<{ fileId: string; versionNumber: number }> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/append-pdf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ sources, position }),
+  });
+  await handleResponse(res);
+  return await res.json();
 };

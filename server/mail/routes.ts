@@ -5,18 +5,19 @@ import { v4 as uuidv4 } from 'uuid';
 import type { MailContext } from './context';
 import * as accounts from './accountStore';
 import { upsertEnvelopes, rebuildThread, runBackfill } from './sync/engine';
-import { sanitizeEmailHtml } from './sanitize';
+import { sanitizeEmailHtml, cleanDraftHtml } from './sanitize';
 import { htmlToText, newMessageIdHeader } from './mime';
-import { send, MailSendError } from './sendService';
+import { send, MailSendError, resolveAttachments, replyHeaders, MAX_DRAFT_ATTACHMENT_BYTES } from './sendService';
 import { createLink, deleteLink, listLinksForItem, listLinksForThread, resolveLinkLabel, type ItemType } from './links';
 import { normalizeSubject } from './threadKey';
-import { stageUpload } from './uploads';
+import { stageUpload, touchUpload } from './uploads';
 import { buildAuthUrl, createVerifier, challengeOf, signState, verifyState, exchangeCode, isOAuthProvider, redactGrant, redirectUri } from './oauth';
 import { getWebhookSecret, getGooglePushSecret, handleGraphWebhook, handleGoogleWebhook, releaseGmailWatch, constantTimeEquals, WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './push';
 import { putBuffer } from '../files';
 import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
-import type { AttachmentMeta, AttachmentHint, Addr, MailProvider, MoveResult } from './providers/types';
+import { AttachmentTooLargeError } from './providers/types';
+import type { AttachmentMeta, AttachmentHint, Addr, MailProvider, MoveResult, OutgoingAttachment } from './providers/types';
 import { AuthExpiredError, ProviderNotFoundError } from './providers/types';
 import { getFakeProvider } from './providers/fakeRegistry';
 import type { Seeded } from './providers/fake';
@@ -82,7 +83,7 @@ export function createWebhookRateLimit(max: number = WEBHOOK_RATE_LIMIT_PER_MIN,
 }
 
 // The runtime twin of the ItemType union — typed as ItemType[] so a typo here is a compile error.
-const ITEM_TYPES: readonly ItemType[] = ['proposal', 'invoice', 'changeOrder', 'payApp', 'issue', 'rfi', 'dailyReport', 'punch', 'task', 'project', 'customer'];
+const ITEM_TYPES: readonly ItemType[] = ['proposal', 'invoice', 'changeOrder', 'lienRelease', 'payApp', 'issue', 'rfi', 'dailyReport', 'punch', 'task', 'project', 'customer'];
 const isItemType = (v: unknown): v is ItemType => typeof v === 'string' && (ITEM_TYPES as readonly string[]).includes(v);
 
 const ACTIONS = ['read', 'unread', 'star', 'unstar', 'archive', 'trash', 'move'] as const;
@@ -128,6 +129,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
 
   const fail = (res: express.Response, e: any, fallback: string) => {
     if (e instanceof MailSendError) return res.status(e.status).json({ error: e.message });
+    if (e instanceof AttachmentTooLargeError) return res.status(413).json({ error: e.message });
     if (e instanceof AuthExpiredError) return res.status(409).json({ error: 'Mail account needs to be reconnected', code: 'auth_error' });
     // Spec §7: a provider's raw error can carry hosts, credentials or internal
     // detail. The client gets a fixed string; the detail stays in the log.
@@ -683,10 +685,13 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     // 202, not an error: this resolves itself on the next sync, and the client
     // shows "Sending…" rather than a failure.
     if (isPending(m)) return res.status(202).json({ pending: true });
-    const allowImages = req.query.images === '1';
+    const sender = (m.fromAddr || '').trim().toLowerCase() || null;
+    const senderTrusted = !!sender && !!db.prepare('SELECT 1 FROM mail_trusted_image_senders WHERE userId = ? AND addr = ?').get(userOf(req).id, sender);
+    const allowImages = req.query.images === '1' || senderTrusted;
+    // sender/trust are per user, so they are layered on after the cache.
     const key = `${m.id}:${allowImages ? 1 : 0}`;
     const hit = deps.bodyCache.get(key);
-    if (hit) return res.json(hit);
+    if (hit) return res.json({ ...hit, imagesAllowed: allowImages, sender, senderTrusted });
     try {
       const raw = await providerFor(m.accountId).getBody(m.providerMessageId);
       // This read is the one that hands the client its attachment ids (the
@@ -705,8 +710,27 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         : { html: `<pre style="white-space:pre-wrap;font-family:inherit">${escaped}</pre>`, blockedRemoteImages: 0 };
       const payload: BodyPayload = { html: html.html, text: raw.text ?? htmlToText(raw.html ?? ''), blockedRemoteImages: html.blockedRemoteImages, attachments: raw.attachments };
       deps.bodyCache.set(key, payload, payload.html.length + payload.text.length);
-      res.json(payload);
+      res.json({ ...payload, imagesAllowed: allowImages, sender, senderTrusted });
     } catch (e) { fail(res, e, 'Failed to load message'); }
+  });
+
+  // Senders whose remote images this user always loads.
+  const normAddr = (v: unknown): string => String(v ?? '').trim().toLowerCase();
+  app.get('/api/mail/image-senders', authenticateToken, (req, res) => {
+    const rows = db.prepare('SELECT addr FROM mail_trusted_image_senders WHERE userId = ? ORDER BY addr').all(userOf(req).id) as { addr: string }[];
+    res.json({ senders: rows.map(r => r.addr) });
+  });
+  app.put('/api/mail/image-senders', authenticateToken, (req, res) => {
+    const addr = normAddr((req.body as { addr?: unknown } | undefined)?.addr);
+    if (!addr || addr.length > 320 || !addr.includes('@')) return res.status(400).json({ error: 'A sender address is required' });
+    db.prepare('INSERT OR IGNORE INTO mail_trusted_image_senders (userId, addr, createdAt) VALUES (?, ?, ?)').run(userOf(req).id, addr, Date.now());
+    res.status(204).end();
+  });
+  app.delete('/api/mail/image-senders', authenticateToken, (req, res) => {
+    const addr = normAddr(req.query.addr);
+    if (!addr) return res.status(400).json({ error: 'A sender address is required' });
+    db.prepare('DELETE FROM mail_trusted_image_senders WHERE userId = ? AND addr = ?').run(userOf(req).id, addr);
+    res.status(204).end();
   });
 
   const PENDING_ATTACHMENT = 'This message is still being filed by the mail server — its attachments will be available in a minute';
@@ -972,23 +996,91 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     catch (e) { fail(res, e, 'Send failed'); }
   });
 
-  const draftMsg = (a: accounts.MailAccountRow, b: any) => ({
+  /** A reply draft carries the same In-Reply-To/References its send will, so the provider files it
+   *  in the conversation and a resumed draft still knows what it answers. */
+  const draftReplyHeaders = (req: express.Request, b: any): { inReplyTo?: string; references?: string[] } => {
+    const r = b?.replyTo;
+    if (!r || typeof r.accountId !== 'string' || typeof r.threadKey !== 'string') return {};
+    return replyHeaders(ctx, userOf(req).id, { accountId: r.accountId, threadKey: r.threadKey });
+  };
+  const draftMsg = (req: express.Request, a: accounts.MailAccountRow, b: any, attachments: OutgoingAttachment[] = []) => ({
     from: a.displayName ? { addr: a.emailAddress, name: a.displayName } : { addr: a.emailAddress },
     to: b.to ?? [], cc: b.cc ?? [], bcc: b.bcc ?? [], subject: b.subject ?? '', html: b.html ?? '', text: htmlToText(b.html ?? ''),
-    attachments: [], messageIdHeader: newMessageIdHeader(a.emailAddress.split('@')[1] || 'localhost'),
+    attachments, messageIdHeader: newMessageIdHeader(a.emailAddress.split('@')[1] || 'localhost'),
+    ...draftReplyHeaders(req, b),
   });
+  /** Draft saves carry the composer's attachments (app files and staged uploads). Staged uploads are
+   *  touched, not discarded, so the sweeper keeps them while the draft is still being edited; send discards them. */
+  const draftAttachments = (b: any): OutgoingAttachment[] => {
+    const r = resolveAttachments(ctx, Array.isArray(b?.attachments) ? b.attachments : [], { maxTotalBytes: MAX_DRAFT_ATTACHMENT_BYTES });
+    r.usedUploads.forEach(id => touchUpload(ctx.dataDir, id));
+    return r.attachments;
+  };
   app.post('/api/mail/drafts', authenticateToken, async (req, res) => {
     const a = owned(req, String(req.body?.accountId));
     if (!a) return res.status(404).json({ error: 'Account not found' });
-    try { const r = await providerFor(a.id).saveDraft(draftMsg(a, req.body)); res.json({ draftId: r.providerMessageId }); }
+    try { const r = await providerFor(a.id).saveDraft(draftMsg(req, a, req.body, draftAttachments(req.body))); res.json({ draftId: r.providerMessageId }); }
     catch (e) { fail(res, e, 'Draft save failed'); }
   });
   app.put('/api/mail/drafts/:id', authenticateToken, async (req, res) => {
     const a = owned(req, String(req.body?.accountId));
     if (!a) return res.status(404).json({ error: 'Account not found' });
-    try { const r = await providerFor(a.id).saveDraft(draftMsg(a, req.body), req.params.id); res.json({ draftId: r.providerMessageId }); }
+    try { const r = await providerFor(a.id).saveDraft(draftMsg(req, a, req.body, draftAttachments(req.body)), req.params.id); res.json({ draftId: r.providerMessageId }); }
     catch (e) { fail(res, e, 'Draft save failed'); }
   });
+  /**
+   * Reopens a draft in the composer (spec §9). Answers its fields, a lightly
+   * cleaned body (not the reader's sanitized one), and its attachments staged as
+   * uploads, so the next autosave re-sends them like any composer attachment.
+   * `draftId` is the provider id every provider's saveDraft/deleteDraft accepts
+   * for a synced draft (Gmail resolves a message id to its draft id).
+   * `replyTo` names the thread the draft answers, so its send threads.
+   */
+  app.get('/api/mail/messages/:id/draft', authenticateToken, async (req, res) => {
+    const m = ownedMessage(req, req.params.id);
+    if (!m) return res.status(404).json({ error: 'Message not found' });
+    if (!m.isDraft) return res.status(400).json({ error: 'This message is not a draft' });
+    try {
+      const provider = providerFor(m.accountId);
+      const raw = await provider.getBody(m.providerMessageId);
+      const attachments: Array<{ uploadId: string; name: string; size: number }> = [];
+      let total = 0;
+      for (const meta of raw.attachments) {
+        const att = await provider.getAttachment(m.providerMessageId, meta.attId, hintOf(meta));
+        const chunks: Buffer[] = [];
+        try {
+          for await (const c of att.stream as AsyncIterable<Buffer>) {
+            total += c.length;
+            if (total > MAX_DRAFT_ATTACHMENT_BYTES) throw new MailSendError('This draft\'s attachments are too large to open here', 413);
+            chunks.push(c);
+          }
+        } catch (e) { endStream(att.stream); throw e; }
+        const buf = Buffer.concat(chunks);
+        const name = meta.name || att.name || 'attachment';
+        const { uploadId } = stageUpload(ctx.dataDir, name, meta.mime || att.mime || 'application/octet-stream', buf);
+        attachments.push({ uploadId, name, size: buf.length });
+      }
+      const escaped = (raw.text || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!));
+      const html = raw.html ? cleanDraftHtml(raw.html) : escaped.replace(/\r?\n/g, '<br>');
+
+      // A reply draft shares its thread with the mail it answers; failing that,
+      // its In-Reply-To names the message (a provider may have filed it alone).
+      let replyTo: { accountId: string; threadKey: string } | null = null;
+      const answered = db.prepare('SELECT 1 FROM mail_messages WHERE accountId = ? AND threadKey = ? AND isDraft = 0 LIMIT 1').get(m.accountId, m.threadKey);
+      if (answered) replyTo = { accountId: m.accountId, threadKey: m.threadKey };
+      else if (m.inReplyTo) {
+        const parent = db.prepare('SELECT threadKey FROM mail_messages WHERE accountId = ? AND messageIdHeader = ? AND isDraft = 0 LIMIT 1').get(m.accountId, m.inReplyTo) as { threadKey: string } | undefined;
+        if (parent) replyTo = { accountId: m.accountId, threadKey: parent.threadKey };
+      }
+
+      const row = parseRow(m);
+      res.json({
+        messageId: m.id, accountId: m.accountId, draftId: m.providerMessageId,
+        to: row.to, cc: row.cc, bcc: row.bcc, subject: row.subject ?? '', html, attachments, replyTo,
+      });
+    } catch (e) { fail(res, e, 'Failed to open draft'); }
+  });
+
   app.delete('/api/mail/drafts/:id', authenticateToken, async (req, res) => {
     const a = owned(req, String(req.query.accountId));
     if (!a) return res.status(404).json({ error: 'Account not found' });

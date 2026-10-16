@@ -28,7 +28,7 @@ import type {
   MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, OutgoingAttachment,
   AttachmentMeta, FolderRole, Addr, MoveResult,
 } from './types';
-import { AuthExpiredError, RateLimitedError, ProviderNotFoundError } from './types';
+import { AuthExpiredError, RateLimitedError, ProviderNotFoundError, AttachmentTooLargeError } from './types';
 import type { TokenSource } from './tokenSource';
 import { snippetOf, htmlToText, decodeEntities } from '../mime';
 import { normalizeMessageId } from '../threadKey';
@@ -571,7 +571,7 @@ export class GraphProvider implements MailProvider {
 
   private assertSendable(a: OutgoingAttachment): void {
     if (a.content.length > MAX_ATTACHMENT_BYTES) {
-      throw new Error(`Attachment "${a.name}" is ${(a.content.length / 1024 / 1024).toFixed(1)} MB — Microsoft 365 accepts at most 3 MB per attachment when sending from this app. Send it as a link instead.`);
+      throw new AttachmentTooLargeError(`Attachment "${a.name}" is ${(a.content.length / 1024 / 1024).toFixed(1)} MB — Microsoft 365 accepts at most 3 MB per attachment when sending from this app. Send it as a link instead.`);
     }
   }
 
@@ -769,6 +769,19 @@ export class GraphProvider implements MailProvider {
       }
     }
     if (!id) {
+      // A reply draft is built from createReply, the only way Graph files a
+      // draft in the parent's conversation (it will not take our headers).
+      const parent = draft.inReplyTo ? await this.parentOf(draft.inReplyTo) : null;
+      if (parent) {
+        const reply = await this.api<GraphMessage>(`me/messages/${enc(parent.id)}/createReply`, { method: 'POST' });
+        if (reply?.id) {
+          await this.api<GraphMessage>(`me/messages/${enc(reply.id)}`, { method: 'PATCH', body });
+          for (const a of draft.attachments) {
+            await this.api<void>(`me/messages/${enc(reply.id)}/attachments`, { method: 'POST', body: JSON.stringify(this.fileAttachment(a)) });
+          }
+          return { providerMessageId: reply.id };
+        }
+      }
       const created = await this.api<GraphMessage>('me/messages', { method: 'POST', body });
       if (!created?.id) throw new Error('Microsoft stored the draft but did not return its id — reopen it from Drafts');
       id = created.id;

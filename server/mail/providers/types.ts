@@ -95,3 +95,5 @@ export interface MailProvider {
 export class AuthExpiredError extends Error {}
 export class RateLimitedError extends Error { retryAfterMs = 60_000 }
 export class ProviderNotFoundError extends Error {}
+/** An attachment the provider cannot carry (Graph's 3 MB inline limit). Routes answer 413 with this message. */
+export class AttachmentTooLargeError extends Error {}

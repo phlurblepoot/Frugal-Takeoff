@@ -8,19 +8,21 @@ import { itemSendPayload } from '../../../utils/itemSend';
 import { useGeneratedDocument } from '../../../hooks/useGeneratedDocument';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { PayAppPdfControls } from './PayAppPdfControls';
+import { LienReleaseLauncher } from './LienReleaseLauncher';
 import { buildAiaXlsxBlob } from './aiaExcel';
 import { resolveAiaExportEnv } from './aiaExportShared';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
 import { formatBillingDate } from '../../../utils/billingDates';
 import { useToast } from '../../../components/Toast';
 import {
-  Button, Field, Input, Modal, Select, StatusPill, Skeleton,
+  Button, Field, Input, NumberInput, Modal, Select, StatusPill, Skeleton,
   Table, TBody, TD, TH, THead, TR,
 } from '../../../components/ui';
 import type { PillTone } from '../../../components/ui';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
+import { useDiscardGuard } from '../../../components/ui/useDiscardGuard';
 
 const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
   draft:     { label: 'Draft',     tone: 'slate' },
@@ -145,6 +147,7 @@ export const AiaPayAppEditor: React.FC<{
     releaseDirty ||
     status !== pristineRef.current.status ||
     normalizeLines(edits) !== normalizeLines(pristineRef.current.edits);
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   const collab = useCollabEditing({
     type: 'aiaPayApp',
@@ -294,6 +297,7 @@ export const AiaPayAppEditor: React.FC<{
     <Modal
       open
       onClose={onClose}
+      dirty={dirty}
       title={data ? `Application for payment #${data.app.number}` : 'Application for payment'}
       width="full"
       footer={<>
@@ -301,7 +305,7 @@ export const AiaPayAppEditor: React.FC<{
             project, number and updatedAt, and persisting against a half-known
             record would file the workbook under the wrong project. */}
         {data && (
-          <div className="mr-auto">
+          <div className="mr-auto flex flex-wrap items-center gap-2">
             <DocumentActionsBar
               key={barKey}
               source={{ sourceType: 'payapp', sourceId: data.app.id }}
@@ -332,6 +336,7 @@ export const AiaPayAppEditor: React.FC<{
                 sendFn: (fileId, req) => sendPayApp(data.app.id, { ...itemSendPayload(req), fileId }),
               }}
             />
+            <LienReleaseLauncher projectId={data.app.projectId} source={{ sourceType: 'payapp', sourceId: data.app.id }} testId="payapp-lien-release" />
           </div>
         )}
         {data && (
@@ -346,7 +351,7 @@ export const AiaPayAppEditor: React.FC<{
             onWorkbookChanged={() => setBarKey(k => k + 1)}
           />
         )}
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         {!isFinalized && (
           <Button variant="secondary" onClick={handleFinalize} disabled={saving}>Finalize</Button>
         )}
@@ -384,9 +389,8 @@ export const AiaPayAppEditor: React.FC<{
             </p>
             <div className="flex flex-wrap items-end gap-3">
               <Field label="Release retainage on this application (% points)" htmlFor="pa-release">
-                <Input
+                <NumberInput allowEmpty
                   id="pa-release"
-                  type="number"
                   value={releasedRetainagePoints}
                   onChange={e => setReleasedRetainagePoints(e.target.value)}
                   disabled={isFinalized}
@@ -453,8 +457,7 @@ export const AiaPayAppEditor: React.FC<{
                         <TD className="text-right tabular-nums text-ink-soft">{formatMoney(row.previousCents)}</TD>
                         <TD className="text-right tabular-nums text-ink-soft">{formatMoney(row.thisPeriodCents)}</TD>
                         <TD className="w-32">
-                          <Input
-                            type="number"
+                          <NumberInput allowEmpty
                             className="text-right tabular-nums"
                             value={e.storedMaterials}
                             onChange={ev => setEdit(row.sovLineId, { storedMaterials: ev.target.value })}
@@ -463,9 +466,8 @@ export const AiaPayAppEditor: React.FC<{
                           />
                         </TD>
                         <TD className="w-32">
-                          <Input
+                          <NumberInput allowEmpty
                             data-testid={`pa-pct-${row.sovLineId}`}
-                            type="number"
                             className="text-right tabular-nums w-full"
                             value={e.percentComplete}
                             onChange={ev => setEdit(row.sovLineId, { percentComplete: ev.target.value })}
@@ -521,9 +523,8 @@ export const AiaPayAppEditor: React.FC<{
 
                     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <Field label="Stored (F)" htmlFor={`pa-stored-${row.sovLineId}`}>
-                        <Input
+                        <NumberInput allowEmpty
                           id={`pa-stored-${row.sovLineId}`}
-                          type="number"
                           className="text-right tabular-nums"
                           value={e.storedMaterials}
                           onChange={ev => setEdit(row.sovLineId, { storedMaterials: ev.target.value })}
@@ -532,9 +533,8 @@ export const AiaPayAppEditor: React.FC<{
                         />
                       </Field>
                       <Field label="% complete (G/C)" htmlFor={`pa-pct-${row.sovLineId}`}>
-                        <Input
+                        <NumberInput allowEmpty
                           id={`pa-pct-${row.sovLineId}`}
-                          type="number"
                           className="text-right tabular-nums"
                           value={e.percentComplete}
                           onChange={ev => setEdit(row.sovLineId, { percentComplete: ev.target.value })}

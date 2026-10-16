@@ -397,6 +397,22 @@ describe('GmailProvider', () => {
     expect(f.calls.some(c => /draft(%3A|:)d1\/attachments/.test(c.url))).toBe(false);
   });
 
+  it('a reply draft names its parent thread so Gmail files it in the conversation', async () => {
+    const f = fakeFetch([
+      [/\/messages\?/, () => ({ messages: [{ id: 'p1', threadId: 't1' }] })],
+      [/\/drafts$/, () => ({ id: 'd3', message: { id: 'dm3', threadId: 't1' } })],
+    ]);
+    const r = await provider(f).saveDraft({ ...outgoing(), inReplyTo: 'root-1@x', references: ['root-1@x'] });
+    expect(r).toEqual({ providerMessageId: 'draft:d3' });
+    expect(JSON.parse(f.calls[f.calls.length - 1].init.body).message.threadId).toBe('t1');
+
+    // A draft that answers nothing does no lookup and carries no threadId.
+    const plain = fakeFetch([[/\/drafts$/, () => ({ id: 'd4', message: { id: 'dm4' } })]]);
+    await provider(plain).saveDraft(outgoing());
+    expect(plain.calls).toHaveLength(1);
+    expect(JSON.parse(plain.calls[0].init.body).message.threadId).toBeUndefined();
+  });
+
   it('saveDraft writes a new draft when the one it was updating is gone', async () => {
     const f = fakeFetch([
       [/\/drafts\/gone$/, () => new Response('{}', { status: 404 })],
