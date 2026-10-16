@@ -453,6 +453,27 @@ describe('GraphProvider', () => {
     await expect(p.deleteDraft('gone')).resolves.toBeUndefined();
   });
 
+  it('a new reply draft is built with createReply so it sits in the parent conversation', async () => {
+    const f = fakeFetch([
+      [/\/me\/messages\?\$filter=internetMessageId/, () => ({ value: [{ id: 'p1', conversationId: 't1' }] })],
+      [/\/me\/messages\/p1\/createReply$/, () => ({ id: 'rd1', conversationId: 't1' })],
+      [/\/me\/messages\/rd1\/attachments$/, () => ({ id: 'a1' })],
+      [/\/me\/messages\/rd1$/, () => ({ id: 'rd1' })],
+      [/\/me\/messages$/, () => { throw new Error('a reply draft must not be created standalone'); }],
+    ]);
+    const r = await provider(f).saveDraft({
+      ...outgoing(), subject: 'Re: COR-4', inReplyTo: 'root-1@bigbearplaster.com', references: ['root-1@bigbearplaster.com'],
+      attachments: [{ name: 'COR-4.pdf', mime: 'application/pdf', content: Buffer.from('%PDF') }],
+    });
+    expect(r).toEqual({ providerMessageId: 'rd1' });
+    expect(f.calls.map(c => `${c.init.method ?? 'GET'} ${c.url.replace(/^.*\/v1\.0\//, '').split('?')[0]}`)).toEqual([
+      'GET me/messages',
+      'POST me/messages/p1/createReply',
+      'PATCH me/messages/rd1',
+      'POST me/messages/rd1/attachments',
+    ]);
+  });
+
   it('saveDraft writes a new draft when the one it was updating is gone', async () => {
     const f = fakeFetch([
       [/\/me\/messages\/gone$/, () => new Response('{}', { status: 404 })],

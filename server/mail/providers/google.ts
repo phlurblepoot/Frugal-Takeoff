@@ -689,13 +689,24 @@ export class GmailProvider implements MailProvider {
   async saveDraft(draft: OutgoingMessage, existingProviderId?: string): Promise<{ providerMessageId: string }> {
     const raw = b64url(await buildRawMime(draft));
     const existing = existingProviderId ? await this.draftIdFor(existingProviderId) : null;
-    const create = (): Promise<GmailDraft> => this.api<GmailDraft>('drafts', { method: 'POST', body: JSON.stringify({ message: { raw } }) });
-    const r = existing
-      ? await this.api<GmailDraft>(`drafts/${encodeURIComponent(existing)}`, { method: 'PUT', body: JSON.stringify({ id: existing, message: { raw } }) })
-        // The draft was discarded elsewhere while it was open here: saving must
-        // still keep the user's words, so fall back to writing a new one.
-        .catch(e => { if (e instanceof ProviderNotFoundError) return create(); throw e; })
-      : await create();
+    // A reply draft names its thread, as a reply send does, or Gmail's own UI
+    // files it as a new conversation. A rejected threadId only costs threading.
+    const threadId = draft.inReplyTo ? await this.threadIdOf(draft.inReplyTo) : undefined;
+    const message = (withThread: boolean): Record<string, string> => (withThread && threadId ? { raw, threadId } : { raw });
+    const write = (withThread: boolean): Promise<GmailDraft> => {
+      const create = (): Promise<GmailDraft> => this.api<GmailDraft>('drafts', { method: 'POST', body: JSON.stringify({ message: message(withThread) }) });
+      return existing
+        ? this.api<GmailDraft>(`drafts/${encodeURIComponent(existing)}`, { method: 'PUT', body: JSON.stringify({ id: existing, message: message(withThread) }) })
+          // The draft was discarded elsewhere while it was open here: saving must
+          // still keep the user's words, so fall back to writing a new one.
+          .catch(e => { if (e instanceof ProviderNotFoundError) return create(); throw e; })
+        : create();
+    };
+    const r = await write(true).catch(e => {
+      if (!threadId || !isThreadRejection(e)) throw e;
+      console.warn('[gmail] draft with threadId was rejected, saving unthreaded:', (e as Error).message);
+      return write(false);
+    });
     const id = r.id ?? existing;
     if (!id) throw new Error('Gmail stored the draft but did not return its id — reopen it from Drafts');
     return { providerMessageId: DRAFT_PREFIX + id };

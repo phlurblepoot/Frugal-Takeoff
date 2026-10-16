@@ -6,10 +6,13 @@ import { readFileContent } from '../fileStore';
 import type { Addr, OutgoingAttachment, OutgoingMessage } from './providers/types';
 import { htmlToText, newMessageIdHeader, snippetOf } from './mime';
 import { normalizeMessageId } from './threadKey';
-import { upsertEnvelopes } from './sync/engine';
+import { upsertEnvelopes, removeMessages } from './sync/engine';
 import { createLink, type ItemType } from './links';
 import { applySendEffects } from './itemSendEffects';
 import { readUpload, discardUpload } from './uploads';
+
+/** Gmail refuses messages over 25 MB; the same ceiling keeps a draft save from stalling any provider. */
+export const MAX_DRAFT_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 import type { EntityChangedEvent } from '../realtime/changeFeed';
 
 export class MailSendError extends Error { constructor(msg: string, public status = 400) { super(msg); } }
@@ -30,6 +33,42 @@ function fileAttachment(ctx: MailContext, fileId: string, name?: string): Outgoi
   return { name: name || meta.name || 'attachment', mime: meta.mime || 'application/octet-stream', content: buf };
 }
 
+/** Resolves request attachments (app files and staged uploads) to bytes. Shared by send and draft saves. */
+export function resolveAttachments(ctx: MailContext, list: SendRequest['attachments'] | undefined, opts: { maxTotalBytes?: number } = {}):
+  { attachments: OutgoingAttachment[]; usedUploads: string[]; tagged: Array<{ itemType: ItemType; itemId: string }> } {
+  const attachments: OutgoingAttachment[] = []; const usedUploads: string[] = []; const tagged: Array<{ itemType: ItemType; itemId: string }> = [];
+  let total = 0;
+  for (const a of list ?? []) {
+    if (a && typeof a === 'object' && 'uploadId' in a) {
+      const u = readUpload(ctx.dataDir, String(a.uploadId)); if (!u) throw new MailSendError('Staged upload expired — re-attach the file');
+      attachments.push({ name: u.name, mime: u.mime, content: u.buf }); usedUploads.push(a.uploadId); total += u.buf.length;
+    } else if (a && typeof a === 'object' && 'fileId' in a) {
+      const att = fileAttachment(ctx, a.fileId, a.name); attachments.push(att); total += att.content.length;
+      if (a.itemType && a.itemId) tagged.push({ itemType: a.itemType, itemId: a.itemId });
+    } else throw new MailSendError('Invalid attachment');
+    if (opts.maxTotalBytes && total > opts.maxTotalBytes) throw new MailSendError(`Attachments total more than ${Math.round(opts.maxTotalBytes / 1024 / 1024)} MB — remove some or send them as links`, 413);
+  }
+  return { attachments, usedUploads, tagged };
+}
+
+/** In-Reply-To / References for a message answering `replyTo`'s thread: its newest
+ *  non-draft message. Drafts are skipped because a resumed reply draft sits in the same
+ *  thread, and answering it would point the reply at a message nobody received.
+ *  Shared by send and draft saves, so a saved reply draft threads the way its send will. */
+export function replyHeaders(ctx: MailContext, userId: string, replyTo: { accountId: string; threadKey: string }):
+  { inReplyTo?: string; references?: string[] } {
+  // The reply target's accountId comes straight from the request — scope it to an
+  // account this user owns, or a user could probe another account's threads (IDOR).
+  const replyAccount = accounts.getOwned(ctx.db, userId, replyTo.accountId);
+  if (!replyAccount) throw new MailSendError('Reply target not found', 404);
+  const last = ctx.db.prepare('SELECT messageIdHeader, referencesJson FROM mail_messages WHERE accountId = ? AND threadKey = ? AND messageIdHeader IS NOT NULL AND isDraft = 0 ORDER BY date DESC LIMIT 1').get(replyTo.accountId, replyTo.threadKey) as { messageIdHeader: string; referencesJson: string } | undefined;
+  if (!last) return {};
+  return {
+    inReplyTo: last.messageIdHeader,
+    references: [...JSON.parse(last.referencesJson || '[]'), last.messageIdHeader].filter((x, i, arr) => arr.indexOf(x) === i),
+  };
+}
+
 export async function send(ctx: MailContext, user: { id: string; role: string }, req: SendRequest): Promise<SendResult> {
   const { db } = ctx;
   if (!req.to?.length) throw new MailSendError('At least one recipient is required');
@@ -46,21 +85,10 @@ export async function send(ctx: MailContext, user: { id: string; role: string },
   if (!usable(account)) throw new MailSendError(`Mail account ${account.emailAddress} is ${account.status.replace('_', ' ')} — fix it in Settings → Mail`, 409);
   const provider = ctx.scheduler ? ctx.scheduler.getProvider(account.id) : ctx.providerFactory(account, accounts.readAuth(db, ctx.crypto, account.id)!);
 
-  const attachments: OutgoingAttachment[] = []; const usedUploads: string[] = []; const tagged: Array<{ itemType: ItemType; itemId: string }> = [...(req.links ?? [])];
-  for (const a of req.attachments ?? []) {
-    if ('uploadId' in a) { const u = readUpload(ctx.dataDir, a.uploadId); if (!u) throw new MailSendError('Staged upload expired — re-attach the file'); attachments.push({ name: u.name, mime: u.mime, content: u.buf }); usedUploads.push(a.uploadId); }
-    else { attachments.push(fileAttachment(ctx, a.fileId, a.name)); if (a.itemType && a.itemId) tagged.push({ itemType: a.itemType, itemId: a.itemId }); }
-  }
+  const resolved = resolveAttachments(ctx, req.attachments);
+  const { attachments, usedUploads } = resolved; const tagged: Array<{ itemType: ItemType; itemId: string }> = [...(req.links ?? []), ...resolved.tagged];
 
-  let inReplyTo: string | undefined; let references: string[] | undefined;
-  if (req.replyTo) {
-    // The reply target's accountId comes straight from the request — scope it to an
-    // account this user owns, or a user could probe another account's threads (IDOR).
-    const replyAccount = accounts.getOwned(db, user.id, req.replyTo.accountId);
-    if (!replyAccount) throw new MailSendError('Reply target not found', 404);
-    const last = db.prepare('SELECT messageIdHeader, referencesJson FROM mail_messages WHERE accountId = ? AND threadKey = ? AND messageIdHeader IS NOT NULL ORDER BY date DESC LIMIT 1').get(req.replyTo.accountId, req.replyTo.threadKey) as { messageIdHeader: string; referencesJson: string } | undefined;
-    if (last) { inReplyTo = last.messageIdHeader; references = [...JSON.parse(last.referencesJson || '[]'), last.messageIdHeader].filter((x, i, arr) => arr.indexOf(x) === i); }
-  }
+  const { inReplyTo, references } = req.replyTo ? replyHeaders(ctx, user.id, req.replyTo) : {};
   const domain = account.emailAddress.split('@')[1] || 'localhost';
   const msg: OutgoingMessage = {
     from: account.displayName ? { addr: account.emailAddress, name: account.displayName } : { addr: account.emailAddress },
@@ -79,7 +107,13 @@ export async function send(ctx: MailContext, user: { id: string; role: string },
   // distinct error telling the caller not to resend rather than letting a DB/link
   // error masquerade as a send failure (which would invite a duplicate send).
   try {
-    if (req.draftProviderId) { try { await provider.deleteDraft(req.draftProviderId); } catch { /* best effort */ } }
+    if (req.draftProviderId) {
+      try { await provider.deleteDraft(req.draftProviderId); } catch { /* best effort */ }
+      // Drop the draft's local row (and broadcast) now, so it leaves the Drafts list at
+      // once instead of at the next sync. Runs even if the provider delete failed: the
+      // message has been sent, so the draft is stale either way.
+      try { removeMessages(ctx, account, [req.draftProviderId]); } catch (e) { console.error('[mail] draft row removal failed', e); }
+    }
 
     const { messageIds, threadKeys } = upsertEnvelopes(ctx, account, [{
       providerMessageId: sent.providerMessageId, providerThreadId: sent.providerThreadId, messageIdHeader: sentMessageIdHeader, inReplyTo, references: references ?? [],

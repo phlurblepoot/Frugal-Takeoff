@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeEmailHtml } from './sanitize';
+import { sanitizeEmailHtml, cleanDraftHtml } from './sanitize';
 
 const opts = { attachmentUrl: (cid: string) => (cid === 'img1' ? '/api/mail/messages/m/attachments/a1?inline=1' : null), allowRemoteImages: false };
 
@@ -162,5 +162,17 @@ describe('sanitizeEmailHtml inline-style images', () => {
   it('still strips non-remote or odd urls when images are allowed', () => {
     const r = sanitizeEmailHtml('<div style="background:url(javascript:alert(1))">x</div><p style="background:url(/api/x)">y</p>', on);
     expect(r.html).not.toContain('url(');
+  });
+});
+
+describe('cleanDraftHtml', () => {
+  it('keeps styles and remote images, drops scripts and cid images, never folds quotes', () => {
+    const out = cleanDraftHtml('<p style="color:red">Hi <img src="https://x/a.png"><img src="cid:logo"></p><script>alert(1)</script><blockquote type="cite">old</blockquote>');
+    expect(out).toContain('style="color:red"');
+    expect(out).toContain('src="https://x/a.png"');
+    expect(out).not.toContain('cid:');
+    expect(out).not.toContain('script');
+    expect(out).not.toContain('data-mail-quote');
+    expect(out).toContain('old');
   });
 });

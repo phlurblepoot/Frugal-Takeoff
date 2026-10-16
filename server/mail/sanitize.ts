@@ -90,6 +90,22 @@ export function sanitizeEmailHtml(
   return { html: wrapper.innerHTML, blockedRemoteImages: blocked };
 }
 
+/**
+ * The light clean a draft body gets before it goes back into the composer's
+ * editor. Unlike sanitizeEmailHtml this keeps inline styles and remote images
+ * (the user wrote this mail; the editor is not a tracking surface the way the
+ * reader is) and never folds quoted history. Active content is still removed,
+ * and `cid:` images are dropped because their parts come back as attachments.
+ */
+export function cleanDraftHtml(html: string): string {
+  const clean = purify.sanitize(html || '', SANITIZE_CONFIG) as unknown as HTMLElement;
+  clean.querySelectorAll('img').forEach((img) => {
+    const src = (img.getAttribute('src') || '').trim();
+    if (!src || /^cid:/i.test(src)) img.remove();
+  });
+  return clean.innerHTML;
+}
+
 // ── quoted history ─────────────────────────────────────────────────────────
 // A long reply chain is mostly a copy of what the reader already has. Every
 // mail client hides it behind a "…" and so do we — but the hiding has to
