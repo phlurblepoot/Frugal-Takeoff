@@ -27,6 +27,8 @@ export default defineConfig({
           // globals enables RTL's auto-cleanup between tests (it registers via
           // a global afterEach); ui project only — server tests import explicitly.
           globals: true,
+          // Node 25+ built-in localStorage shadows jsdom's; flag is accepted by Node 22.4+ too (project minimum is 22).
+          execArgv: ['--no-experimental-webstorage'],
         },
       },
     ],
