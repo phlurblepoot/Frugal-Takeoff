@@ -28,6 +28,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.1.12',
+    date: 'October 15, 2026',
+    changes: [
+      'Fix: "Load images" on an email now actually shows the pictures. The message frame was blocking them even after you asked to load them.',
+      'New: when images are blocked, a new button, "Always load from <sender>", turns on images for every email from that sender. It is saved to your own account, so it doesn't change what anyone else sees. A small "Stop loading" button next to it turns it back off.',
+    ],
+  },
+  {
     version: '4.1.11',
     date: 'October 15, 2026',
     changes: [

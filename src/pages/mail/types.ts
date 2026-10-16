@@ -142,6 +142,12 @@ export interface BodyPayload {
   text: string;
   blockedRemoteImages: number;
   attachments: AttachmentMeta[];
+  /** True when remote images were let through (asked for, or sender trusted). */
+  imagesAllowed?: boolean;
+  /** Lower-cased sender address, for "always load from". */
+  sender?: string | null;
+  /** The signed-in user always loads images from `sender`. */
+  senderTrusted?: boolean;
 }
 
 /** GET /api/mail/messages/:id/body can 202 while a just-sent message's Graph

@@ -148,6 +148,11 @@ export const mailApi = {
   body: (messageId: string, opts?: { images?: boolean }): Promise<BodyPayload | BodyPending> =>
     get(`/api/mail/messages/${encodeURIComponent(messageId)}/body${qs({ images: opts?.images ? 1 : undefined })}`),
 
+  trustImageSender: (addr: string): Promise<void> =>
+    postVoid('/api/mail/image-senders', { addr }, 'PUT'),
+  untrustImageSender: (addr: string): Promise<void> =>
+    del(`/api/mail/image-senders${qs({ addr })}`),
+
   // <img>/<a download> can't set an Authorization header, so this (like
   // oauthStartUrl) carries the token in the query string; ?inline=1 asks the
   // server for an inline Content-Disposition instead of a download prompt.

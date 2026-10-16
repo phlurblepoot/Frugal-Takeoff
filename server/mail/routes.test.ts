@@ -1752,3 +1752,16 @@ describe('mail _test fixture routes', () => {
     expect(other.body.thread.messageCount).toBe(1);
   });
 });
+
+describe('trusted image senders (per user)', () => {
+  it('stores, lists and removes a sender for the signed-in user only', async () => {
+    expect((await request(app).put('/api/mail/image-senders').send({ addr: 'Bob@Example.com ' })).status).toBe(204);
+    expect((await request(app).get('/api/mail/image-senders')).body.senders).toEqual(['bob@example.com']);
+    currentUser = { id: 'u2', role: 'user' };
+    expect((await request(app).get('/api/mail/image-senders')).body.senders).toEqual([]);
+    currentUser = { id: 'u1', role: 'user' };
+    expect((await request(app).delete('/api/mail/image-senders').query({ addr: 'bob@example.com' })).status).toBe(204);
+    expect((await request(app).get('/api/mail/image-senders')).body.senders).toEqual([]);
+    expect((await request(app).put('/api/mail/image-senders').send({ addr: 'nope' })).status).toBe(400);
+  });
+});

@@ -2089,4 +2089,20 @@ export const migrations: Migration[] = [
       console.log(`[migrations] 47: ${fixed} change order(s) from before line items given their amount as a lump sum`);
     },
   },
+  {
+    version: 48,
+    name: 'mail-trusted-image-senders',
+    // Senders whose remote images a user always loads. Per user (not per mail
+    // account), keyed by lower-cased address.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mail_trusted_image_senders (
+          userId TEXT NOT NULL,
+          addr TEXT NOT NULL,
+          createdAt INTEGER NOT NULL,
+          PRIMARY KEY (userId, addr)
+        );
+      `);
+    },
+  },
 ];

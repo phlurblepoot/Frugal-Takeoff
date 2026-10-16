@@ -104,8 +104,11 @@ export function authorizeInlineUrls(html: string, token: string): string {
     `${attr}${quote}${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}${quote}`);
 }
 
-export function buildFrameDoc(html: string, nonce: string, origin: string): string {
-  const csp = `default-src 'none'; img-src ${origin} data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'`;
+export function buildFrameDoc(html: string, nonce: string, origin: string, allowRemoteImages = false): string {
+  // Remote images are admitted only once the server has let them through
+  // (sanitize parks them in data-blocked-src until then).
+  const imgSrc = allowRemoteImages ? `${origin} data: https: http:` : `${origin} data:`;
+  const csp = `default-src 'none'; img-src ${imgSrc}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'`;
   return [
     '<!doctype html><html><head>',
     `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
@@ -194,7 +197,7 @@ export const MessageBodyFrame: React.FC<{ messageId: string }> = ({ messageId })
   // any inline script that ever slipped past the sanitizer keep running.
   const doc = useMemo(
     () => (payload
-      ? buildFrameDoc(authorizeInlineUrls(payload.html, getMailToken()), uuidv4(), window.location.origin)
+      ? buildFrameDoc(authorizeInlineUrls(payload.html, getMailToken()), uuidv4(), window.location.origin, !!payload.imagesAllowed)
       : null),
     [payload],
   );
@@ -221,6 +224,21 @@ export const MessageBodyFrame: React.FC<{ messageId: string }> = ({ messageId })
   }, []);
 
   const loadImages = useCallback(() => setShowImages(true), []);
+
+  // Trust is stored per user on the server; a change refetches the body so the
+  // bar and the images follow it.
+  const setTrusted = useCallback(async (trust: boolean) => {
+    const addr = payload?.sender;
+    if (!addr) return;
+    try {
+      if (trust) await mailApi.trustImageSender(addr);
+      else await mailApi.untrustImageSender(addr);
+      setShowImages(trust);
+      setAttempt(a => a + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update the sender setting');
+    }
+  }, [payload?.sender]);
 
   if (loading && !payload && !pending && !error) {
     return (
@@ -263,6 +281,27 @@ export const MessageBodyFrame: React.FC<{ messageId: string }> = ({ messageId })
             className="rounded px-1.5 py-0.5 font-medium underline underline-offset-2 hover:bg-amber-100 dark:hover:bg-amber-500/20"
           >
             Load images
+          </button>
+          {payload.sender && (
+            <button
+              type="button"
+              onClick={() => { void setTrusted(true); }}
+              className="rounded px-1.5 py-0.5 font-medium underline underline-offset-2 hover:bg-amber-100 dark:hover:bg-amber-500/20"
+            >
+              Always load from {payload.sender}
+            </button>
+          )}
+        </div>
+      )}
+      {!!payload && payload.senderTrusted && !!payload.sender && (
+        <div data-testid="mail-trusted-bar" className="flex flex-wrap items-center gap-2 text-xs text-ink-faint">
+          <span>Images always load from {payload.sender}.</span>
+          <button
+            type="button"
+            onClick={() => { void setTrusted(false); }}
+            className="rounded px-1.5 py-0.5 font-medium underline underline-offset-2 hover:bg-sunken"
+          >
+            Stop loading
           </button>
         </div>
       )}

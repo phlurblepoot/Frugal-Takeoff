@@ -683,10 +683,13 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     // 202, not an error: this resolves itself on the next sync, and the client
     // shows "Sending…" rather than a failure.
     if (isPending(m)) return res.status(202).json({ pending: true });
-    const allowImages = req.query.images === '1';
+    const sender = (m.fromAddr || '').trim().toLowerCase() || null;
+    const senderTrusted = !!sender && !!db.prepare('SELECT 1 FROM mail_trusted_image_senders WHERE userId = ? AND addr = ?').get(userOf(req).id, sender);
+    const allowImages = req.query.images === '1' || senderTrusted;
+    // sender/trust are per user, so they are layered on after the cache.
     const key = `${m.id}:${allowImages ? 1 : 0}`;
     const hit = deps.bodyCache.get(key);
-    if (hit) return res.json(hit);
+    if (hit) return res.json({ ...hit, imagesAllowed: allowImages, sender, senderTrusted });
     try {
       const raw = await providerFor(m.accountId).getBody(m.providerMessageId);
       // This read is the one that hands the client its attachment ids (the
@@ -705,8 +708,27 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         : { html: `<pre style="white-space:pre-wrap;font-family:inherit">${escaped}</pre>`, blockedRemoteImages: 0 };
       const payload: BodyPayload = { html: html.html, text: raw.text ?? htmlToText(raw.html ?? ''), blockedRemoteImages: html.blockedRemoteImages, attachments: raw.attachments };
       deps.bodyCache.set(key, payload, payload.html.length + payload.text.length);
-      res.json(payload);
+      res.json({ ...payload, imagesAllowed: allowImages, sender, senderTrusted });
     } catch (e) { fail(res, e, 'Failed to load message'); }
+  });
+
+  // Senders whose remote images this user always loads.
+  const normAddr = (v: unknown): string => String(v ?? '').trim().toLowerCase();
+  app.get('/api/mail/image-senders', authenticateToken, (req, res) => {
+    const rows = db.prepare('SELECT addr FROM mail_trusted_image_senders WHERE userId = ? ORDER BY addr').all(userOf(req).id) as { addr: string }[];
+    res.json({ senders: rows.map(r => r.addr) });
+  });
+  app.put('/api/mail/image-senders', authenticateToken, (req, res) => {
+    const addr = normAddr((req.body as { addr?: unknown } | undefined)?.addr);
+    if (!addr || addr.length > 320 || !addr.includes('@')) return res.status(400).json({ error: 'A sender address is required' });
+    db.prepare('INSERT OR IGNORE INTO mail_trusted_image_senders (userId, addr, createdAt) VALUES (?, ?, ?)').run(userOf(req).id, addr, Date.now());
+    res.status(204).end();
+  });
+  app.delete('/api/mail/image-senders', authenticateToken, (req, res) => {
+    const addr = normAddr(req.query.addr);
+    if (!addr) return res.status(400).json({ error: 'A sender address is required' });
+    db.prepare('DELETE FROM mail_trusted_image_senders WHERE userId = ? AND addr = ?').run(userOf(req).id, addr);
+    res.status(204).end();
   });
 
   const PENDING_ATTACHMENT = 'This message is still being filed by the mail server — its attachments will be available in a minute';

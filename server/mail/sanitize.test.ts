@@ -152,3 +152,15 @@ describe('sanitizeEmailHtml', () => {
     expect(sanitizeEmailHtml('<img src="cid:nope">', opts).html).not.toContain('<img');
   });
 });
+
+describe('sanitizeEmailHtml inline-style images', () => {
+  const on = { ...opts, allowRemoteImages: true };
+  it('keeps an http(s) background url when images are allowed', () => {
+    const r = sanitizeEmailHtml('<div style="background:url(https://t.example/b.png)">x</div>', on);
+    expect(r.html).toContain('url(https://t.example/b.png)');
+  });
+  it('still strips non-remote or odd urls when images are allowed', () => {
+    const r = sanitizeEmailHtml('<div style="background:url(javascript:alert(1))">x</div><p style="background:url(/api/x)">y</p>', on);
+    expect(r.html).not.toContain('url(');
+  });
+});
