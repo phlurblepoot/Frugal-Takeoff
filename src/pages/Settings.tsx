@@ -29,8 +29,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.4.0',
+    date: 'October 15, 2026',
+    changes: [
+      'New: Florida lien releases. From a pay application, invoice or payment, or from Documents > New, create a waiver and release of lien that follows the Florida statute wording (progress or final, conditional or unconditional). Each release has its own number (LR-1, LR-2), keeps its own copy of the lienor details, and can be saved as a PDF, sent by email or signed with your saved signature.',
+      'New: Settings > Company legal details. Enter your legal name, entity type and state of formation once and they fill in every new lien release, including the notary sentence. Each release can still be edited on its own.',
+      'New: starting a lien release warns you before generating if the amount is more than what has been paid, since an unconditional waiver should only follow payment you have received.',
+    ],
+  },
+  {
     version: '4.3.0',
-    date: 'October 16, 2026',
+    date: 'October 15, 2026',
     changes: [
       'New: email drafts keep their attachments. Files you attach while writing are saved with the draft, and a draft can carry up to 25 MB in total, the same limit Gmail uses.',
       'New: open a draft from the Drafts folder to keep writing it. Click it and the composer opens with the recipients, subject, text and attachments in place. Discard deletes the draft; closing the window keeps it.',
@@ -1988,6 +1997,9 @@ export const Settings: React.FC = () => {
     appName: 'Takeoff Pro',
     logoUrl: '',
     companyName: '',
+    companyLegalName: '',
+    companyEntityType: '',
+    companyStateOfFormation: '',
     companyPhone: '',
     companyEmail: '',
     companyAddress: '',
@@ -2193,6 +2205,46 @@ export const Settings: React.FC = () => {
                           </p>
                         </div>
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-edge">
+                    <h2 className="text-lg font-bold text-ink">Company legal details</h2>
+                    <p className="text-sm text-ink-soft">Printed on lien releases (the lienor and the notary sentence). Each release keeps its own copy, which you can change there.</p>
+                  </div>
+                  <div className="p-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                      <Field label="Legal name" hint="Falls back to the company name when empty.">
+                        <Input
+                          value={serverSettings.companyLegalName || ''}
+                          onChange={e => setServerSettings({ ...serverSettings, companyLegalName: e.target.value })}
+                          placeholder="e.g. Acme Contracting, LLC"
+                        />
+                      </Field>
+                      <Field label="Entity type">
+                        <select
+                          aria-label="Entity type"
+                          value={serverSettings.companyEntityType || ''}
+                          onChange={e => setServerSettings({ ...serverSettings, companyEntityType: e.target.value })}
+                          className="w-full rounded-lg border border-edge bg-raised px-3 py-2 text-sm text-ink"
+                        >
+                          <option value="">Not set</option>
+                          <option value="llc">LLC</option>
+                          <option value="corporation">Corporation</option>
+                          <option value="partnership">Partnership</option>
+                          <option value="sole_proprietor">Sole proprietor</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </Field>
+                      <Field label="State of formation">
+                        <Input
+                          value={serverSettings.companyStateOfFormation || ''}
+                          onChange={e => setServerSettings({ ...serverSettings, companyStateOfFormation: e.target.value })}
+                          placeholder="e.g. Florida"
+                        />
+                      </Field>
                     </div>
                   </div>
                 </div>
