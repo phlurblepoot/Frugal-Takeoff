@@ -30,7 +30,7 @@ interface ChangelogEntry {
 const CHANGELOG: ChangelogEntry[] = [
   {
     version: '4.5.0',
-    date: 'October 16, 2026',
+    date: 'October 15, 2026',
     changes: [
       'Change: forms and dialogs no longer close when you click outside them, so a stray click cannot throw away what you were typing. Photo viewers and menus still close on an outside click.',
       'New: forms that track unsaved changes (billing documents, daily reports, issues, punch items, RFIs and tasks) ask "Discard changes?" before closing from the X, Esc or the Close button.',
