@@ -151,7 +151,7 @@ describe('buildLienReleasePdf', () => {
     const bytes = build();
     expect(Buffer.from(bytes).subarray(0, 5).toString()).toBe('%PDF-');
     const text = pdfText(bytes);
-    expect(text).toContain('Release LR-3 · Palm Way Stucco');
+    expect(text.join(' ')).not.toContain('Release LR-3');
     expect(text).toContain('WAIVER AND RELEASE OF LIEN');
     expect(text).toContain('UPON PROGRESS PAYMENT');
     expect(text).toContain('12,345.67');
@@ -190,10 +190,22 @@ describe('buildLienReleasePdf', () => {
     expect(text).toContain('Unpaid CO 4');
   });
 
-  it('puts the optional source on the reference line and the header email override on the letterhead', () => {
+  it('puts the header email override on the letterhead and no reference line under it', () => {
     const text = pdfText(build({}, { sourceLabel: 'Pay App #2', headerEmail: 'billing@example.com' }));
-    expect(text.join(' ')).toContain('Release LR-3 · Palm Way Stucco · Pay App #2');
     expect(text).toContain('billing@example.com');
+    expect(text.join(' ')).not.toContain('Release LR-3');
+  });
+
+  it('fits every variant, notary block included, on one page with typical content', () => {
+    const lh = { brandRgb: [153, 203, 56] as [number, number, number], company: { name: 'Big Bear Plaster', address: '100 Main St, Tampa, FL 33601', phone: '813-555-0100', email: 'office@bigbear.example', website: 'bigbear.example' } };
+    for (const paymentType of ['progress', 'final'] as const) {
+      for (const conditional of [false, true]) {
+        for (const conditionKind of conditional ? ['funds', 'check'] as const : [null]) {
+          const bytes = buildLienReleasePdf({ release: release({ paymentType, conditional, conditionKind, throughDate: paymentType === 'final' ? null : '2026-09-30', checkNumber: '1042', checkMaker: 'Acme Builders', checkBank: 'First Bank', exceptions: conditional ? 'Unpaid CO 4' : null, lienorEntityType: 'llc', lienorState: 'Florida' }), projectName: 'Palm Way Stucco', letterhead: lh });
+          expect(pageCount(bytes), `${paymentType} conditional=${conditional} ${conditionKind}`).toBe(1);
+        }
+      }
+    }
   });
 
   it('continues on a second page, letterhead repeated, when the property description is long', () => {

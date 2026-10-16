@@ -3,7 +3,7 @@
 // A Florida release of lien as a letterhead PDF, built like the change order
 // (changeOrderPdf.ts): jsPDF, Letter portrait, branded header and footer from
 // src/utils/documentLetterhead.ts. All wording comes from lienReleaseWording.ts.
-// Layout: reference line, title, the statutory body, the signature block, then
+// Layout: title, the statutory body, the signature block, then
 // the notary acknowledgment (printed on every release). Anything that does not
 // fit continues on page 2 with the letterhead repeated.
 import { jsPDF } from 'jspdf';
@@ -15,7 +15,7 @@ import {
 import {
   type LienRelease, type Seg, type Para,
   lienReleaseTitle, lienReleaseParagraphs, lienReleaseSignatureLines, lienReleaseNotary,
-  lienReleaseReference, NOTARY_BOX,
+  NOTARY_BOX,
 } from './lienReleaseWording';
 
 export interface LienReleasePdfContext {
@@ -117,7 +117,7 @@ export function buildLienReleasePdf(ctx: LienReleasePdfContext): Uint8Array {
   };
   const ensure = (h: number) => { if (y + h > bottom) newPage(); };
 
-  const LINE_H = 14;
+  const LINE_H = 13;
   const SIZE = 10.5;
 
   /** Draw wrapped lines at x0; page-breaks between lines. */
@@ -147,15 +147,11 @@ export function buildLienReleasePdf(ctx: LienReleasePdfContext): Uint8Array {
     // A condition or exceptions paragraph reads as one block.
     if (p.kind === 'condition' || p.kind === 'exceptions') ensure(Math.min(lines.length, 6) * LINE_H);
     drawLines(lines, M, LINE_H, SIZE);
-    y += p.kind === 'body' ? 4 : 8;
+    y += p.kind === 'body' ? 3 : 6;
   };
 
-  // (1) Reference line (outside the form body; reference text only).
-  doc.setFont(FONT, 'normal').setFontSize(8.5).setTextColor(120, 120, 120);
-  doc.text(lienReleaseReference(r, ctx.projectName, ctx.sourceLabel), M, y);
-  y += 26;
-
-  // (2) Title.
+  // (1) Title (no reference line under the letterhead: owner feedback).
+  y += 6;
   const [t1, t2] = lienReleaseTitle(r);
   doc.setFont(FONT, 'bold').setFontSize(15).setTextColor(ar, ag, ab);
   doc.text(t1, W / 2, y, { align: 'center' });
@@ -169,12 +165,12 @@ export function buildLienReleasePdf(ctx: LienReleasePdfContext): Uint8Array {
 
   // (4) Signature block, kept together with the DATED line's page.
   const sig = lienReleaseSignatureLines(r);
-  const SIG_H = 96;
+  const SIG_H = 76;
   ensure(SIG_H);
-  y += 14;
+  y += 8;
   doc.setFont(FONT, 'bold').setFontSize(SIZE).setTextColor(20, 20, 20);
   doc.text(sig.company, M, y);
-  y += 30;
+  y += 26;
   const lineX2 = M + 250;
   if (ctx.signatureDataUrl) {
     try {
@@ -190,28 +186,28 @@ export function buildLienReleasePdf(ctx: LienReleasePdfContext): Uint8Array {
   doc.setDrawColor(20, 20, 20).setLineWidth(0.6).line(M + 22, y + 1, lineX2, y + 1);
   y += 15;
   doc.text(sig.signer, M, y);
-  y += 30;
+  y += 26;
 
   // (5) Notary acknowledgment (Fla. Stat. 695.25 short form), on every release.
   const notary = lienReleaseNotary(r);
   // helvetica has no ballot-box glyph; draw the statute's boxes as "[  ]" (non-breaking spaces, so a box never splits).
   const boxed = notary.text.map(s => ({ ...s, text: s.text.split(NOTARY_BOX).join('[\u00a0\u00a0]') }));
   const notaryLines = layoutRuns(doc, boxed, textW, 10);
-  const NOTARY_H = notary.venue.length * 15 + 8 + notaryLines.length * 13 + 12 + notary.captions.length * 38;
+  const NOTARY_H = notary.venue.length * 14 + 6 + notaryLines.length * 12.5 + 8 + notary.captions.length * 31;
   ensure(NOTARY_H);
   doc.setDrawColor(190, 190, 190).setLineWidth(0.5).line(M, y - 14, W - M, y - 14);
   doc.setFont(FONT, 'normal').setFontSize(10).setTextColor(20, 20, 20);
-  for (const v of notary.venue) { doc.text(v, M, y); y += 15; }
+  for (const v of notary.venue) { doc.text(v, M, y); y += 14; }
+  y += 6;
+  drawLines(notaryLines, M, 12.5, 10);
   y += 8;
-  drawLines(notaryLines, M, 13, 10);
-  y += 12;
   const sigX = W / 2 - 20;
   for (const caption of notary.captions) {
-    y += 22;
+    y += 18;
     doc.setDrawColor(20, 20, 20).setLineWidth(0.6).line(sigX, y, W - M, y);
     doc.setFont(FONT, 'normal').setFontSize(8).setTextColor(90, 90, 90);
-    doc.text(caption, sigX, y + 10);
-    y += 16;
+    doc.text(caption, sigX, y + 9);
+    y += 13;
   }
 
   return doc.output('arraybuffer') as unknown as Uint8Array;
