@@ -28,6 +28,13 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.1.13',
+    date: 'October 15, 2026',
+    changes: [
+      'Pop-up windows no longer close when you click outside them, so a stray click can't throw away what you typed. Esc, the X and Cancel still close them. Windows with a form can ask "Discard changes?" before closing when something was edited.',
+    ],
+  },
+  {
     version: '4.1.12',
     date: 'October 15, 2026',
     changes: [
