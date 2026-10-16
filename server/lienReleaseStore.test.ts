@@ -179,7 +179,7 @@ describe('prefill (spec §5.3)', () => {
   it('fills the names from settings, the project and the AIA settings', () => {
     const p = prefillLienRelease(db, 'p1', { paymentType: 'final', conditional: true }, user);
     expect(p).toMatchObject({
-      lienorName: 'Big Bear Plaster LLC', customerName: 'Acme Builders', ownerName: 'Jane Owner',
+      lienorName: 'Big Bear Plaster LLC', customerName: 'Acme Builders', ownerName: 'Palm Way Stucco',
       propertyDescription: 'Palm Way Stucco\n12 Palm Way, Tampa', signerName: 'Nathan',
       throughDate: null, conditionKind: 'funds', checkMaker: 'Acme Builders', source: null,
     });
@@ -214,11 +214,17 @@ describe('prefill (spec §5.3)', () => {
     expect(p).toMatchObject({ lienorName: 'Frugal Takeoff', customerName: 'Customer Co' });
   });
 
+  it('uses the project name as the owner, ahead of the AIA owner', () => {
+    expect(prefillLienRelease(db, 'p1', {}, user).ownerName).toBe('Palm Way Stucco');
+    db.prepare("UPDATE projects SET meta = '{}' WHERE id = 'p1'").run();
+    expect(prefillLienRelease(db, 'p1', {}, user).ownerName).toBe('Palm Way Stucco');
+  });
+
   it('reuses the owner, property and signer title of the last release on the project', () => {
     db.prepare("UPDATE projects SET meta = '{}' WHERE id = 'p1'").run();
     createLienRelease(db, 'p1', valid({ ownerName: 'Prior Owner', propertyDescription: 'Lot 9', signerTitle: 'President' }), 'u1');
     const p = prefillLienRelease(db, 'p1', {}, user);
-    expect(p).toMatchObject({ ownerName: 'Prior Owner', propertyDescription: 'Lot 9', signerTitle: 'President' });
+    expect(p).toMatchObject({ ownerName: 'Palm Way Stucco', propertyDescription: 'Lot 9', signerTitle: 'President' });
   });
 
   it('conditional from a pay app: the amount still due, through the period end', () => {

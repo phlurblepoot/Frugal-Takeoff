@@ -405,7 +405,7 @@ export function prefillLienRelease(
     ? db.prepare('SELECT name FROM customers WHERE id = ?').get(project.customerId) as { name: string | null } | undefined
     : undefined;
   const customerName = text(project.contractor) || text(customerRow?.name);
-  const ownerName = text(meta?.aiaSettings?.ownerName) || text(last?.ownerName);
+  const ownerName = text(project.name); // the owner asked for the project name on every release
   const propertyDescription = text(last?.propertyDescription)
     || [text(project.name), text(project.address)].filter(Boolean).join('\n');
 
