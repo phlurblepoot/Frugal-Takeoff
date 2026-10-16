@@ -172,6 +172,21 @@ export interface SendRequest {
   draftProviderId?: string;
 }
 
+/** GET /api/mail/messages/:id/draft — a draft reopened in the composer.
+ *  `draftId` is the provider id the draft routes and send's draftProviderId take. */
+export interface OpenedDraft {
+  messageId: string;
+  accountId: string;
+  draftId: string;
+  to: Addr[];
+  cc: Addr[];
+  bcc: Addr[];
+  subject: string;
+  html: string;
+  attachments: Array<{ uploadId: string; name: string; size: number }>;
+  replyTo: { accountId: string; threadKey: string } | null;
+}
+
 export interface SendResult {
   messageId: string;
   threadKey: string;

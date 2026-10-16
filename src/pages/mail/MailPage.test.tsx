@@ -3,14 +3,14 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import type { MailAccount, MailFolder, MessageRow, ThreadListRow } from './types';
+import type { MailAccount, MailFolder, MessageRow, OpenedDraft, SendRequest, ThreadListRow } from './types';
 
 const h = vi.hoisted(() => ({
   accounts: vi.fn(), folders: vi.fn(), threads: vi.fn(), thread: vi.fn(), body: vi.fn(),
   threadActions: vi.fn(), messageActions: vi.fn(), attachmentUrl: vi.fn(() => '/att'),
   heartbeat: vi.fn(), loadOlder: vi.fn(), toast: vi.fn(), searchServer: vi.fn(), refreshAccount: vi.fn(),
   send: vi.fn(), saveDraft: vi.fn(), deleteDraft: vi.fn(), stageUpload: vi.fn(), recipients: vi.fn(),
-  getAlwaysCc: vi.fn(),
+  getAlwaysCc: vi.fn(), openDraft: vi.fn(),
 }));
 vi.mock('../../utils/mailApi', () => ({ mailApi: h }));
 vi.mock('../../utils/store', () => ({ getAlwaysCc: h.getAlwaysCc }));
@@ -543,5 +543,68 @@ describe('MailPage', () => {
       expect(listSection.className).not.toContain('hidden');
       expect(threadSection.className).toContain('hidden');
     });
+  });
+});
+
+describe('MailPage drafts (spec §9)', () => {
+  const DRAFTS_FOLDER: MailFolder = { id: 'f-drafts', accountId: 'a1', providerId: 'Drafts', name: 'Drafts', role: 'drafts', unreadCount: 0, totalCount: 1, sortOrder: 2 };
+  const OPENED: OpenedDraft = {
+    messageId: 'm3', accountId: 'a1', draftId: 'Drafts/12', to: [{ addr: 'bob@acme.com' }], cc: [], bcc: [],
+    subject: 'Re: Roof detail', html: '<p>Half done</p>',
+    attachments: [{ uploadId: 'up-1', name: 'detail.pdf', size: 4 }],
+    replyTo: { accountId: 'a1', threadKey: 'tk-1' },
+  };
+  const DRAFT_MESSAGES = [...MESSAGES, msg({ id: 'm3', isDraft: true, snippet: 'Half done', date: '2026-08-27T14:00:00.000Z' })];
+
+  beforeEach(() => {
+    h.folders.mockResolvedValue([...FOLDERS, DRAFTS_FOLDER]);
+    h.thread.mockResolvedValue({ thread: THREAD, messages: DRAFT_MESSAGES, links: [] });
+    h.openDraft.mockResolvedValue(OPENED);
+  });
+
+  it('opens a thread in the Drafts folder as its draft, in the composer', async () => {
+    mount('/mail/a1/f-drafts');
+    await screen.findByText('Roof detail');
+    fireEvent.click(screen.getByTestId('mail-thread-row'));
+    await waitFor(() => expect(h.openDraft).toHaveBeenCalledWith('m3'));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('Edit draft')).toBeInTheDocument();
+    await waitFor(() => expect((screen.getByLabelText('Subject') as HTMLInputElement).value).toBe('Re: Roof detail'));
+    expect((screen.getByTestId('composer-body') as HTMLTextAreaElement).value).toBe('<p>Half done</p>');
+    expect(screen.getByText('detail.pdf')).toBeInTheDocument();
+    // The composer opens over the list; nothing navigated to the reader.
+    expect(loc()).toBe('/mail/a1/f-drafts');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(h.send).toHaveBeenCalled());
+    const req = h.send.mock.calls[0][0] as SendRequest;
+    expect(req.draftProviderId).toBe('Drafts/12');
+    expect(req.replyTo).toEqual({ accountId: 'a1', threadKey: 'tk-1' });
+    expect(req.attachments).toEqual([{ uploadId: 'up-1' }]);
+  });
+
+  it('outside Drafts, a thread row still opens the reader', async () => {
+    mount('/mail/a1/f-inbox');
+    await screen.findByText('Roof detail');
+    fireEvent.click(screen.getByTestId('mail-thread-row'));
+    await waitFor(() => expect(loc()).toBe('/mail/a1/f-inbox/tk-1'));
+    expect(h.openDraft).not.toHaveBeenCalled();
+  });
+
+  it('offers Edit draft on a draft inside a thread', async () => {
+    mount('/mail/a1/f-inbox/tk-1');
+    fireEvent.click(await screen.findByTestId('mail-edit-draft'));
+    await waitFor(() => expect(h.openDraft).toHaveBeenCalledWith('m3'));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('says so when a draft cannot be opened, and falls back to the reader', async () => {
+    h.openDraft.mockRejectedValue(new Error('Mail provider request failed'));
+    mount('/mail/a1/f-drafts');
+    await screen.findByText('Roof detail');
+    fireEvent.click(screen.getByTestId('mail-thread-row'));
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Mail provider request failed', { type: 'error' }));
+    await waitFor(() => expect(loc()).toBe('/mail/a1/f-drafts/tk-1'));
   });
 });

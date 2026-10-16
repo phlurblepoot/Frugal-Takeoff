@@ -2,7 +2,7 @@
 // it is a single line (from · snippet · date); expanded it shows the full
 // header, the sandboxed body and the attachment chips.
 import React from 'react';
-import { ChevronUp, Forward, Reply, ReplyAll } from 'lucide-react';
+import { ChevronUp, Forward, Pencil, Reply, ReplyAll } from 'lucide-react';
 import { AttachmentChips } from './AttachmentChips';
 import { MessageBodyFrame } from './MessageBodyFrame';
 import { formatMailDate } from './mailFormat';
@@ -55,11 +55,27 @@ export const MessageCard: React.FC<{
   ownAddresses: string[];
   onReply: (mode: ReplyMode) => void;
   onSave?: () => void;
-}> = ({ message, expanded, onToggle, ownAddresses, onReply, onSave }) => {
+  /** Reopens this message in the composer; offered only on drafts. */
+  onEditDraft?: () => void;
+}> = ({ message, expanded, onToggle, ownAddresses, onReply, onSave, onEditDraft }) => {
   const from = displayName(message.from);
   const initial = (from.replace(/[^A-Za-z0-9]/g, '')[0] ?? '?').toUpperCase();
   const date = formatMailDate(message.date);
   const fullDate = new Date(message.date).toLocaleString('en-US');
+  const editDraft = message.isDraft && onEditDraft ? (
+    <button
+      type="button"
+      data-testid="mail-edit-draft"
+      onClick={e => {
+        e.stopPropagation();
+        onEditDraft();
+      }}
+      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-edge px-2 py-0.5 text-xs font-medium text-ink hover:bg-hover"
+    >
+      <Pencil size={12} />
+      Edit draft
+    </button>
+  ) : null;
 
   if (!expanded) {
     return (
@@ -83,6 +99,7 @@ export const MessageCard: React.FC<{
       >
         <span className="shrink-0 truncate text-sm text-ink">{from}</span>
         <span className="min-w-0 flex-1 truncate text-xs font-normal text-ink-faint">{message.snippet}</span>
+        {editDraft}
         <span className="shrink-0 text-xs font-normal text-ink-faint" title={fullDate}>{date}</span>
       </div>
     );
@@ -128,6 +145,7 @@ export const MessageCard: React.FC<{
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          {editDraft}
           <span className="text-xs text-ink-faint" title={fullDate}>{date}</span>
           {/* Distinct from the toolbar's thread-level Reply/Reply all/Forward:
               these act on THIS message, and the names must not collide. */}

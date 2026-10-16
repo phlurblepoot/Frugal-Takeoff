@@ -76,6 +76,20 @@ export function quoteForReply(message: MessageRow, bodyHtml: string): string {
   return `<br><br><div class="ft-quote" style="${QUOTE_STYLE}">${attribution}<br>${expandQuotedHistory(bodyHtml)}</div>`;
 }
 
+/**
+ * Splits a reopened draft's body back into what the user typed and the quote
+ * the composer appended (`quoteForReply` / `quoteForForward`), so the quote
+ * goes back beside the editor instead of into it, where TipTap would rewrite
+ * it. A body with no quote of ours is all editor text.
+ */
+export function splitDraftQuote(html: string): { body: string; quote: string } {
+  const at = html.search(/<div[^>]*\bclass="ft-quote"/i);
+  if (at < 0) return { body: html, quote: '' };
+  // quoteFor* lead with two <br>s; they belong to the quote, not the body.
+  const body = html.slice(0, at).replace(/(?:<br\s*\/?>\s*){1,2}$/i, '');
+  return { body, quote: `<br><br>${html.slice(at)}` };
+}
+
 /** The `---------- Forwarded message ----------` header block plus the body. */
 export function quoteForForward(message: MessageRow, bodyHtml: string): string {
   const lines = [

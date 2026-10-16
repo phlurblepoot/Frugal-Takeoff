@@ -58,6 +58,8 @@ export const ThreadView: React.FC<{
   onOpenInComposer: () => void;
   /** Task 5 mounts the Save-to-Documents modal on this. */
   onSaveAttachments?: (message: MessageRow) => void;
+  /** Reopens a draft in this thread in the composer (spec §9). */
+  onEditDraft?: (message: MessageRow) => void;
   /** Task 7: the reply/forward composer MailPage owns, rendered below the
    *  messages so it reads as part of the conversation. `null` when no
    *  reply is in progress for this thread. */
@@ -78,7 +80,7 @@ export const ThreadView: React.FC<{
    *  keeping this component testable without a Router wrapper. */
   navigate: (path: string) => void;
 }> = ({
-  accountId, threadKey, ownAddresses, accounts, onBack, onReply, onOpenInComposer, onSaveAttachments,
+  accountId, threadKey, ownAddresses, accounts, onBack, onReply, onOpenInComposer, onSaveAttachments, onEditDraft,
   replyComposer, replyVariant, onReplyClose, onReplyDirtyChange, onReplyPromote, navigate,
 }) => {
   const { toast } = useToast();
@@ -452,6 +454,7 @@ export const ThreadView: React.FC<{
               ownAddresses={ownAddresses}
               onReply={mode => onReply(mode, m)}
               onSave={onSaveAttachments ? () => onSaveAttachments(m) : undefined}
+              onEditDraft={onEditDraft ? () => onEditDraft(m) : undefined}
             />
           ))}
         </div>

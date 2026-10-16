@@ -14,6 +14,7 @@ import type {
   MailAction,
   MailFolder,
   MessageRow,
+  OpenedDraft,
   ProjectThreadRow,
   Recipient,
   SendRequest,
@@ -60,7 +61,9 @@ export type SaveAttachmentsResult = {
   failed: Array<{ attId: string; error: string }>;
 };
 
-export type DraftInput = { accountId: string; to: Addr[]; cc?: Addr[]; bcc?: Addr[]; subject: string; html: string };
+export type DraftInput = { accountId: string; to: Addr[]; cc?: Addr[]; bcc?: Addr[]; subject: string; html: string;
+  attachments?: Array<{ fileId: string; name?: string } | { uploadId: string }>;
+  replyTo?: { accountId: string; threadKey: string } };
 
 const jsonHeaders = (): Record<string, string> => ({ 'Content-Type': 'application/json', ...getAuthHeaders() });
 
@@ -177,6 +180,11 @@ export const mailApi = {
 
   saveDraft: (b: DraftInput, existingId?: string): Promise<{ draftId: string }> =>
     existingId ? post(`/api/mail/drafts/${encodeURIComponent(existingId)}`, b, 'PUT') : post('/api/mail/drafts', b, 'POST'),
+
+  // A draft reopened in the composer: its fields, a lightly cleaned body, its
+  // attachments re-staged as uploads, and the thread it answers (if any).
+  openDraft: (messageId: string): Promise<OpenedDraft> =>
+    get(`/api/mail/messages/${encodeURIComponent(messageId)}/draft`),
 
   deleteDraft: (accountId: string, draftId: string): Promise<void> =>
     del(`/api/mail/drafts/${encodeURIComponent(draftId)}${qs({ accountId })}`),

@@ -245,6 +245,45 @@ describe('useDraftAutosave', () => {
     expect(h.saveDraft).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: 'a2' }), undefined);
   });
 
+  describe('a reopened draft', () => {
+    const reopen = (accountId = 'a1') => renderHook(
+      ({ s, enabled, acct }: { s: DraftSnapshot; enabled: boolean; acct: string }) =>
+        useDraftAutosave({ accountId: acct, enabled, dirtyEnabled: true, initialDraft: { accountId: 'a1', draftId: 'prov-7' }, get: () => s }),
+      { initialProps: { s: snap({ subject: 'Saved earlier' }), enabled: true, acct: accountId } },
+    );
+
+    it('starts from its provider id and updates that draft in place', async () => {
+      h.saveDraft.mockResolvedValue({ draftId: 'prov-7' });
+      const { result, rerender } = reopen();
+      expect(result.current.draftId).toBe('prov-7');
+      await tick();
+      expect(h.saveDraft).not.toHaveBeenCalled();
+
+      rerender({ s: snap({ subject: 'Edited' }), enabled: true, acct: 'a1' });
+      await tick();
+      expect(h.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ subject: 'Edited' }), 'prov-7');
+    });
+
+    it('keeps its id through a send attempt that pauses autosave', async () => {
+      const { result, rerender } = reopen();
+      rerender({ s: snap({ subject: 'Edited' }), enabled: false, acct: 'a1' });   // sending…
+      rerender({ s: snap({ subject: 'Edited' }), enabled: true, acct: 'a1' });    // …failed
+      expect(result.current.draftId).toBe('prov-7');
+    });
+
+    it('does not carry its id into another mailbox', async () => {
+      const { result, rerender } = reopen();
+      rerender({ s: snap({ subject: 'Saved earlier' }), enabled: true, acct: 'a2' });
+      expect(result.current.draftId).toBeNull();
+    });
+
+    it('discard deletes it', async () => {
+      const { result } = reopen();
+      await act(async () => { await result.current.discard(); });
+      expect(h.deleteDraft).toHaveBeenCalledWith('a1', 'prov-7');
+    });
+  });
+
   it('discard is a no-op with nothing saved', async () => {
     const { result } = setup();
     await act(async () => { await result.current.discard(); });

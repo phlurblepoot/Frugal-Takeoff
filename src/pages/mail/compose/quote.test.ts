@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import type { MessageRow } from '../types';
 import {
-  expandQuotedHistory, forwardSubject, quoteForForward, quoteForReply, replyAllRecipients, replySubject,
+  expandQuotedHistory, forwardSubject, quoteForForward, quoteForReply, replyAllRecipients, replySubject, splitDraftQuote,
 } from './quote';
 
 const msg = (over: Partial<MessageRow> = {}): MessageRow => ({
@@ -122,5 +122,16 @@ describe('expandQuotedHistory', () => {
       expect(html).not.toContain('hidden=""');
       expect(html).toContain('the older thread');
     }
+  });
+});
+
+describe('splitDraftQuote', () => {
+  it('round-trips a reply the composer built: body back to the editor, quote beside it', () => {
+    const quote = quoteForReply(msg(), '<p>Original</p>');
+    expect(splitDraftQuote('<p>My reply</p>' + quote)).toEqual({ body: '<p>My reply</p>', quote });
+  });
+
+  it('leaves a body with no quote of ours entirely in the editor', () => {
+    expect(splitDraftQuote('<p>Just text</p>')).toEqual({ body: '<p>Just text</p>', quote: '' });
   });
 });

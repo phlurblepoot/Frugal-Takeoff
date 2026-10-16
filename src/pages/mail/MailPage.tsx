@@ -18,7 +18,7 @@ import { useMailFolders } from './useMailFolders';
 import { useMailHeartbeat } from './useMailHeartbeat';
 import { ThreadView } from './ThreadView';
 import { NO_FOLDER, useThreadList } from './useThreadList';
-import type { MessageRow, ThreadListRow } from './types';
+import type { MessageRow, OpenedDraft, ThreadListRow } from './types';
 
 // ── pane sizing ───────────────────────────────────────────────────────────
 // The three-pane layout is a CSS grid, and the two draggable widths ride into
@@ -145,9 +145,47 @@ export const MailPage: React.FC = () => {
 
   const listPath = accountId ? `/mail/${accountId}/${folderId ?? NO_FOLDER}` : '/mail';
 
+  // Spec §9: a draft reopened in the composer, keeping its provider draft id
+  // so edits update that same draft and Send removes it.
+  const [draftComposer, setDraftComposer] = useState<OpenedDraft | null>(null);
+  const openDraft = useCallback(
+    async (messageId: string): Promise<boolean> => {
+      try {
+        setDraftComposer(await mailApi.openDraft(messageId));
+        return true;
+      } catch (err) {
+        toast(err instanceof Error ? err.message : 'Could not open this draft.', { type: 'error' });
+        return false;
+      }
+    },
+    [toast],
+  );
+  const closeDraftComposer = useCallback(() => {
+    setDraftComposer(null);
+    reloadList();
+  }, [reloadList]);
+
+  const inDraftsFolder = useMemo(
+    () => !!folderId && folders.some(f => f.id === folderId && f.role === 'drafts'),
+    [folderId, folders],
+  );
+
   const openThread = useCallback(
-    (row: ThreadListRow) => guardedNavigate(`${listPath}/${encodeURIComponent(row.threadKey)}${search}`),
-    [guardedNavigate, listPath, search],
+    async (row: ThreadListRow) => {
+      // In Drafts, a row is something to finish writing: open its newest draft
+      // in the composer. A thread with no draft left falls through to reading.
+      if (inDraftsFolder && accountId) {
+        try {
+          const { messages } = await mailApi.thread(accountId, row.threadKey);
+          const draft = [...messages].reverse().find(m => m.isDraft);
+          if (draft && (await openDraft(draft.id))) return;
+        } catch {
+          /* fall through to the reader */
+        }
+      }
+      guardedNavigate(`${listPath}/${encodeURIComponent(row.threadKey)}${search}`);
+    },
+    [inDraftsFolder, accountId, openDraft, guardedNavigate, listPath, search],
   );
 
   const toggleStar = useCallback(
@@ -417,6 +455,7 @@ export const MailPage: React.FC = () => {
                     onReply={onReply}
                     onOpenInComposer={openCompose}
                     onSaveAttachments={message => setSaveAttachmentsMessage(message)}
+                    onEditDraft={message => void openDraft(message.id)}
                     replyComposer={replyComposer}
                     replyVariant={replyVariant}
                     onReplyClose={closeReplyComposer}
@@ -457,6 +496,28 @@ export const MailPage: React.FC = () => {
           accounts={accounts}
           defaultAccountId={accountId ?? undefined}
           mode="new"
+          onSent={reloadList}
+        />
+      )}
+
+      {draftComposer && (
+        <MailComposer
+          key={`draft:${draftComposer.messageId}`}
+          open
+          variant="modal"
+          onClose={closeDraftComposer}
+          accounts={accounts}
+          defaultAccountId={draftComposer.accountId}
+          mode="new"
+          initial={{
+            to: draftComposer.to,
+            cc: draftComposer.cc,
+            bcc: draftComposer.bcc,
+            subject: draftComposer.subject,
+            html: draftComposer.html,
+            attachments: draftComposer.attachments.map(a => ({ kind: 'upload' as const, ...a })),
+          }}
+          resumeDraft={{ accountId: draftComposer.accountId, draftId: draftComposer.draftId, replyTo: draftComposer.replyTo }}
           onSent={reloadList}
         />
       )}
