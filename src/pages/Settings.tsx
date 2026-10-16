@@ -29,6 +29,15 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.3.0',
+    date: 'October 16, 2026',
+    changes: [
+      'New: email drafts keep their attachments. Files you attach while writing are saved with the draft, and a draft can carry up to 25 MB in total, the same limit Gmail uses.',
+      'New: open a draft from the Drafts folder to keep writing it. Click it and the composer opens with the recipients, subject, text and attachments in place. Discard deletes the draft; closing the window keeps it.',
+      'Fix: sending a draft now removes it from the Drafts list straight away instead of at the next sync.',
+    ],
+  },
+  {
     version: '4.2.0',
     date: 'October 15, 2026',
     changes: [
