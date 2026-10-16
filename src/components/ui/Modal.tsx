@@ -3,7 +3,7 @@ import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { X } from 'lucide-react';
-import { useConfirm } from '../ConfirmDialog';
+import { useDiscardGuard } from './useDiscardGuard';
 
 const WIDTHS = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl', full: 'max-w-[95vw]' } as const;
 
@@ -69,28 +69,9 @@ export const Modal: React.FC<ModalProps> = ({
   const labelId = React.useId();
   const panelRef = React.useRef<HTMLDivElement | null>(null);
 
-  const confirm = useConfirm();
-  const asking = React.useRef(false);
-
   // Esc and the X go through here. Clicking the backdrop does nothing on purpose:
   // an outside click must never throw away what someone was typing.
-  const requestClose = React.useCallback(async () => {
-    if (!dirty) { onClose(); return; }
-    if (asking.current) return;
-    asking.current = true;
-    try {
-      const ok = await confirm({
-        title: 'Discard changes?',
-        message: 'You have unsaved changes. Close without saving?',
-        confirmLabel: 'Discard',
-        cancelLabel: 'Keep editing',
-        tone: 'danger',
-      });
-      if (ok) onClose();
-    } finally {
-      asking.current = false;
-    }
-  }, [dirty, onClose, confirm]);
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   // Note: the listener re-registers if `onClose` changes identity each render
   // (inline arrows). Harmless, but stable handlers via useCallback are nicer.

@@ -22,6 +22,7 @@ import type { PillTone } from '../../../components/ui';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
+import { useDiscardGuard } from '../../../components/ui/useDiscardGuard';
 
 const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
   draft:     { label: 'Draft',     tone: 'slate' },
@@ -146,6 +147,7 @@ export const AiaPayAppEditor: React.FC<{
     releaseDirty ||
     status !== pristineRef.current.status ||
     normalizeLines(edits) !== normalizeLines(pristineRef.current.edits);
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   const collab = useCollabEditing({
     type: 'aiaPayApp',
@@ -295,6 +297,7 @@ export const AiaPayAppEditor: React.FC<{
     <Modal
       open
       onClose={onClose}
+      dirty={dirty}
       title={data ? `Application for payment #${data.app.number}` : 'Application for payment'}
       width="full"
       footer={<>
@@ -348,7 +351,7 @@ export const AiaPayAppEditor: React.FC<{
             onWorkbookChanged={() => setBarKey(k => k + 1)}
           />
         )}
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         {!isFinalized && (
           <Button variant="secondary" onClick={handleFinalize} disabled={saving}>Finalize</Button>
         )}

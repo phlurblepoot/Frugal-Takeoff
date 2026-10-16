@@ -23,6 +23,7 @@ import { buildChangeOrderPdf } from './changeOrderPdf';
 import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 import { lineCents, draftTotalCents, lineContentKey } from './InvoiceEditor';
+import { useDiscardGuard } from '../../../components/ui/useDiscardGuard';
 
 export const ChangeOrderEditor: React.FC<{
   changeOrder: ChangeOrder;
@@ -62,6 +63,7 @@ export const ChangeOrderEditor: React.FC<{
     (Number(lumpSumAmount) || 0) !== (Number(co.lumpSumAmount) || 0) ||
     numOrNull(scheduleImpactDays) !== (co.scheduleImpactDays ?? null) ||
     lineContentKey(lines) !== lineContentKey(co.lines);
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   const collab = useCollabEditing({
     type: 'changeOrder',
@@ -189,7 +191,7 @@ export const ChangeOrderEditor: React.FC<{
   };
 
   return (
-    <Modal open onClose={onClose} title={`Change Order CO-${co.number ?? ''}`} width="lg"
+    <Modal open onClose={onClose} dirty={dirty} title={`Change Order CO-${co.number ?? ''}`} width="lg"
       footer={<>
         <div className="mr-auto">
           <DocumentActionsBar
@@ -224,7 +226,7 @@ export const ChangeOrderEditor: React.FC<{
             }}
           />
         </div>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save change order'}</Button>
       </>}
     >

@@ -181,7 +181,7 @@ export const PaymentDetailModal: React.FC<PaymentDetailModalProps> = ({ paymentI
 
   return (
     <>
-      <Modal open onClose={onClose} title="Payment" width="lg"
+      <Modal open onClose={onClose} dirty={dirty} title="Payment" width="lg"
         footer={<>
           <Button variant="ghost" className="mr-auto text-red-600 dark:text-red-400" onClick={remove} disabled={!payment}>
             <Trash2 size={14} />Delete payment

@@ -8,6 +8,7 @@ import { Button, Field, Input, Modal, Select, Textarea } from '../../components/
 import { PhotoDropCard } from '../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../components/EditPresenceBanner';
+import { useDiscardGuard } from '../../components/ui/useDiscardGuard';
 
 interface Props {
   task: Task;
@@ -72,6 +73,7 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
     dueDate !== (task.dueDate ?? '') ||
     projectId !== (task.projectId ?? null) ||
     customerId !== (task.customerId ?? null);
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   const collab = useCollabEditing({
     type: 'task',
@@ -106,9 +108,9 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
   };
 
   return (
-    <Modal open onClose={onClose} title="Task" width="lg"
+    <Modal open onClose={onClose} dirty={dirty} title="Task" width="lg"
       footer={<>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >

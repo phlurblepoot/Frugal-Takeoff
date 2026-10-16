@@ -29,6 +29,7 @@ import {
   lienReleaseTitle, lienReleaseParagraphs, lienReleaseSignatureLines, lienReleaseFileName,
   lienReleaseEmailDefaults, LIEN_ENTITY_LABELS, type LienEntityType, type Seg,
 } from './lienReleaseWording';
+import { useDiscardGuard } from '../../../components/ui/useDiscardGuard';
 
 export const LIEN_STATUS_META: Record<string, { label: string; tone: 'slate' | 'blue' | 'red' }> = {
   draft: { label: 'Draft', tone: 'slate' },
@@ -193,6 +194,7 @@ export const LienReleaseEditor: React.FC<{
     checkNumber: fields().checkNumber ?? null, checkMaker: fields().checkMaker ?? null, checkBank: fields().checkBank ?? null,
   } as LienRelease;
   const dirty = isNew || asStored(current) !== asStored(release);
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   const collab = useCollabEditing({
     type: 'lienRelease', id: release.id, isDirty: () => dirty, onFresh: onSaved, enabled: !isNew,
@@ -309,7 +311,7 @@ export const LienReleaseEditor: React.FC<{
   const title = isNew ? 'New release of lien' : `Release of lien LR-${release.number ?? ''}`;
 
   return (
-    <Modal open onClose={onClose} title={title} width="lg"
+    <Modal open onClose={onClose} dirty={dirty} title={title} width="lg"
       footer={<>
         <div className="mr-auto">
           <DocumentActionsBar
@@ -344,7 +346,7 @@ export const LienReleaseEditor: React.FC<{
             }}
           />
         </div>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save release'}</Button>
       </>}
     >

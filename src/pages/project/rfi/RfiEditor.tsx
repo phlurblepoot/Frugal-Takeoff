@@ -22,6 +22,7 @@ import { useItemThreadLinks } from '../../../hooks/useItemThreadLinks';
 import { buildRfiPdf } from './rfiPdf';
 import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
+import { useDiscardGuard } from '../../../components/ui/useDiscardGuard';
 
 export const RfiEditor: React.FC<{
   rfi: Rfi;
@@ -99,6 +100,7 @@ export const RfiEditor: React.FC<{
     responseDirty;
 
   const dirty = isDirty();
+  const requestClose = useDiscardGuard(dirty, onClose);
 
   const collab = useCollabEditing({
     type: 'rfi',
@@ -268,7 +270,7 @@ export const RfiEditor: React.FC<{
   };
 
   return (
-    <Modal open onClose={onClose} title={`RFI-${padded}`} width="lg"
+    <Modal open onClose={onClose} dirty={dirty} title={`RFI-${padded}`} width="lg"
       footer={<>
         <div className="mr-auto">
           <DocumentActionsBar
@@ -303,7 +305,7 @@ export const RfiEditor: React.FC<{
             }}
           />
         </div>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={() => void requestClose()}>Close</Button>
         <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >

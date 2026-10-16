@@ -36,7 +36,6 @@ export const PlanSetManager: React.FC<Props> = ({ project, selectedPlanSetId, on
   return (
     <div
       className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-      onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label="Manage plan sets"
