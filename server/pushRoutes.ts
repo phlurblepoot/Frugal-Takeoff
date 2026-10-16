@@ -32,6 +32,19 @@ export function webAppManifest(appName: string): Record<string, unknown> {
     display: 'standalone',
     background_color: '#f8fafc',
     theme_color: '#2563eb',
+    // Android "Share" sheet: the service worker (public/sw.js) catches this
+    // POST, parks the files in the cache, and sends the app to /share-target.
+    share_target: {
+      action: '/share-target',
+      method: 'POST',
+      enctype: 'multipart/form-data',
+      params: {
+        title: 'title',
+        text: 'text',
+        url: 'url',
+        files: [{ name: 'files', accept: ['application/pdf', 'image/*', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.dwg', '.dxf'] }],
+      },
+    },
     icons: [
       { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
       { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },

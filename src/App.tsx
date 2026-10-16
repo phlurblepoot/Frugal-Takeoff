@@ -9,6 +9,7 @@ import { ProjectView } from './pages/ProjectView';
 import { CanvasView } from './pages/CanvasView';
 import { ProjectLayout } from './pages/project/ProjectLayout';
 import { ProjectOverview } from './pages/project/ProjectOverview';
+import { ShareTargetPage } from './pages/ShareTargetPage';
 import { DocumentsPage, ProjectDocuments } from './pages/documents/DocumentsPage';
 import { MailPage } from './pages/mail/MailPage';
 import { ProjectNotes } from './pages/project/ProjectNotes';
@@ -188,6 +189,10 @@ const router = createBrowserRouter([
         {
           path: 'tasks',
           element: <TasksPage />,
+        },
+        {
+          path: 'share-target',
+          element: <ShareTargetPage />,
         },
         {
           path: 'documents',

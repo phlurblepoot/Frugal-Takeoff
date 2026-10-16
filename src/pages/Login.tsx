@@ -1,10 +1,28 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate, useOutletContext } from 'react-router-dom';
+import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { Lock, User, Loader2, FolderOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTheme } from '../context/ThemeContext';
 import { useSoftZoom } from '../hooks/useSoftZoom';
 import { getSetupState } from '../utils/store';
+
+// Where to go after sign-in: the `next` target only when it stays on this
+// site. Backslashes and control characters are refused outright (browsers
+// treat `/\evil.com` as another origin); everything else must resolve to our
+// own origin.
+export function safeNext(next: string | null): string {
+  const fallback = '/dashboard';
+  if (!next || !next.startsWith('/')) return fallback;
+  // eslint-disable-next-line no-control-regex
+  if (/[\\\u0000-\u001f\u007f]/.test(next)) return fallback;
+  try {
+    const url = new URL(next, window.location.origin);
+    if (url.origin !== window.location.origin) return fallback;
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return fallback;
+  }
+}
 
 export const Login: React.FC = () => {
   const { appName } = useOutletContext<{ appName: string; logoUrl: string }>();
@@ -18,6 +36,7 @@ export const Login: React.FC = () => {
   // restoring a backup is allowed, and the only screen that can reach it.
   const [isFresh, setIsFresh] = useState(false);
   const navigate = useNavigate();
+  const [params] = useSearchParams();
 
   useEffect(() => {
     let cancelled = false;
@@ -49,7 +68,9 @@ export const Login: React.FC = () => {
       // theme/accent/motion prefs so they apply immediately on a fresh device
       // (it can't re-run its on-mount sync without a full reload otherwise).
       window.dispatchEvent(new Event('app:prefs-sync'));
-      navigate('/dashboard');
+      // Back to where they were headed (e.g. shared files waiting in
+      // /share-target) - same-site paths only.
+      navigate(safeNext(params.get('next')));
     } catch (err: any) {
       setError(err.message);
     } finally {
