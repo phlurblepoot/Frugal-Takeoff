@@ -114,10 +114,15 @@ export const handleResponse = async (res: Response) => {
   if (res.status === 401) {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    // Shared files are waiting on this page; sign in and come straight back.
-    window.location.href = window.location.pathname === '/share-target'
-      ? `/login?next=${encodeURIComponent('/share-target?shared=1')}`
-      : '/login';
+    // Already on the sign-in page (another request's 401 got here first, or
+    // this page moved there itself): leave its address alone, or a reload to
+    // plain /login would drop the ?next= return target.
+    if (window.location.pathname !== '/login') {
+      // Shared files are waiting on the share page; sign in and come straight back.
+      window.location.href = window.location.pathname === '/share-target'
+        ? `/login?next=${encodeURIComponent('/share-target?shared=1')}`
+        : '/login';
+    }
     throw new Error('Session expired. Please log in again.');
   }
   if (!res.ok) {

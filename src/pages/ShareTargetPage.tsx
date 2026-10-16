@@ -56,6 +56,8 @@ async function clearShared(): Promise<void> {
   try { if (typeof caches !== 'undefined') await caches.delete(SHARE_CACHE); } catch { /* nothing to clear */ }
 }
 
+const hasToken = (): boolean => { try { return !!localStorage.getItem('token'); } catch { return true; } };
+
 export const ShareTargetPage: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
   const [note, setNote] = useState<SharedNote>({ title: '', text: '', url: '' });
@@ -69,6 +71,11 @@ export const ShareTargetPage: React.FC = () => {
   const [doneProject, setDoneProject] = useState<ProjectSummary | null>(null);
 
   useEffect(() => {
+    // Signed out: the render below is already sending them to sign in. Asking
+    // the server anything now would 401, and the store's 401 handler would
+    // reload /login with the return address dropped (it runs after this page
+    // has moved to /login). The files stay in the cache until they're back.
+    if (!hasToken()) return;
     let live = true;
     (async () => {
       const [shared, list] = await Promise.all([readSharedFiles(), getProjectsSummary().catch(() => [] as ProjectSummary[])]);
@@ -98,8 +105,7 @@ export const ShareTargetPage: React.FC = () => {
     }
   };
 
-  const signedIn = (() => { try { return !!localStorage.getItem('token'); } catch { return true; } })();
-  if (!signedIn) return <Navigate to={`/login?next=${encodeURIComponent(SHARE_RETURN)}`} replace />;
+  if (!hasToken()) return <Navigate to={`/login?next=${encodeURIComponent(SHARE_RETURN)}`} replace />;
 
   const needle = query.trim().toLowerCase();
   const shown = projects.filter(p => p.id === projectId || !needle || p.name.toLowerCase().includes(needle));
