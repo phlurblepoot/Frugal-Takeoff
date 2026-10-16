@@ -38,7 +38,7 @@ const CHANGELOG: ChangelogEntry[] = [
     version: '4.1.13',
     date: 'October 15, 2026',
     changes: [
-      'Pop-up windows no longer close when you click outside them, so a stray click can't throw away what you typed. Esc, the X and Cancel still close them. Windows with a form can ask "Discard changes?" before closing when something was edited.',
+      'Pop-up windows no longer close when you click outside them, so a stray click can\'t throw away what you typed. Esc, the X and Cancel still close them. Windows with a form can ask "Discard changes?" before closing when something was edited.',
     ],
   },
   {
@@ -46,14 +46,14 @@ const CHANGELOG: ChangelogEntry[] = [
     date: 'October 15, 2026',
     changes: [
       'Fix: "Load images" on an email now actually shows the pictures. The message frame was blocking them even after you asked to load them.',
-      'New: when images are blocked, a new button, "Always load from <sender>", turns on images for every email from that sender. It is saved to your own account, so it doesn't change what anyone else sees. A small "Stop loading" button next to it turns it back off.',
+      'New: when images are blocked, a new button, "Always load from <sender>", turns on images for every email from that sender. It is saved to your own account, so it doesn\'t change what anyone else sees. A small "Stop loading" button next to it turns it back off.',
     ],
   },
   {
     version: '4.1.11',
     date: 'October 15, 2026',
     changes: [
-      'A project's Documents tab now stays inside the project. Before, opening it jumped to the main Documents page and the project's top bar and tabs disappeared. Now the project header and tabs stay put and the list shows only that project's documents, with the same search, filters, upload and actions as before. The project and Unassigned filters are hidden there since the project is already chosen. The main Documents page works as it did, and links to a project's documents (the command palette, takeoff prints) go to the project's tab.',
+      'A project\'s Documents tab now stays inside the project. Before, opening it jumped to the main Documents page and the project\'s top bar and tabs disappeared. Now the project header and tabs stay put and the list shows only that project\'s documents, with the same search, filters, upload and actions as before. The project and Unassigned filters are hidden there since the project is already chosen. The main Documents page works as it did, and links to a project\'s documents (the command palette, takeoff prints) go to the project\'s tab.',
     ],
   },
   {
