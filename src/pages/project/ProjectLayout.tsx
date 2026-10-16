@@ -4,6 +4,7 @@ import { Outlet, useOutletContext, useParams, useLocation, matchPath } from 'rea
 import { ProjectSummary, getProjectSummary } from '../../utils/store';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { ProjectTabBar } from './ProjectTabBar';
+import { FavoriteStar } from '../../components/FavoriteStar';
 
 export interface ProjectOutletCtx {
   summary: ProjectSummary | null;
@@ -57,9 +58,12 @@ export const ProjectLayout: React.FC = () => {
     <>
       {!isCanvas && (
         <div className="glass-panel sticky top-0 z-30 border-b border-edge px-4 pt-3 pb-2 space-y-2 md:px-6">
-          <p className="text-lg font-bold tracking-tight text-ink truncate">
-            {summary?.name ?? 'Project'}
-          </p>
+          <div className="flex items-center gap-1">
+            <p className="min-w-0 truncate text-lg font-bold tracking-tight text-ink">
+              {summary?.name ?? 'Project'}
+            </p>
+            {projectId && <FavoriteStar projectId={projectId} size={17} />}
+          </div>
           {projectId && <ProjectTabBar projectId={projectId} isAdmin={isAdmin} />}
         </div>
       )}

@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus, Calendar, Building2, MapPin, Archive, ArchiveRestore,
-  Trash2, Edit2, Check, X, FileText, Ruler, FolderOpen, Clock,
+  Trash2, Edit2, Check, X, FileText, Ruler, FolderOpen, Clock, Star,
 } from 'lucide-react';
 import {
   ProjectSummary, getProjectsSummary, patchProject, deleteProject,
@@ -21,6 +21,8 @@ import {
 } from '../components/ui';
 import { useLiveQuery } from '../hooks/useLiveQuery';
 import { useReveal } from '../hooks/useReveal';
+import { FavoriteStar } from '../components/FavoriteStar';
+import { useFavoriteProjects } from '../hooks/useFavoriteProjects';
 
 export type TabId = 'bidding' | 'in_progress' | 'archive';
 
@@ -225,6 +227,7 @@ const ProjectRow: React.FC<{
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5" onClick={e => e.stopPropagation()}>
+        <FavoriteStar projectId={p.id} size={14} />
         <button onClick={() => setEditing(true)} title="Rename" className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0"><Edit2 size={13} /></button>
         <button onClick={onArchiveToggle} title={p.archived ? 'Restore' : 'Archive'} className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0">
           {p.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
@@ -276,7 +279,18 @@ export const ProjectsPage: React.FC = () => {
     // Cross-device: persist to the account, fire-and-forget.
     saveUserPreferences({ projectsSort: s }).catch(() => {});
   };
-  const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null);
+  // Top-of-page quick-access row: recently opened, or the user's favorites.
+  // Remembered locally and on the account.
+  const [quickView, setQuickView] = useState<'recent' | 'favorites'>(() => {
+    try { return localStorage.getItem('projectsQuickView') === 'favorites' ? 'favorites' : 'recent'; } catch { return 'recent'; }
+  });
+  const changeQuickView = (v: 'recent' | 'favorites') => {
+    setQuickView(v);
+    try { localStorage.setItem('projectsQuickView', v); } catch { /* ignore */ }
+    saveUserPreferences({ projectsQuickView: v }).catch(() => {});
+  };
+  const { favorites } = useFavoriteProjects();
+  const [deleteTarget, setDeleteTarget]= useState<ProjectSummary | null>(null);
   const [deleteText, setDeleteText] = useState('');
   // What's in the project the delete dialog is open for (spec
   // 2026-10-07-project-delete-guard): only an empty one can be deleted, any
@@ -308,6 +322,8 @@ export const ProjectsPage: React.FC = () => {
       const saved = prefs['projectsSort'];
       if (saved === 'auto') setSort(null);
       else if (saved && SORT_OPTIONS.some(o => o.id === saved)) setSort(saved as ProjectSort);
+      const qv = prefs['projectsQuickView'];
+      if (qv === 'recent' || qv === 'favorites') setQuickView(qv);
     }).catch(() => { /* offline / not present — keep localStorage default */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -341,6 +357,12 @@ export const ProjectsPage: React.FC = () => {
       .filter((s): s is ProjectSummary => !!s && !s.archived)
       .slice(0, 6);
   }, [summaries]);
+
+  // Favorited, non-archived projects in the order they were starred.
+  const favoriteList = useMemo(() => {
+    const byId = new Map(summaries.map(s => [s.id, s] as const));
+    return favorites.map(id => byId.get(id)).filter((s): s is ProjectSummary => !!s && !s.archived);
+  }, [summaries, favorites]);
 
   // Applies a granular patch and reconciles the local row. A 409 means our
   // summary is stale — refetch rather than reloading the page.
@@ -436,7 +458,8 @@ export const ProjectsPage: React.FC = () => {
   const activeTab = resolveTab(searchParams.get('stage'));
   const activeGroup = groups.find(g => g.id === activeTab)!;
   const filtering = search.trim() !== '' || customerFilter !== 'all';
-  const showRecents = activeTab !== 'archive' && !filtering && recents.length > 0;
+  const quickList = quickView === 'favorites' ? favoriteList : recents;
+  const showQuick = activeTab !== 'archive' && !filtering;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
@@ -482,12 +505,29 @@ export const ProjectsPage: React.FC = () => {
             />
           ) : (
             <div className="space-y-5">
-              {showRecents && (
+              {showQuick && (
                 <section>
-                  <h2 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
-                    <Clock size={12} />Recently opened
-                  </h2>
-                  {renderRows(recents)}
+                  <div className="mb-2 flex items-center gap-1" role="group" aria-label="Quick access">
+                    {([['recent', 'Recent', Clock], ['favorites', 'Favorites', Star]] as const).map(([id, label, Icon]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        data-testid={`quick-${id}`}
+                        aria-pressed={quickView === id}
+                        onClick={() => changeQuickView(id)}
+                        className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
+                          quickView === id ? 'bg-sunken text-ink' : 'text-ink-faint hover:text-ink'
+                        }`}
+                      >
+                        <Icon size={12} />{label}
+                      </button>
+                    ))}
+                  </div>
+                  {quickList.length > 0 ? renderRows(quickList.slice(0, quickView === 'recent' ? 6 : 50)) : (
+                    <p data-testid="quick-empty" className="rounded-lg border border-dashed border-edge px-3 py-3 text-sm text-ink-soft">
+                      {quickView === 'favorites' ? 'No favorites yet. Tap the star on a project to add it.' : 'Projects you open show up here.'}
+                    </p>
+                  )}
                 </section>
               )}
 

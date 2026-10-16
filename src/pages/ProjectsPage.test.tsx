@@ -218,4 +218,19 @@ describe('ProjectsPage delete', () => {
     expect(screen.getAllByTestId('project-row')).toHaveLength(1);
     expect(h.toast).not.toHaveBeenCalledWith('Failed to delete project', expect.anything());
   });
+
+  it('starring a project adds it to the Favorites switch, which is remembered', async () => {
+    // The store's own preference calls bypass the module mock above.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    mount();
+    const row = (await screen.findByText('Maple St')).closest('[data-testid="project-row"]') as HTMLElement;
+    fireEvent.click(within(row).getByTestId('favorite-star'));
+    await waitFor(() => expect(within(row).getByTestId('favorite-star')).toHaveAttribute('aria-pressed', 'true'));
+    fireEvent.click(screen.getByTestId('quick-favorites'));
+    expect(localStorage.getItem('projectsQuickView')).toBe('favorites');
+    await waitFor(() => expect(screen.getAllByTestId('project-row')).toHaveLength(2));
+    expect(screen.queryByTestId('quick-empty')).toBeNull();
+    fireEvent.click(screen.getByTestId('quick-recent'));
+    expect(await screen.findByTestId('quick-empty')).toBeInTheDocument();
+  });
 });
