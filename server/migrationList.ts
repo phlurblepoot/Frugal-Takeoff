@@ -2105,4 +2105,59 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 49,
+    name: 'lien-releases',
+    // Florida releases of lien (Fla. Stat. 713.20), docs/superpowers/specs/
+    // 2026-10-15-florida-lien-release-design.md §5.2. One row per release, holding
+    // a copy of every value printed on it. Additive: no existing data is touched.
+    // Money is integer cents; days are 'YYYY-MM-DD' text.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS lien_releases (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          number TEXT,
+          paymentType TEXT NOT NULL,
+          conditional INTEGER NOT NULL,
+          sourceType TEXT,
+          sourceId TEXT,
+          supersedesId TEXT,
+          lienorName TEXT NOT NULL,
+          customerName TEXT NOT NULL,
+          ownerName TEXT NOT NULL,
+          propertyDescription TEXT NOT NULL,
+          amountCents INTEGER NOT NULL,
+          throughDate TEXT,
+          releaseDate TEXT NOT NULL,
+          signerName TEXT NOT NULL,
+          signerTitle TEXT,
+          conditionKind TEXT,
+          checkNumber TEXT,
+          checkMaker TEXT,
+          checkBank TEXT,
+          exceptions TEXT,
+          signatureFileId TEXT,
+          status TEXT NOT NULL DEFAULT 'draft',
+          createdByUserId TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_lien_releases_projectId ON lien_releases (projectId);
+      `);
+    },
+  },
+  {
+    version: 50,
+    name: 'lien-release-company-legal',
+    // Each lien release keeps its own copy of the lienor's entity type and state
+    // of formation (printed in the notary sentence), prefilled from Settings.
+    // Additive: two nullable columns.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(lien_releases)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('lienorEntityType')) db.exec(`ALTER TABLE lien_releases ADD COLUMN lienorEntityType TEXT;`);
+      if (!cols.includes('lienorState')) db.exec(`ALTER TABLE lien_releases ADD COLUMN lienorState TEXT;`);
+    },
+  },
 ];

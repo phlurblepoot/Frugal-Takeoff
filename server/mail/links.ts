@@ -3,10 +3,10 @@ import type Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 import type { Addr } from './providers/types';
 
-export type ItemType = 'proposal' | 'invoice' | 'changeOrder' | 'payApp' | 'issue' | 'rfi' | 'dailyReport' | 'punch' | 'task' | 'project' | 'customer';
+export type ItemType = 'proposal' | 'invoice' | 'changeOrder' | 'lienRelease' | 'payApp' | 'issue' | 'rfi' | 'dailyReport' | 'punch' | 'task' | 'project' | 'customer';
 export interface LinkRow { id: string; threadKey: string; subjectSnapshot: string | null; firstDate: string | null; participantsJson: string; itemType: ItemType; itemId: string; projectId: string | null; customerId: string | null; linkedByUserId: string; createdAt: string }
 
-const ITEM_TABLE: Partial<Record<ItemType, string>> = { proposal: 'proposals', invoice: 'invoices', changeOrder: 'change_orders', payApp: 'aia_pay_apps', issue: 'issues', rfi: 'rfis', dailyReport: 'daily_reports', task: 'tasks' };
+const ITEM_TABLE: Partial<Record<ItemType, string>> = { proposal: 'proposals', invoice: 'invoices', changeOrder: 'change_orders', lienRelease: 'lien_releases', payApp: 'aia_pay_apps', issue: 'issues', rfi: 'rfis', dailyReport: 'daily_reports', task: 'tasks' };
 const UNASSIGNED = 'customer-unassigned';
 
 export function resolveChain(db: Database.Database, itemType: ItemType, itemId: string): { projectId: string | null; customerId: string | null } {
@@ -36,7 +36,7 @@ export function resolveChain(db: Database.Database, itemType: ItemType, itemId: 
 // itemType has no resolver below — mirrors src/pages/mail/mailFormat.ts'
 // ITEM_TYPE_LABELS, kept separate so server code doesn't reach into a client page.
 const TYPE_FALLBACK: Record<ItemType, string> = {
-  proposal: 'Proposal', invoice: 'Invoice', changeOrder: 'Change Order', payApp: 'Pay App',
+  proposal: 'Proposal', invoice: 'Invoice', changeOrder: 'Change Order', lienRelease: 'Lien Release', payApp: 'Pay App',
   issue: 'Issue', rfi: 'RFI', dailyReport: 'Daily Report', punch: 'Punch', task: 'Task',
   project: 'Project', customer: 'Customer',
 };
@@ -68,6 +68,7 @@ const LABEL_RESOLVERS: Partial<Record<ItemType, LabelResolver>> = {
     sql: 'SELECT number, title FROM change_orders WHERE id = ?',
     format: r => { const base = `CO-${r.number ?? '?'}`; return r.title && String(r.title).trim() ? `${base} — ${String(r.title).trim()}` : base; },
   },
+  lienRelease: { sql: 'SELECT number FROM lien_releases WHERE id = ?', format: r => `LR-${(r.number && String(r.number).trim()) || '?'}` },
   payApp: { sql: 'SELECT number FROM aia_pay_apps WHERE id = ?', format: r => `Pay App #${r.number}` },
   issue: {
     sql: 'SELECT number, title FROM issues WHERE id = ?',

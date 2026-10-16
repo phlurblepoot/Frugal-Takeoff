@@ -51,6 +51,7 @@ const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   proposal: 'Proposal',
   invoice: 'Invoice',
   changeOrder: 'Change Order',
+  lienRelease: 'Lien Release',
   payApp: 'Pay App',
   issue: 'Issue',
   rfi: 'RFI',

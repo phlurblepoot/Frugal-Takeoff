@@ -1,8 +1,8 @@
 # Releases of Lien (Florida): Design
 
 Date: 2026-10-15
-Status: Draft for the owner's approval (T22). Wording and design are approved
-in chat before T23 and T24 build anything.
+Status: Approved by the owner in chat (T22), with the decisions in §8, which
+override the draft where they differ. T23 (server and PDF) is built.
 Request: `.knowledge/requests-2026-10-15.md` §11
 
 > This is research and a software design, not legal advice. The statutory
@@ -521,18 +521,51 @@ Store: `server/lienReleaseStore.ts` (with `ValidationError`, `ConflictError`,
 - **U7. Future law.** No 2026 or 2027 bills cite 713.20 today. The wording is
   in one module (§5.5) so a change is quick.
 
-## 8. Choices made in this design (owner may change)
+## 8. Choices made in this design (owner decisions of T22 override the draft)
 
+Approved by the owner in chat (T22), 2026-10-15:
+
+- Wording (§4.1-4.4) approved as written, conditional paragraphs included. It
+  prints exactly as in §4.
+- **Notary: always printed.** Every release ends with a notary acknowledgment
+  block, because all of the owner's customers expect notarized releases. This
+  replaces the draft's "no notary block" (and §2.2 point 6 and §4.5's last
+  bullet no longer apply to what ships). The block is Florida's Statutory Short
+  Form of Acknowledgment, Fla. Stat. 695.25, for a person signing for a company
+  (forms (2) and (3)), with the "physical presence or online notarization"
+  choice. The signer's name and title and the company name are filled in. The
+  notary's fields stay blank: state, county, date, identification, the
+  company's state and entity type, and the signature, name, title or rank and
+  serial number lines. The text lives in `lienReleaseWording.ts`
+  (`lienReleaseNotary`). If it pushes the form past one page, page 2 repeats
+  the letterhead; the block is never split across pages.
+- Entry points: pay app editor, invoice editor, Billing -> Lien Releases tab and
+  Documents -> New (§6.1), **plus** "Unconditional release for this payment" on a
+  recorded payment in Billing -> Payments. It is prefilled from that payment:
+  amount = the payment amount; through date = the linked pay app's period end or
+  invoice date, else the payment date; linked to the payment's pay app or
+  invoice when it has one. The unconditional safety warning (§6.3) does not
+  fire there, since the payment is recorded. Server:
+  `GET /api/projects/:id/lien-releases/prefill?paymentId=`.
+  This replaces the draft's "Payments get no direct entry point".
+- After sending, a release stays editable and every regeneration is a new
+  version of the same document (§6.5); a sent release can be voided, never
+  deleted.
 - Releases are stored records with per-project numbers `LR-n` (§5.1).
-- Unconditional variants print the statutory text verbatim; conditional ones
-  add a CONDITIONAL title prefix and one condition paragraph (§4.3).
-- No notary block. Not required by 713.20.
-- "Sign with my signature" exists but is off by default on every release.
-- Sent releases cannot be deleted, only voided.
-- A Lien Releases tab in Billing, plus buttons in the pay app and invoice
-  editors and a Documents → New entry.
-- Payments (the Payments tab) get no direct entry point in this round; "Make
-  unconditional" covers the after-payment step.
+- Unconditional variants print the statutory text verbatim; conditional ones add
+  a CONDITIONAL title prefix and one condition paragraph (§4.3).
+- "Sign with my signature" exists but is off by default on every release, and
+  "Make unconditional" never copies the stamp over.
+- The optional Exceptions field ships, empty by default, with the hint that the
+  customer may reject a non-standard form.
+- The company name setting is the default lienor name, editable on each release.
+
+Built in T23 (server and PDF): migration 49 `lien_releases`,
+`server/lienReleaseStore.ts` and `server/lienReleaseRoutes.ts` (registered from
+`registerDataRoutes`, next to the proposal routes), `POST
+/api/lien-releases/:id/send` in `registerEmailRoutes`, and
+`src/pages/project/billing/lienReleaseWording.ts` and `lienReleasePdf.ts`. T24
+builds the client.
 
 ## 9. Build split and tests
 

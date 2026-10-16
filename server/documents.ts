@@ -15,7 +15,7 @@ const ALWAYS_EXCLUDED_KINDS = ['plan', 'settings-asset', 'document-template', 'c
 // visibility"). change-order-photo and printout are deliberately NOT here:
 // they carry no dollar figures. payment-attachment is: a check image carries
 // the customer's bank details as well as the amount (migration 43).
-export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'payapp-pdf', 'change-order', 'proposal', 'proposal-signed', 'payment-attachment'] as const;
+export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'payapp-pdf', 'change-order', 'lien-release', 'proposal', 'proposal-signed', 'payment-attachment'] as const;
 
 // Generated documents that are nonetheless deletable. Everything else with a
 // sourceType is owned by a record you delete it at (an invoice, an issue, a
@@ -34,6 +34,7 @@ const KIND_LABELS: Record<string, string> = {
   'invoice-photo': 'Invoice Photo',
   'change-order': 'Change Order',
   'change-order-photo': 'Change Order Photo',
+  'lien-release': 'Lien Release',
   'issue-report': 'Issue',
   'issue-photo': 'Issue Photo',
   'punch-report': 'Punch Report',
@@ -322,6 +323,11 @@ const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
     sql: ph => `SELECT id, number FROM change_orders WHERE id IN (${ph})`,
     label: row => `CO #${row.number ?? '?'}`,
     href: pid => pid ? `/project/${pid}/billing?tab=change-orders` : null,
+  },
+  'lien-release': {
+    sql: ph => `SELECT id, number FROM lien_releases WHERE id IN (${ph})`,
+    label: row => `LR-${row.number ?? '?'}`,
+    href: pid => pid ? `/project/${pid}/billing?tab=lien-releases` : null,
   },
   issue: {
     sql: ph => `SELECT id, number FROM issues WHERE id IN (${ph})`,

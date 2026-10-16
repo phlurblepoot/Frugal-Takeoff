@@ -6,7 +6,7 @@ export interface Addr { addr: string; name?: string }
 
 /** The closed set of app entities a mail thread can be linked to (server/mail/links.ts ItemType). */
 export type ItemType =
-  | 'proposal' | 'invoice' | 'changeOrder' | 'payApp' | 'issue' | 'rfi'
+  | 'proposal' | 'invoice' | 'changeOrder' | 'lienRelease' | 'payApp' | 'issue' | 'rfi'
   | 'dailyReport' | 'punch' | 'task' | 'project' | 'customer';
 
 export type MailAccountStatus = 'ok' | 'syncing' | 'auth_error' | 'needs_review' | 'disabled';

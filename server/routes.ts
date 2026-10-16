@@ -78,6 +78,8 @@ import { dashboardAttention, dashboardMoney, projectHappenings } from './dashboa
 import { listDocuments, listedDocumentIds, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource, NON_ADMIN_EXCLUDED_KINDS } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import { registerProposalRoutes } from './proposalRoutes';
+import { registerLienReleaseRoutes } from './lienReleaseRoutes';
+import { getLienRelease, lienReleaseSendDefaults } from './lienReleaseStore';
 import { registerDocumentLibraryRoutes } from './documentLibraryRoutes';
 import { registerReportRoutes } from './reportRoutes';
 import { LIBRARY_KINDS, mayReadLibraryFile } from './documentLibrary';
@@ -1876,6 +1878,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       ['payment_attachments', 'fileId'],
       ['proposal_photos', 'fileId'], ['proposal_attachments', 'fileId'],
       ['proposals', 'fileId'], ['proposals', 'signedFileId'], ['rfis', 'responseFileId'],
+      ['lien_releases', 'signatureFileId'],
     ];
     for (const [table, column] of FILE_ID_COLUMNS) {
       let rows: { fileId: string | null }[] = [];
@@ -2116,6 +2119,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
 
   registerProposalRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
+  registerLienReleaseRoutes(app, { db, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
   registerDocumentLibraryRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
   registerReportRoutes(app, { db, authenticateToken, requireAdmin });
 }
@@ -2306,6 +2310,23 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       primaryName: `CO-${number || 'change-order'}.pdf`,
       defaultSubject: `Change Order Request ${number}`.trim(),
       defaultBody: 'Please find the attached change order request.',
+    });
+    if (!r) return;
+    res.json({ success: true, ...r });
+  }));
+
+  // Send a lien release PDF (admin only). The release is marked sent inside
+  // sendService, only after the provider has accepted the message.
+  app.post('/api/lien-releases/:id/send', authenticateToken, requireAdmin, sendRoute('lien release', async (req, res) => {
+    const lr = getLienRelease(db, req.params.id);
+    if (!lr) { res.status(404).json({ error: 'Lien release not found' }); return; }
+    const project = db.prepare('SELECT name FROM projects WHERE id = ?').get(lr.projectId) as { name: string | null } | undefined;
+    const defaults = lienReleaseSendDefaults(lr, project?.name || 'Untitled');
+    const r = await sendItem(req, res, {
+      itemType: 'lienRelease', itemId: lr.id,
+      primaryName: `LR-${lr.number || 'release'} ${lr.conditional ? 'Conditional' : 'Unconditional'} ${lr.paymentType === 'final' ? 'Final' : 'Progress'} Release.pdf`,
+      defaultSubject: defaults.subject,
+      defaultBody: defaults.body,
     });
     if (!r) return;
     res.json({ success: true, ...r });

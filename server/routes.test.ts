@@ -2048,6 +2048,26 @@ describe('email send routes', () => {
     expect((await request(emailApp).post('/api/aia/pay-apps/nope/send').send({ to: 'x@y.z', fileId: 'wb' })).status).toBe(404);
   });
 
+  it('lien release send: default subject and file name, thread linked, release marked sent', async () => {
+    const created = (await request(app).post('/api/projects/p1/lien-releases').send({
+      paymentType: 'progress', conditional: true, lienorName: 'Big Bear', customerName: 'Acme', ownerName: 'Jane',
+      propertyDescription: 'Lot 4', amountCents: 50000, throughDate: '2026-09-30', releaseDate: '2026-10-15', signerName: 'Nathan',
+    })).body;
+    await request(app).post(`/api/files/lr?projectId=p1&kind=lien-release&sourceType=lien-release&sourceId=${created.id}&name=LR.pdf`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('LRBYTES'));
+    const res = await request(emailApp).post(`/api/lien-releases/${created.id}/send`).send({ to: 'gc@example.com', fileId: 'lr' });
+    expect(res.status).toBe(200);
+    const m = provider.sent[0];
+    expect(names(m.attachments)).toEqual(['LR-1 Conditional Progress Release.pdf']);
+    expect(m.subject).toBe('Conditional Waiver and Release of Lien upon Progress Payment — Test Project');
+    expect(m.text).toBe('Please find attached our conditional waiver and release of lien for Test Project.');
+    expect(db.prepare('SELECT itemType, itemId FROM mail_thread_links WHERE threadKey = ?').all(res.body.threadKey))
+      .toEqual([{ itemType: 'lienRelease', itemId: created.id }]);
+    expect((await request(app).get(`/api/lien-releases/${created.id}`)).body.status).toBe('sent');
+    expect((await request(buildEmailApp('member')).post(`/api/lien-releases/${created.id}/send`).send({ to: 'x@y.z', fileId: 'lr' })).status).toBe(403);
+    expect((await request(emailApp).post('/api/lien-releases/nope/send').send({ to: 'x@y.z', fileId: 'lr' })).status).toBe(404);
+  });
+
   it('invoice send: blank cc/bcc parse to empty lists; falls back to default subject/body; single attachment', async () => {
     const id = await makeInvoice();
     const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({

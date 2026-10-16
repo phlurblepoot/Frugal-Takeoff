@@ -18,6 +18,7 @@ import {
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
 import { useDropZone } from '../../../hooks/useDropZone';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
+import { LienReleaseLauncher } from './LienReleaseLauncher';
 import { PAYMENT_ATTACHMENT_KIND, PAYMENT_METHODS, PaymentDetailModal, paymentMethodLabel } from './PaymentDetailModal';
 
 // A photo or PDF picked for a payment that isn't recorded yet: a new file
@@ -232,6 +233,7 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
                           <Paperclip size={13} />{p.attachmentCount}
                         </span>
                       )}
+                      <LienReleaseLauncher projectId={projectId} paymentId={p.id} variant={{ paymentType: 'progress', conditional: false }} label="Unconditional release for this payment" buttonVariant="ghost" testId={`payment-lien-release-${p.id}`} />
                       <button onClick={() => { void remove(p.id); }} title="Delete" aria-label="Delete payment" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
                     </div>
                   </TD>

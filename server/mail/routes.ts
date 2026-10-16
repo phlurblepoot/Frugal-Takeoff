@@ -83,7 +83,7 @@ export function createWebhookRateLimit(max: number = WEBHOOK_RATE_LIMIT_PER_MIN,
 }
 
 // The runtime twin of the ItemType union — typed as ItemType[] so a typo here is a compile error.
-const ITEM_TYPES: readonly ItemType[] = ['proposal', 'invoice', 'changeOrder', 'payApp', 'issue', 'rfi', 'dailyReport', 'punch', 'task', 'project', 'customer'];
+const ITEM_TYPES: readonly ItemType[] = ['proposal', 'invoice', 'changeOrder', 'lienRelease', 'payApp', 'issue', 'rfi', 'dailyReport', 'punch', 'task', 'project', 'customer'];
 const isItemType = (v: unknown): v is ItemType => typeof v === 'string' && (ITEM_TYPES as readonly string[]).includes(v);
 
 const ACTIONS = ['read', 'unread', 'star', 'unstar', 'archive', 'trash', 'move'] as const;

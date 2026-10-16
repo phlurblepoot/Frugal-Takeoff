@@ -4,7 +4,7 @@ import { CLIENT_SESSION_ID } from '../utils/clientSession';
 
 export type EntityType =
   | 'project' | 'task' | 'issue' | 'rfi' | 'dailyReport' | 'dailyReportCrew' | 'punch'
-  | 'invoice' | 'changeOrder' | 'payment' | 'aiaSov' | 'aiaPayApp'
+  | 'invoice' | 'changeOrder' | 'lienRelease' | 'payment' | 'aiaSov' | 'aiaPayApp'
   | 'file' | 'note' | 'customer' | 'user' | 'timeEntry' | 'template' | 'proposal'
   | 'mailThread' | 'mailAccount' | 'backupRun';
 

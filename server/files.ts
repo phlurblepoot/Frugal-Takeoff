@@ -54,7 +54,7 @@ export interface FileMeta {
 export const SYSTEM_KINDS = [
   'plan-source', 'plan', 'proposal', 'proposal-photo', 'proposal-signed', 'printout',
   'takeoff-print', 'takeoff-export',
-  'invoice', 'invoice-photo', 'change-order', 'change-order-photo', 'issue-report',
+  'invoice', 'invoice-photo', 'change-order', 'change-order-photo', 'lien-release', 'issue-report',
   'issue-photo', 'punch-report', 'punch-photo', 'rfi', 'rfi-photo',
   'rfi-response', 'task-photo', 'payapp-export', 'email-attachment',
   'settings-asset', 'daily-report', 'daily-report-photo', 'payapp-pdf',

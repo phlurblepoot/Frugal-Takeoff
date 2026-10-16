@@ -85,6 +85,8 @@ export function itemTypeFromSource(sourceType?: string | null): ItemType | undef
     case 'invoice': return 'invoice';
     case 'change-order':
     case 'changeOrder': return 'changeOrder';
+    case 'lien-release':
+    case 'lienRelease': return 'lienRelease';
     case 'issue': return 'issue';
     case 'rfi': return 'rfi';
     case 'daily-report':

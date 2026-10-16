@@ -8,6 +8,7 @@ import { itemSendPayload } from '../../../utils/itemSend';
 import { useGeneratedDocument } from '../../../hooks/useGeneratedDocument';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { PayAppPdfControls } from './PayAppPdfControls';
+import { LienReleaseLauncher } from './LienReleaseLauncher';
 import { buildAiaXlsxBlob } from './aiaExcel';
 import { resolveAiaExportEnv } from './aiaExportShared';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
@@ -301,7 +302,7 @@ export const AiaPayAppEditor: React.FC<{
             project, number and updatedAt, and persisting against a half-known
             record would file the workbook under the wrong project. */}
         {data && (
-          <div className="mr-auto">
+          <div className="mr-auto flex flex-wrap items-center gap-2">
             <DocumentActionsBar
               key={barKey}
               source={{ sourceType: 'payapp', sourceId: data.app.id }}
@@ -332,6 +333,7 @@ export const AiaPayAppEditor: React.FC<{
                 sendFn: (fileId, req) => sendPayApp(data.app.id, { ...itemSendPayload(req), fileId }),
               }}
             />
+            <LienReleaseLauncher projectId={data.app.projectId} source={{ sourceType: 'payapp', sourceId: data.app.id }} testId="payapp-lien-release" />
           </div>
         )}
         {data && (

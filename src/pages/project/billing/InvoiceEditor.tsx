@@ -18,6 +18,7 @@ import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { buildInvoicePdf } from './invoicePdf';
+import { LienReleaseLauncher } from './LienReleaseLauncher';
 import { appendAttachedPdfs } from '../../../utils/pdfAttachments';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
@@ -192,7 +193,7 @@ export const InvoiceEditor: React.FC<{
   return (
     <Modal open onClose={onClose} title={`Invoice ${invoice.number ?? ''}`} width="lg"
       footer={<>
-        <div className="mr-auto">
+        <div className="mr-auto flex flex-wrap items-center gap-2">
           <DocumentActionsBar
             source={{ sourceType: 'invoice', sourceId: invoice.id }}
             kind="invoice"
@@ -224,6 +225,7 @@ export const InvoiceEditor: React.FC<{
               },
             }}
           />
+          <LienReleaseLauncher projectId={projectId} source={{ sourceType: 'invoice', sourceId: invoice.id }} testId="invoice-lien-release" />
         </div>
         <Button variant="secondary" onClick={onClose}>Close</Button>
         <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save invoice'}</Button>

@@ -7,7 +7,7 @@
 // the same query string.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { FilePlus2, FolderOpen, Upload } from 'lucide-react';
+import { ChevronDown, FilePlus2, FileSignature, FolderOpen, Upload } from 'lucide-react';
 import { Customer } from '../../types';
 import {
   DocumentRow, ProjectSummary, deleteFile, fetchFileBlob, getCustomers, getDocumentTypes,
@@ -25,6 +25,7 @@ import { downloadBlob, DocumentsTable } from './DocumentsTable';
 import { MultiSelectOption } from './MultiSelectDropdown';
 import { UploadDocumentsModal } from './UploadDocumentsModal';
 import { NewDocumentModal } from './NewDocumentModal';
+import { NewLienReleaseModal } from './NewLienReleaseModal';
 import { isNewDocumentType, type NewDocumentType } from '../../utils/officeFormats';
 import { CustomDocType, KIND_OPTIONS } from './docTypes';
 
@@ -111,6 +112,16 @@ export const DocumentsPage: React.FC<{ projectId?: string }> = ({ projectId: loc
   // type (the command palette's "New Word document" etc.); the param is
   // dropped once read so Back and a reload don't reopen it.
   const [newDocType, setNewDocType] = useState<NewDocumentType | null>(null);
+  // "New" is a menu for admins (the second entry is billing, admin-only).
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const [lienOpen, setLienOpen] = useState(false);
+  const newMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!newMenuOpen) return;
+    const away = (e: MouseEvent) => { if (!newMenuRef.current?.contains(e.target as Node)) setNewMenuOpen(false); };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [newMenuOpen]);
   const newParam = searchParams.get('new');
   useEffect(() => {
     if (!newParam) return;
@@ -374,9 +385,29 @@ export const DocumentsPage: React.FC<{ projectId?: string }> = ({ projectId: loc
           <h1 className="text-xl font-bold text-ink">Documents</h1>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" data-testid="documents-new" onClick={() => setNewDocType('docx')}>
-            <FilePlus2 size={15} />New document
-          </Button>
+          <div className="relative" ref={newMenuRef}>
+            <Button
+              variant="secondary" data-testid="documents-new"
+              aria-haspopup={admin ? 'menu' : undefined} aria-expanded={admin ? newMenuOpen : undefined}
+              onClick={() => (admin ? setNewMenuOpen(o => !o) : setNewDocType('docx'))}
+            >
+              <FilePlus2 size={15} />New document{admin && <ChevronDown size={13} />}
+            </Button>
+            {admin && newMenuOpen && (
+              <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-64 rounded-lg border border-edge bg-raised py-1 shadow-lg">
+                <button role="menuitem" type="button" data-testid="documents-new-document"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-ink hover:bg-hover"
+                  onClick={() => { setNewMenuOpen(false); setNewDocType('docx'); }}>
+                  <FilePlus2 size={14} />Document, spreadsheet or PDF form
+                </button>
+                <button role="menuitem" type="button" data-testid="documents-new-lien-release"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-ink hover:bg-hover"
+                  onClick={() => { setNewMenuOpen(false); setLienOpen(true); }}>
+                  <FileSignature size={14} />Release of lien
+                </button>
+              </div>
+            )}
+          </div>
           <Button
             data-testid="documents-upload"
             onClick={() => { setUploadInitialFiles(undefined); setUploadOpen(true); }}
@@ -485,6 +516,14 @@ export const DocumentsPage: React.FC<{ projectId?: string }> = ({ projectId: loc
         customTypes={customTypes}
         initialFiles={uploadInitialFiles}
       />
+
+      {admin && (
+        <NewLienReleaseModal
+          open={lienOpen}
+          onClose={() => setLienOpen(false)}
+          initialProjectId={projectIds.length === 1 ? projectIds[0] : undefined}
+        />
+      )}
 
       <NewDocumentModal
         open={newDocType !== null}
