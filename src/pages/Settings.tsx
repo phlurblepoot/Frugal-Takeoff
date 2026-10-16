@@ -3,7 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers, DatabaseBackup, FileText, FilePlus2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
+import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType, getDefaultProjectTab, setDefaultProjectTab } from '../utils/store';
+import { PROJECT_SECTIONS } from './project/ProjectTabBar';
 import { UsersView } from './UsersView';
 import { MailAccountsTab } from './settings/MailAccountsTab';
 import { BackupTab } from './settings/BackupTab';
@@ -27,6 +28,19 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '4.2.0',
+    date: 'October 15, 2026',
+    changes: [
+      'New: merge PDFs. Select two or more PDFs on the Documents page and choose "Merge PDFs". A window lists them in order, you can drag them (or use the arrows) to reorder, name the result, and pick the project if they come from different projects.',
+      'New: add pages from one PDF into another. Choose which pages (blank means all, or something like "1-3, 5") and where they go.',
+      'New: favorite projects. Tap the star on a project in the list or beside its name at the top of the project. The Projects page has a Recent / Favorites switch, and it remembers your choice.',
+      'New: Settings > Preferences > Projects lets you pick which tab a project opens on. Clicking the Overview tab itself still works.',
+      'New: share into the app from your phone. On Android, Share a PDF, photo or document and choose this app. Pick a project and a document type (a sensible one is chosen for you) and it is filed. If you are signed out you sign in first and your files are waiting.',
+      'New: the first time a PDF opens in the editor, a small tip explains how to type on a form that has no box: click Edit PDF, then Insert, then Text Box. You can dismiss it and it will not come back.',
+      'Fix: a number box holding 0 now shows empty with the faded 0, so typing 5 gives 5 instead of 05. Boxes whose faded text means something else (for example "base 10%") still show a real 0.',
+    ],
+  },
   {
     version: '4.1.14',
     date: 'October 15, 2026',
@@ -911,6 +925,9 @@ function accentSwatchColor(hue: number) {
 const PreferencesTab: React.FC = () => {
   const { mode, accentColor, customAccentHex, reducedMotion, timeAmbience, solidSurfaces, toggleMode, setAccentColor, setCustomAccent, setReducedMotion, setTimeAmbience, setSolidSurfaces } = useTheme();
   const { toast } = useToast();
+  const isAdminUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}').role === 'admin'; } catch { return false; } })();
+  const [openTab, setOpenTab] = useState<string>('overview');
+  useEffect(() => { getDefaultProjectTab().then(setOpenTab); }, []);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -1086,6 +1103,34 @@ const PreferencesTab: React.FC = () => {
                 className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${solidSurfaces ? 'left-6' : 'left-0.5'}`} />
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h2 className="text-lg font-bold text-ink">Projects</h2>
+          <p className="text-sm text-ink-soft">Choose which tab a project opens on.</p>
+        </div>
+        <div className="p-6">
+          <label className="flex items-center justify-between gap-4">
+            <span className="text-sm font-semibold text-ink">Open projects on</span>
+            <select
+              aria-label="Open projects on"
+              value={openTab}
+              onChange={async e => {
+                const next = e.target.value;
+                const prev = openTab;
+                setOpenTab(next);
+                try { await setDefaultProjectTab(next); }
+                catch { setOpenTab(prev); toast('Could not save this setting.', { type: 'error' }); }
+              }}
+              className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm text-ink"
+            >
+              {PROJECT_SECTIONS.filter(s => !s.adminOnly || isAdminUser).map(s => (
+                <option key={s.id} value={s.id}>{s.label}</option>
+              ))}
+            </select>
+          </label>
         </div>
       </div>
 

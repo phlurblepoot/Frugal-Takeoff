@@ -114,7 +114,10 @@ export const handleResponse = async (res: Response) => {
   if (res.status === 401) {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    window.location.href = '/login';
+    // Shared files are waiting on this page; sign in and come straight back.
+    window.location.href = window.location.pathname === '/share-target'
+      ? `/login?next=${encodeURIComponent('/share-target?shared=1')}`
+      : '/login';
     throw new Error('Session expired. Please log in again.');
   }
   if (!res.ok) {
@@ -1407,6 +1410,18 @@ export const patchFile = async (
   return await res.json();
 };
 
+// Merge PDFs: the chosen PDFs, in order, saved as one new document. Returns
+// the new document's id and name.
+export const mergePdfFiles = async (ids: string[], name?: string, projectId?: string): Promise<{ fileId: string; name: string }> => {
+  const res = await fetchWithRetry('/api/files/merge-pdf', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ ids, ...(name ? { name } : {}), ...(projectId ? { projectId } : {}) }),
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
 // Admin-managed custom document types (spec §Data model: settings.documentTypes
 // JSON [{id,label}], files store the id). Saved through the general settings
 // PUT path like every other admin setting — see Settings.tsx's other cards.
@@ -2525,6 +2540,77 @@ export const getAlwaysCc = async (): Promise<string> => {
   }
 };
 
+// ── Default project tab ──────────────────────────────────────────────────────
+// Per-user pref `defaultProjectTab` (a project section id, e.g. 'documents').
+// Cached for the session so opening several projects reads the server once.
+export const DEFAULT_PROJECT_TAB_PREF = 'defaultProjectTab';
+let defaultProjectTabCache: string | null = null;
+export const peekDefaultProjectTab = (): string | null => defaultProjectTabCache;
+export const getDefaultProjectTab = async (): Promise<string> => {
+  if (defaultProjectTabCache !== null) return defaultProjectTabCache;
+  try {
+    const prefs = await getUserPreferences();
+    defaultProjectTabCache = prefs[DEFAULT_PROJECT_TAB_PREF] || 'overview';
+  } catch {
+    return 'overview';
+  }
+  return defaultProjectTabCache;
+};
+export const setDefaultProjectTab = async (tab: string): Promise<void> => {
+  await saveUserPreferences({ [DEFAULT_PROJECT_TAB_PREF]: tab });
+  defaultProjectTabCache = tab;
+};
+
+// ── Favorite projects ────────────────────────────────────────────────────────
+// Per-user pref `favoriteProjects` (JSON array of project ids). Cached for the
+// session; subscribers (stars on cards and in the project top bar) re-render
+// when it changes.
+export const FAVORITE_PROJECTS_PREF = 'favoriteProjects';
+let favoriteProjectsCache: string[] | null = null;
+let favoriteProjectsLoading: Promise<string[]> | null = null;
+const favoriteListeners = new Set<() => void>();
+const emitFavorites = () => favoriteListeners.forEach(l => l());
+export const peekFavoriteProjects = (): string[] | null => favoriteProjectsCache;
+export const subscribeFavoriteProjects = (fn: () => void): (() => void) => {
+  favoriteListeners.add(fn);
+  return () => { favoriteListeners.delete(fn); };
+};
+export const parseFavoriteProjects = (raw: string | undefined): string[] => {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch { return []; }
+};
+export const getFavoriteProjects = async (): Promise<string[]> => {
+  if (favoriteProjectsCache !== null) return favoriteProjectsCache;
+  if (!favoriteProjectsLoading) {
+    favoriteProjectsLoading = getUserPreferences()
+      .then(prefs => {
+        // A toggle that landed while loading wins over the fetched value.
+        if (favoriteProjectsCache === null) favoriteProjectsCache = parseFavoriteProjects(prefs[FAVORITE_PROJECTS_PREF]);
+        emitFavorites();
+        return favoriteProjectsCache;
+      })
+      .catch(() => [] as string[])
+      .finally(() => { favoriteProjectsLoading = null; });
+  }
+  return favoriteProjectsLoading;
+};
+export const toggleFavoriteProject = async (projectId: string): Promise<void> => {
+  const prev = favoriteProjectsCache ?? await getFavoriteProjects();
+  const next = prev.includes(projectId) ? prev.filter(id => id !== projectId) : [...prev, projectId];
+  favoriteProjectsCache = next;
+  emitFavorites();
+  try {
+    await saveUserPreferences({ [FAVORITE_PROJECTS_PREF]: JSON.stringify(next) });
+  } catch (e) {
+    favoriteProjectsCache = prev;
+    emitFavorites();
+    throw e;
+  }
+};
+
 // ── Customers ────────────────────────────────────────────────────────────────
 
 export interface CustomerProjectCounts {
@@ -2806,4 +2892,22 @@ export const sendTestPush = async (): Promise<{ sent: number; removed: number; f
   const res = await fetchWithRetry('/api/push/test', { method: 'POST', headers: { ...getAuthHeaders() } });
   await handleResponse(res);
   return res.json();
+};
+
+export type AppendPosition = 'start' | 'end' | { afterPage: number };
+
+// Append pages: chosen pages of other PDFs go into this PDF, saved as a new
+// version of it. `pages` is text like "1-3, 5"; blank means every page.
+export const appendPdfPages = async (
+  id: string,
+  sources: { id: string; pages?: string }[],
+  position: AppendPosition,
+): Promise<{ fileId: string; versionNumber: number }> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/append-pdf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ sources, position }),
+  });
+  await handleResponse(res);
+  return await res.json();
 };
