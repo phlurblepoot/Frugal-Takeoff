@@ -17,7 +17,7 @@ const { fakeSocket } = vi.hoisted(() => {
 });
 
 const ME: SessionView = {
-  sessionId: 'me', userId: 'u1', name: 'nathan', role: 'admin', color: '#111',
+  sessionId: 'me', userId: 'u1', name: 'noah', role: 'admin', color: '#111',
   device: 'Mac · Chrome', location: null, editing: null, cursor: null, lastActive: 1,
 };
 const OTHER: SessionView = {

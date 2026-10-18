@@ -52,7 +52,7 @@ const renderLockedAt = (path: string) =>
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('token', 'test-token');
-  localStorage.setItem('user', JSON.stringify({ username: 'nathan' }));
+  localStorage.setItem('user', JSON.stringify({ username: 'noah' }));
   useMailUnread.mockReset();
   useMailUnread.mockReturnValue(0);
 });
@@ -154,7 +154,7 @@ describe('Sidebar — company mode', () => {
   });
 
   it('shows Reports to an admin, after Time, active on /reports', () => {
-    localStorage.setItem('user', JSON.stringify({ username: 'nathan', role: 'admin' }));
+    localStorage.setItem('user', JSON.stringify({ username: 'noah', role: 'admin' }));
     renderAt('/reports?tab=payments');
     const reports = screen.getByRole('button', { name: /Reports/ });
     expect(reports.className).toContain('glow-accent');

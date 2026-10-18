@@ -22,10 +22,11 @@ export interface PushRouteDeps {
 
 /** The app as a phone installs it. Colours match the app's default accent. */
 export function webAppManifest(appName: string): Record<string, unknown> {
-  const name = appName.trim() || 'Takeoff Pro';
+  const name = appName.trim() || 'FrugalOmnibuild';
+  const shortFallback = name === 'FrugalOmnibuild' ? 'Omnibuild' : null;
   return {
     name,
-    short_name: name.length > 12 ? name.split(/\s+/)[0].slice(0, 12) || name.slice(0, 12) : name,
+    short_name: shortFallback ?? (name.length > 12 ? name.split(/\s+/)[0].slice(0, 12) || name.slice(0, 12) : name),
     id: '/',
     start_url: '/dashboard',
     scope: '/',

@@ -253,7 +253,7 @@ describe('projectHappenings', () => {
     logActivity(d, { projectId: 'p1', userId: 'u1', type: 'note', message: 'Old note' });
     d.prepare(`UPDATE activity SET createdAt = ? WHERE projectId = 'p1'`).run(new Date('2026-01-01T00:00:00.000Z').getTime());
 
-    linkThread('th1@teg.com', {
+    linkThread('th1@tidewater.example', {
       subjectSnapshot: 'Invoice 12',
       createdAt: '2026-01-02T00:00:00.000Z',
       lastInboundDate: '2026-01-05T00:00:00.000Z',
@@ -264,7 +264,7 @@ describe('projectHappenings', () => {
     expect(items).toHaveLength(2);
     // mail item sorts first — its inbound date is newer than the activity row's.
     expect(items[0]).toMatchObject({
-      kind: 'mail', id: 'th1@teg.com', message: 'Reply on "Invoice 12"',
+      kind: 'mail', id: 'th1@tidewater.example', message: 'Reply on "Invoice 12"',
       createdAt: new Date('2026-01-05T00:00:00.000Z').getTime(),
     });
     expect(items[1]).toMatchObject({ kind: 'activity', type: 'note', message: 'Old note' });
@@ -272,18 +272,18 @@ describe('projectHappenings', () => {
 
   it('omits a thread whose last inbound is not newer than the last outbound (or the link itself)', () => {
     // Reply already answered: inbound predates outbound.
-    linkThread('th-answered@teg.com', {
+    linkThread('th-answered@tidewater.example', {
       subjectSnapshot: 'Answered',
       createdAt: '2026-01-01T00:00:00.000Z',
       lastInboundDate: '2026-01-02T00:00:00.000Z',
       lastOutboundDate: '2026-01-03T00:00:00.000Z',
     });
     // No reply at all yet.
-    linkThread('th-none@teg.com', { subjectSnapshot: 'No reply yet', createdAt: '2026-01-01T00:00:00.000Z' });
+    linkThread('th-none@tidewater.example', { subjectSnapshot: 'No reply yet', createdAt: '2026-01-01T00:00:00.000Z' });
 
     const items = projectHappenings(d, 'p1', 12);
-    expect(items.find(i => i.id === 'th-answered@teg.com')).toBeUndefined();
-    expect(items.find(i => i.id === 'th-none@teg.com')).toBeUndefined();
+    expect(items.find(i => i.id === 'th-answered@tidewater.example')).toBeUndefined();
+    expect(items.find(i => i.id === 'th-none@tidewater.example')).toBeUndefined();
   });
 
   it('caps merged items at limit', () => {

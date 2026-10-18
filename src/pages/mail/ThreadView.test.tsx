@@ -63,7 +63,7 @@ import { ThreadView } from './ThreadView';
 
 const msg = (over: Partial<MessageRow> = {}): MessageRow => ({
   id: 'm1', accountId: 'a1', threadKey: 'tk-1', messageIdHeader: null, inReplyTo: null, references: [],
-  from: { addr: 'bob@acme.com', name: 'Bob Smith' }, to: [{ addr: 'nathan@bigbearplaster.com' }], cc: [], bcc: [],
+  from: { addr: 'bob@acme.com', name: 'Bob Smith' }, to: [{ addr: 'noah@birchwoodplaster.example' }], cc: [], bcc: [],
   subject: 'Roof detail', snippet: 'first message', date: '2026-08-27T12:00:00.000Z',
   isRead: true, isStarred: false, isDraft: false, hasAttachments: false, attachments: [],
   sizeBytes: 10, folderIds: ['f-inbox'], sentFromApp: false, ...over,
@@ -98,7 +98,7 @@ const baseState = () => ({
 });
 
 const ACCOUNTS: MailAccount[] = [{
-  id: 'a1', provider: 'imap', emailAddress: 'nathan@bigbearplaster.com', displayName: 'Nathan',
+  id: 'a1', provider: 'imap', emailAddress: 'noah@birchwoodplaster.example', displayName: 'Noah',
   signatureHtml: null, isDefault: 1, status: 'ok', lastSyncAt: null, lastError: null,
   indexedSince: '2026-01-01T00:00:00.000Z', unreadCount: 0,
 }];
@@ -106,7 +106,7 @@ const ACCOUNTS: MailAccount[] = [{
 const props = {
   accountId: 'a1',
   threadKey: 'tk-1',
-  ownAddresses: ['nathan@bigbearplaster.com'],
+  ownAddresses: ['noah@birchwoodplaster.example'],
   accounts: ACCOUNTS,
   onBack: vi.fn(),
   onReply: vi.fn(),

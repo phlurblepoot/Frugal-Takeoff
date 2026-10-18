@@ -13,11 +13,11 @@ describe('mime helpers', () => {
     expect(htmlToText('<p>Hi<br>there</p><div>ok &amp; done</div>')).toBe('Hi\nthere\nok & done');
   });
   it('htmlToText breaks around a blockquote so the quote attribution stands alone', () => {
-    expect(htmlToText('<div>Corridor 9ft</div><blockquote class="gmail_quote" type="cite">On Aug 26 Nathan wrote:<br>RFI attached</blockquote>'))
+    expect(htmlToText('<div>Corridor 9ft</div><blockquote class="gmail_quote" type="cite">On Aug 26 Noah wrote:<br>RFI attached</blockquote>'))
       // </div> then <blockquote> is a paragraph break, hence the blank line.
-      .toBe('Corridor 9ft\n\nOn Aug 26 Nathan wrote:\nRFI attached');
+      .toBe('Corridor 9ft\n\nOn Aug 26 Noah wrote:\nRFI attached');
     // The point of the break: the reply survives, the quoted history does not.
-    expect(stripQuotedReply(htmlToText('Corridor 9ft<blockquote>On Aug 26 Nathan wrote:<br>RFI attached</blockquote>')))
+    expect(stripQuotedReply(htmlToText('Corridor 9ft<blockquote>On Aug 26 Noah wrote:<br>RFI attached</blockquote>')))
       .toBe('Corridor 9ft');
   });
   it('htmlToText decodes numeric and the common named entities in one pass', () => {
@@ -29,15 +29,15 @@ describe('mime helpers', () => {
     expect(htmlToText('<p>a &bogus; b &#0; c</p>')).toBe('a &bogus; b &#0; c');
   });
   it('stripQuotedReply removes On … wrote:, > blocks and From: headers', () => {
-    const t = 'Approved.\n\nOn Aug 25, 2026, Nathan wrote:\n> COR attached\n> thanks';
+    const t = 'Approved.\n\nOn Aug 25, 2026, Noah wrote:\n> COR attached\n> thanks';
     expect(stripQuotedReply(t)).toBe('Approved.');
-    expect(stripQuotedReply('Yes\n\nFrom: Nathan\nSent: x\n\noriginal')).toBe('Yes');
+    expect(stripQuotedReply('Yes\n\nFrom: Noah\nSent: x\n\noriginal')).toBe('Yes');
     expect(stripQuotedReply('> only quoted')).toBe('> only quoted');   // never returns empty
   });
   it('snippetOf collapses whitespace and caps at 200', () => {
     expect(snippetOf('a\n\n  b'.padEnd(500, 'x')).length).toBe(200);
   });
   it('newMessageIdHeader is bracket-free and lowercase', () => {
-    expect(newMessageIdHeader('Bigbear.com')).toMatch(/^[0-9a-f-]{36}@bigbear\.com$/);
+    expect(newMessageIdHeader('Birchwood.example')).toMatch(/^[0-9a-f-]{36}@birchwood.example$/);
   });
 });

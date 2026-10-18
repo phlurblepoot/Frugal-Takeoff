@@ -18,7 +18,7 @@ import { ConfirmProvider } from './ConfirmDialog';
 const DAY = 86_400_000;
 const link = (over: object) => ({
   id: 'l1', type: 'file', name: 'Scope', createdAt: 1, expiresAt: Date.now() + 20 * DAY,
-  createdBy: 'u1', createdByName: 'nathan', fileCount: 1, ...over,
+  createdBy: 'u1', createdByName: 'noah', fileCount: 1, ...over,
 });
 
 const Opener: React.FC<{ request: ShareRequest }> = ({ request }) => {
@@ -53,7 +53,7 @@ describe('share window', () => {
     const rows = await screen.findAllByTestId('share-link-row');
     expect(h.listShareLinks).toHaveBeenCalledWith('doc1');
     expect(rows[0]).toHaveTextContent('takeoff.example.com/share/l1');
-    expect(rows[0]).toHaveTextContent(/Expires .* · by nathan/);
+    expect(rows[0]).toHaveTextContent(/Expires .* · by noah/);
     expect(rows[1]).toHaveTextContent('Never expires · with 2 other documents · by maria');
     // Nothing is made just by opening the window.
     expect(h.createShareLink).not.toHaveBeenCalled();

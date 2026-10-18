@@ -102,7 +102,7 @@ function initDb() {
     // Initialize default settings
     const settingsCount = db.prepare('SELECT COUNT(*) as count FROM settings').get() as { count: number };
     if (settingsCount.count === 0) {
-      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('appName', 'Takeoff Pro');
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('appName', 'FrugalOmnibuild');
     }
 
     // Create default admin user if no users exist

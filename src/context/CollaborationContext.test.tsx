@@ -52,7 +52,7 @@ import { CollaborationProvider, useCollaboration } from './CollaborationContext'
 import { CLIENT_SESSION_ID } from '../utils/clientSession';
 
 const SESSION = {
-  sessionId: 'sA', userId: 'u1', name: 'nathan', role: 'admin', color: '#3b82f6',
+  sessionId: 'sA', userId: 'u1', name: 'noah', role: 'admin', color: '#3b82f6',
   device: 'Windows · Chrome',
   location: { path: '/dashboard', label: 'Dashboard' },
   editing: null, cursor: null, lastActive: 111,
@@ -96,7 +96,7 @@ const OTHER = {
 describe('CollaborationContext', () => {
   beforeEach(() => {
     localStorage.setItem('token', 'tok123');
-    localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan' }));
+    localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'noah' }));
     ioMock.mockClear(); fakeSocket.emit.mockClear(); navigateSpy.mockClear();
     locationOverrideRef.current = null;
     for (const k of Object.keys(fakeSocket.handlers)) delete fakeSocket.handlers[k];

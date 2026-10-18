@@ -39,7 +39,7 @@ import { CreateFromThreadMenu } from './CreateFromThreadMenu';
 
 const msg = (over: Partial<MessageRow> = {}): MessageRow => ({
   id: 'm1', accountId: 'a1', threadKey: 'tk-1', messageIdHeader: null, inReplyTo: null, references: [],
-  from: { addr: 'bob@acme.com', name: 'Bob Smith' }, to: [{ addr: 'nathan@bigbearplaster.com' }], cc: [], bcc: [],
+  from: { addr: 'bob@acme.com', name: 'Bob Smith' }, to: [{ addr: 'noah@birchwoodplaster.example' }], cc: [], bcc: [],
   subject: 'Roof detail', snippet: 'first message', date: '2026-08-27T12:00:00.000Z',
   isRead: true, isStarred: false, isDraft: false, hasAttachments: false, attachments: [],
   sizeBytes: 10, folderIds: ['f-inbox'], sentFromApp: false, ...over,
@@ -59,9 +59,9 @@ const setup = (overrides: Partial<React.ComponentProps<typeof CreateFromThreadMe
     snippet: 'thread snippet text',
     messages: [
       msg({ id: 'm1', date: '2026-08-27T12:00:00.000Z' }),
-      msg({ id: 'm2', date: '2026-08-27T13:00:00.000Z', from: { addr: 'nathan@bigbearplaster.com' } }), // outbound (own address)
+      msg({ id: 'm2', date: '2026-08-27T13:00:00.000Z', from: { addr: 'noah@birchwoodplaster.example' } }), // outbound (own address)
     ],
-    ownAddresses: ['nathan@bigbearplaster.com'],
+    ownAddresses: ['noah@birchwoodplaster.example'],
     links: [],
     navigate,
     ...overrides,
@@ -202,7 +202,7 @@ describe('CreateFromThreadMenu', () => {
   it('falls back to the thread snippet when there is no inbound message', async () => {
     setup({
       links: [PROJECT_LINK],
-      messages: [msg({ id: 'm1', from: { addr: 'nathan@bigbearplaster.com' } })], // outbound only
+      messages: [msg({ id: 'm1', from: { addr: 'noah@birchwoodplaster.example' } })], // outbound only
     });
     openMenu();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Task' }));

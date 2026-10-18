@@ -216,8 +216,8 @@ describe('pj-happenings', () => {
   it('renders rows with kind/type-based icons, time-ago stamps, and activityTarget links', async () => {
     getProjectHappenings.mockResolvedValue([
       { kind: 'mail', id: 'th1', message: 'Reply on "Invoice 12"', createdAt: Date.now() - 60_000 },
-      { kind: 'activity', id: 'a1', type: 'invoice_sent', message: 'Invoice sent', username: 'nathan', createdAt: Date.now() - 3_600_000 },
-      { kind: 'activity', id: 'a2', type: 'punch_added', message: 'Punch item added', username: 'nathan', createdAt: Date.now() - 7_200_000 },
+      { kind: 'activity', id: 'a1', type: 'invoice_sent', message: 'Invoice sent', username: 'noah', createdAt: Date.now() - 3_600_000 },
+      { kind: 'activity', id: 'a2', type: 'punch_added', message: 'Punch item added', username: 'noah', createdAt: Date.now() - 7_200_000 },
       { kind: 'activity', id: 'a3', type: 'note', message: 'Some note', username: null, createdAt: Date.now() - 90_000_000 },
     ]);
     mount('pj-happenings', 2);
@@ -226,7 +226,7 @@ describe('pj-happenings', () => {
     expect(screen.getByText('Reply on "Invoice 12"').closest('a')).toHaveAttribute('href', '/project/p1/mail');
     expect(screen.getByText('Invoice sent').closest('a')).toHaveAttribute('href', '/project/p1/billing');
     expect(screen.getByText('Punch item added').closest('a')).toHaveAttribute('href', '/project/p1/punch');
-    expect(screen.getAllByText(/nathan ·/).length).toBe(2); // a1 and a2 both attributed to nathan
+    expect(screen.getAllByText(/noah ·/).length).toBe(2); // a1 and a2 both attributed to noah
     expect(screen.getByText('Some note').nextElementSibling).toHaveTextContent(/ago$/);
   });
 

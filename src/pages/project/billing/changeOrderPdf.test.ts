@@ -51,7 +51,7 @@ describe('buildChangeOrderPdf — date, west of UTC', () => {
       description: null, lumpSumAmount: 0, scheduleImpactDays: null, status: 'draft', version: 1,
       createdAt: 0, updatedAt: 0, amount: 0, lines: [], photos: [], attachments: [], totalCents: 0, lumpSumCents: 0,
     } as any;
-    const letterhead = { brandRgb: [153, 203, 56] as [number, number, number], company: { name: 'Big Bear' } };
+    const letterhead = { brandRgb: [153, 203, 56] as [number, number, number], company: { name: 'Birchwood' } };
     const bytes = buildChangeOrderPdf({ changeOrder, projectName: 'Job', letterhead, photoDataUrls: [] });
     expect(pdfText(bytes)).toContain(`Date: ${new Date(2026, 9, 1).toLocaleDateString()}`);
   });

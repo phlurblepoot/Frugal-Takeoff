@@ -69,7 +69,7 @@ describe('oauth', () => {
 
   it('rejects a JWT that is not a state, and a state missing its nonce', () => {
     // A session token signed with the SAME secret must not pass as a state.
-    const session = jwt.sign({ id: 'u1', username: 'nate', role: 'admin' }, 'secret', { expiresIn: '24h' });
+    const session = jwt.sign({ id: 'u1', username: 'nick', role: 'admin' }, 'secret', { expiresIn: '24h' });
     expect(() => verifyState('secret', session)).toThrow(/not a mail sign-in state/);
     // Neither may a hand-rolled state that skipped the nonce.
     const noNonce = jwt.sign({ userId: 'u1', provider: 'google', verifier: 'v', typ: STATE_TYP }, 'secret', { expiresIn: 600 });
@@ -101,10 +101,10 @@ describe('oauth', () => {
     const f: any = async (url: string, init: any) => {
       calls.push({ url, init });
       if (/token/.test(url)) return new Response(JSON.stringify({ access_token: 'A', refresh_token: 'R', expires_in: 3600 }), { status: 200 });
-      return new Response(JSON.stringify({ email: 'me@bigbear.com', name: 'Nate' }), { status: 200 });
+      return new Response(JSON.stringify({ email: 'me@birchwood.example', name: 'Nick' }), { status: 200 });
     };
     const r = await exchangeCode('google', env, 'https://app.test', 'code1', 'verif', f);
-    expect(r).toEqual({ refreshToken: 'R', accessToken: 'A', email: 'me@bigbear.com', name: 'Nate' });
+    expect(r).toEqual({ refreshToken: 'R', accessToken: 'A', email: 'me@birchwood.example', name: 'Nick' });
     expect(calls[0].url).toBe('https://oauth2.googleapis.com/token');
     expect(calls[0].init.body).toContain('grant_type=authorization_code');
     expect(calls[0].init.body).toContain('code=code1');
@@ -122,17 +122,17 @@ describe('oauth', () => {
     const f: any = async (url: string, init: any) => {
       calls.push({ url, init });
       if (/token/.test(url)) return new Response(JSON.stringify({ access_token: 'A', refresh_token: 'R' }), { status: 200 });
-      return new Response(JSON.stringify({ userPrincipalName: 'me@bb.com', displayName: 'Nate' }), { status: 200 });
+      return new Response(JSON.stringify({ userPrincipalName: 'me@birchwood.example', displayName: 'Nick' }), { status: 200 });
     };
     const r = await exchangeCode('microsoft', env, 'https://app.test', 'c1', 'v1', f);
-    expect(r).toEqual({ refreshToken: 'R', accessToken: 'A', email: 'me@bb.com', name: 'Nate' });
+    expect(r).toEqual({ refreshToken: 'R', accessToken: 'A', email: 'me@birchwood.example', name: 'Nick' });
     expect(calls[0].url).toBe('https://login.microsoftonline.com/tenant1/oauth2/v2.0/token');
     expect(calls[1].url).toBe('https://graph.microsoft.com/v1.0/me');
     // `mail` wins over userPrincipalName when the mailbox differs from the login.
     const withMail: any = async (url: string) => /token/.test(url)
       ? new Response(JSON.stringify({ access_token: 'A', refresh_token: 'R' }), { status: 200 })
-      : new Response(JSON.stringify({ mail: 'Box@bb.com', userPrincipalName: 'login@bb.com' }), { status: 200 });
-    expect((await exchangeCode('microsoft', env, 'https://app.test', 'c', 'v', withMail)).email).toBe('box@bb.com');
+      : new Response(JSON.stringify({ mail: 'Box@birchwood.example', userPrincipalName: 'login@birchwood.example' }), { status: 200 });
+    expect((await exchangeCode('microsoft', env, 'https://app.test', 'c', 'v', withMail)).email).toBe('box@birchwood.example');
   });
 
   it('exchangeCode echoes only the enumerated error code, never the description', async () => {
@@ -159,11 +159,11 @@ describe('oauth', () => {
   it('rejects a Google address the provider says is unverified', async () => {
     const identity = (extra: object): any => async (url: string) => /token/.test(url)
       ? new Response(JSON.stringify({ access_token: 'A', refresh_token: 'R' }), { status: 200 })
-      : new Response(JSON.stringify({ email: 'me@bb.com', ...extra }), { status: 200 });
+      : new Response(JSON.stringify({ email: 'me@birchwood.example', ...extra }), { status: 200 });
     await expect(exchangeCode('google', env, 'https://app.test', 'c', 'v', identity({ email_verified: false })))
       .rejects.toThrow('Google reports this address is not verified');
     // Workspace omits the claim entirely — absence is not a rejection.
-    expect((await exchangeCode('google', env, 'https://app.test', 'c', 'v', identity({}))).email).toBe('me@bb.com');
-    expect((await exchangeCode('google', env, 'https://app.test', 'c', 'v', identity({ email_verified: true }))).email).toBe('me@bb.com');
+    expect((await exchangeCode('google', env, 'https://app.test', 'c', 'v', identity({}))).email).toBe('me@birchwood.example');
+    expect((await exchangeCode('google', env, 'https://app.test', 'c', 'v', identity({ email_verified: true }))).email).toBe('me@birchwood.example');
   });
 });

@@ -6,8 +6,8 @@ describe('takeoff print names', () => {
     // Local noon: the same calendar day in every timezone, so this asserts the
     // format without depending on where the suite runs.
     const d = new Date(2026, 7, 28, 12, 0, 0);
-    expect(takeoffPrintName('Dania Beach', 'pdf', d)).toBe('Takeoff Print – Dania Beach – 2026-08-28');
-    expect(takeoffPrintName('Dania Beach', 'excel', d)).toBe('Takeoff Export – Dania Beach – 2026-08-28');
+    expect(takeoffPrintName('Dunmore Heights', 'pdf', d)).toBe('Takeoff Print – Dunmore Heights – 2026-08-28');
+    expect(takeoffPrintName('Dunmore Heights', 'excel', d)).toBe('Takeoff Export – Dunmore Heights – 2026-08-28');
   });
 
   it('uses the LOCAL date, not the UTC one, late in the evening', () => {

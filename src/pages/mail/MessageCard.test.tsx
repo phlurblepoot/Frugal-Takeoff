@@ -18,7 +18,7 @@ const message = (over: Partial<MessageRow> = {}): MessageRow => ({
   inReplyTo: null,
   references: [],
   from: { addr: 'bob@acme.com', name: 'Bob Smith' },
-  to: [{ addr: 'nathan@bigbearplaster.com', name: 'Nathan' }],
+  to: [{ addr: 'noah@birchwoodplaster.example', name: 'Noah' }],
   cc: [{ addr: 'dana@acme.com', name: 'Dana Lee' }],
   bcc: [],
   subject: 'Roof detail',
@@ -36,7 +36,7 @@ const message = (over: Partial<MessageRow> = {}): MessageRow => ({
 });
 
 const props = {
-  ownAddresses: ['nathan@bigbearplaster.com'],
+  ownAddresses: ['noah@birchwoodplaster.example'],
   onToggle: vi.fn(),
   onReply: vi.fn(),
   onSave: vi.fn(),

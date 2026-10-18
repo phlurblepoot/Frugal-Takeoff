@@ -35,8 +35,8 @@ describe('participantsLabel', () => {
 
   it('replaces the account owner with "me" (case-insensitively) and uses first names', () => {
     expect(
-      participantsLabel([p('nathan@bigbearplaster.com', 'Nathan Reed'), p('bob@acme.com', 'Bob Smith')], [
-        'Nathan@BigBearPlaster.com',
+      participantsLabel([p('noah@birchwoodplaster.example', 'Noah Reed'), p('bob@acme.com', 'Bob Smith')], [
+        'Noah@BirchwoodPlaster.example',
       ]),
     ).toBe('me, Bob');
   });

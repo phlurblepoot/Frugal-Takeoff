@@ -40,19 +40,19 @@ vi.mock('./RichTextEditor', () => ({
 import { MailComposer, agoLabel, itemTypeFromSource, type MailComposerProps } from './MailComposer';
 
 const account = (over: Partial<MailAccount> = {}): MailAccount => ({
-  id: 'a1', provider: 'imap', emailAddress: 'nathan@bigbearplaster.com', displayName: 'Nathan',
+  id: 'a1', provider: 'imap', emailAddress: 'noah@birchwoodplaster.example', displayName: 'Noah',
   signatureHtml: null, isDefault: 1, status: 'ok', lastSyncAt: null, lastError: null,
   indexedSince: '2026-01-01T00:00:00.000Z', unreadCount: 0, ...over,
 });
 
 const ACCOUNTS: MailAccount[] = [
   account(),
-  account({ id: 'a2', emailAddress: 'shop@bigbearplaster.com', status: 'auth_error', lastError: 'Sign in again', isDefault: 0 }),
+  account({ id: 'a2', emailAddress: 'shop@birchwoodplaster.example', status: 'auth_error', lastError: 'Sign in again', isDefault: 0 }),
 ];
 
 const msg = (over: Partial<MessageRow> = {}): MessageRow => ({
   id: 'm1', accountId: 'a1', threadKey: 'tk-1', messageIdHeader: null, inReplyTo: null, references: [],
-  from: { addr: 'bob@acme.com', name: 'Bob Smith' }, to: [{ addr: 'nathan@bigbearplaster.com' }], cc: [],
+  from: { addr: 'bob@acme.com', name: 'Bob Smith' }, to: [{ addr: 'noah@birchwoodplaster.example' }], cc: [],
   bcc: [], subject: 'Roof detail', snippet: '', date: '2026-08-27T16:00:00.000Z',
   isRead: true, isStarred: false, isDraft: false, hasAttachments: false, attachments: [],
   sizeBytes: 0, folderIds: [], sentFromApp: false, ...over,
@@ -116,11 +116,11 @@ describe('itemTypeFromSource', () => {
 
 describe('MailComposer', () => {
   it('prefills Cc from the always-CC preference and reveals the Cc row', async () => {
-    h.getAlwaysCc.mockResolvedValue('office@bigbearplaster.com, boss@bigbearplaster.com');
+    h.getAlwaysCc.mockResolvedValue('office@birchwoodplaster.example, boss@birchwoodplaster.example');
     setup();
     await waitFor(() => expect(screen.getByLabelText('Cc')).toBeInTheDocument());
-    await waitFor(() => expect(pills()).toContain('office@bigbearplaster.com'));
-    expect(pills()).toContain('boss@bigbearplaster.com');
+    await waitFor(() => expect(pills()).toContain('office@birchwoodplaster.example'));
+    expect(pills()).toContain('boss@birchwoodplaster.example');
   });
 
   it('hides Cc/Bcc behind a toggle when nothing is prefilled', async () => {
@@ -278,14 +278,14 @@ describe('MailComposer', () => {
       replyTo: {
         accountId: 'a1', threadKey: 'tk-1', bodyHtml: '<p>x</p>',
         message: msg({
-          to: [{ addr: 'nathan@bigbearplaster.com' }, { addr: 'carol@acme.com' }],
+          to: [{ addr: 'noah@birchwoodplaster.example' }, { addr: 'carol@acme.com' }],
           cc: [{ addr: 'dave@acme.com' }],
         }),
       },
     });
     await waitFor(() => expect(pills()).toContain('carol@acme.com'));
     expect(pills()).toContain('bob@acme.com');
-    expect(pills()).not.toContain('nathan@bigbearplaster.com');
+    expect(pills()).not.toContain('noah@birchwoodplaster.example');
     expect(pills()).toContain('dave@acme.com');
   });
 
@@ -302,10 +302,10 @@ describe('MailComposer', () => {
   });
 
   it('appends the account signature under a -- separator', async () => {
-    setup({ accounts: [account({ signatureHtml: '<p>Nathan — Big Bear Plaster</p>' })] });
-    await waitFor(() => expect(body().value).toContain('Big Bear Plaster'));
+    setup({ accounts: [account({ signatureHtml: '<p>Noah — Birchwood Plaster</p>' })] });
+    await waitFor(() => expect(body().value).toContain('Birchwood Plaster'));
     expect(body().value).toContain('<br><br>--<br>');
-    expect(body().value.indexOf('--<br>')).toBeLessThan(body().value.indexOf('Big Bear'));
+    expect(body().value.indexOf('--<br>')).toBeLessThan(body().value.indexOf('Birchwood'));
   });
 
   it('defaults to replying inside the existing thread', async () => {
@@ -427,7 +427,7 @@ describe('MailComposer', () => {
   });
 
   it('does not autosave the state it opened with', async () => {
-    h.getAlwaysCc.mockResolvedValue('office@bigbearplaster.com');
+    h.getAlwaysCc.mockResolvedValue('office@birchwoodplaster.example');
     vi.useFakeTimers();
     try {
       setup({ mode: 'reply', replyTo: { accountId: 'a1', threadKey: 'tk-1', message: msg(), bodyHtml: '<p>x</p>' } });
@@ -573,7 +573,7 @@ describe('MailComposer', () => {
     const resume = (over: Partial<MailComposerProps> = {}) => setup({
       mode: 'new',
       defaultAccountId: 'a1',
-      accounts: [account({ signatureHtml: '<b>Nathan</b>' }), ACCOUNTS[1]],
+      accounts: [account({ signatureHtml: '<b>Noah</b>' }), ACCOUNTS[1]],
       initial: {
         to: [{ addr: 'bob@acme.com' }], cc: [{ addr: 'pm@acme.com' }], subject: 'Re: Roof detail',
         html: '<p>My half-written reply</p><br><br><div class="ft-quote" style="color:#555">Bob wrote:<br><p>Original</p></div>',
@@ -584,14 +584,14 @@ describe('MailComposer', () => {
     });
 
     it('opens with the draft\'s content and attachments, no signature, no always-Cc, quote beside the editor', async () => {
-      h.getAlwaysCc.mockResolvedValue('office@bigbearplaster.com');
+      h.getAlwaysCc.mockResolvedValue('office@birchwoodplaster.example');
       resume();
       await waitFor(() => expect(screen.getByTestId('composer-quote')).toBeInTheDocument());
       expect(body().value).toBe('<p>My half-written reply</p>');
       expect(subject().value).toBe('Re: Roof detail');
       expect(pills()).toContain('bob@acme.com');
       expect(pills()).toContain('pm@acme.com');
-      expect(pills()).not.toContain('office@bigbearplaster.com');
+      expect(pills()).not.toContain('office@birchwoodplaster.example');
       expect(h.getAlwaysCc).not.toHaveBeenCalled();
       expect(screen.getByText('takeoff.pdf')).toBeInTheDocument();
       expect(screen.getByText('Edit draft')).toBeInTheDocument();

@@ -48,7 +48,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-oo-view-'));
   db = openDb(':memory:');
   runMigrations(db, dir, migrations, { mailCrypto: new MailCrypto(Buffer.alloc(32, 3)) });
-  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','nathan','x','admin'), ('u2','maria','x','user')`).run();
+  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','noah','x','admin'), ('u2','maria','x','user')`).run();
 });
 
 /** The path and query of a URL ONLYOFFICE would fetch from the app. */
@@ -143,7 +143,7 @@ describe('mail attachments in the viewer', () => {
   let tokens: ReturnType<typeof services>['tokens'];
 
   const envelope = (id: string) => ({
-    providerMessageId: id, references: [], from: { addr: 'gc@teg.com', name: 'Mike' }, to: [{ addr: 'me@bb.com' }], cc: [], bcc: [],
+    providerMessageId: id, references: [], from: { addr: 'gc@tidewater.example', name: 'Mike' }, to: [{ addr: 'me@birchwood.example' }], cc: [], bcc: [],
     subject: 'Revised scope', snippet: 'see attached', date: '2026-09-20T10:00:00.000Z',
     isRead: false, isStarred: false, isDraft: false,
     attachments: [
@@ -151,7 +151,7 @@ describe('mail attachments in the viewer', () => {
       { attId: 'a2', name: 'Budget.xls', mime: 'application/octet-stream', size: 7 },
       { attId: 'a3', name: 'Plan.pdf', mime: 'application/pdf', size: 4 },
     ],
-    sizeBytes: 10, folderProviderIds: ['INBOX'], messageIdHeader: `${id}@teg.com`, html: '<p>Hi</p>',
+    sizeBytes: 10, folderProviderIds: ['INBOX'], messageIdHeader: `${id}@tidewater.example`, html: '<p>Hi</p>',
     attachmentBytes: { a1: Buffer.from('DOCX BODY'), a2: Buffer.from('XLS OLD'), a3: Buffer.from('%PDF') },
   });
 
@@ -172,9 +172,9 @@ describe('mail attachments in the viewer', () => {
 
   beforeEach(() => {
     resetFakes();
-    currentUser = { id: 'u1', username: 'nathan', role: 'admin' };
+    currentUser = { id: 'u1', username: 'noah', role: 'admin' };
     tokens = services().tokens;
-    const acct = accounts.createAccount(db, new MailCrypto(Buffer.alloc(32, 3)), { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', auth: { refreshToken: 'r' } });
+    const acct = accounts.createAccount(db, new MailCrypto(Buffer.alloc(32, 3)), { userId: 'u1', provider: 'fake', emailAddress: 'me@birchwood.example', auth: { refreshToken: 'r' } });
     const provider = getFakeProvider(acct.id);
     provider.seed([envelope('m1')]);
     ctx = { db, dataDir: dir, crypto: new MailCrypto(Buffer.alloc(32, 3)), providerFactory: x => getFakeProvider(x.id), broadcastChange: () => {} };
@@ -195,7 +195,7 @@ describe('mail attachments in the viewer', () => {
     expect(r.body.config.type).toBe('desktop');
     expect(r.body.config.document).toMatchObject({ fileType: 'docx', title: 'Scope.docx' });
     expect(r.body.config.document.key).toMatch(/^mail-[0-9a-f]{40}$/);
-    expect(r.body.config.editorConfig.user).toEqual({ id: 'u1', name: 'nathan' });
+    expect(r.body.config.editorConfig.user).toEqual({ id: 'u1', name: 'noah' });
     assertViewOnly(r.body.config);
     const file = await request(app).get(appPath(r.body.config.document.url)).buffer(true).parse((res, cb) => {
       const chunks: Buffer[] = [];
@@ -216,7 +216,7 @@ describe('mail attachments in the viewer', () => {
     expect((await open('nope')).status).toBe(404);
     currentUser = { id: 'u2', username: 'maria', role: 'user' };
     expect((await open('a1')).status).toBe(404);
-    currentUser = { id: 'u1', username: 'nathan', role: 'admin' };
+    currentUser = { id: 'u1', username: 'noah', role: 'admin' };
     app = mkApp({});
     const off = await open('a1');
     expect([off.status, off.body.code]).toEqual([503, 'not-configured']);

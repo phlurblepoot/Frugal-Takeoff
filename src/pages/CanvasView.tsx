@@ -477,7 +477,7 @@ const CanvasViewInner: React.FC = () => {
     return () => { socket.off('connect', onConnect); };
   }, [socket, projectId, pageId]);
 
-  // Contract item 6 (Nathan-requested addition): foreign, non-measurement
+  // Contract item 6 (owner-requested addition): foreign, non-measurement
   // project changes (scale recalibration, takeoff add/rename, page rename)
   // still go through the full project PUT, so they don't arrive via
   // onMeasurementApplied. Subscribe to the raw entity-changed change feed and

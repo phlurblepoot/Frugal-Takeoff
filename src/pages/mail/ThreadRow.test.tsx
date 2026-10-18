@@ -29,7 +29,7 @@ const row = (over: Partial<ThreadListRow> = {}): ThreadListRow => ({
 
 const props = {
   selected: false,
-  ownAddresses: ['nathan@bigbearplaster.com'],
+  ownAddresses: ['noah@birchwoodplaster.example'],
   onOpen: vi.fn(),
   onToggleStar: vi.fn(),
 };

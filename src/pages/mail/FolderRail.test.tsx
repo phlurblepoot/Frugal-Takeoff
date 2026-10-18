@@ -6,7 +6,7 @@ import { FolderRail } from './FolderRail';
 import type { MailAccount, MailFolder } from './types';
 
 const account = (over: Partial<MailAccount> = {}): MailAccount => ({
-  id: 'a1', provider: 'imap', emailAddress: 'nathan@bigbearplaster.com', displayName: 'Nathan',
+  id: 'a1', provider: 'imap', emailAddress: 'noah@birchwoodplaster.example', displayName: 'Noah',
   signatureHtml: null, isDefault: 1, status: 'ok', lastSyncAt: null, lastError: null,
   indexedSince: '2026-02-01T00:00:00.000Z', unreadCount: 3, ...over,
 });
@@ -82,14 +82,14 @@ describe('FolderRail', () => {
   it('hides the account picker for a single account and shows it for two', () => {
     const { rerender } = render(<FolderRail {...props} />);
     expect(screen.queryByLabelText('Mail account')).toBeNull();
-    expect(screen.getByText('nathan@bigbearplaster.com')).toBeInTheDocument();
+    expect(screen.getByText('noah@birchwoodplaster.example')).toBeInTheDocument();
 
     const onSelectAccount = vi.fn();
     rerender(
       <FolderRail
         {...props}
         onSelectAccount={onSelectAccount}
-        accounts={[account(), account({ id: 'a2', emailAddress: 'office@bigbearplaster.com', isDefault: 0 })]}
+        accounts={[account(), account({ id: 'a2', emailAddress: 'office@birchwoodplaster.example', isDefault: 0 })]}
       />,
     );
     const select = screen.getByLabelText('Mail account');

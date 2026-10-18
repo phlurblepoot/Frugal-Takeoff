@@ -1565,8 +1565,8 @@ describe('rfi pending-reply routes', () => {
   let memberApp: express.Express;
 
   const PENDING: RfiPendingReply = {
-    threadKey: 'rfi-thread@bb.com', accountId: 'acct-1', mailMessageId: 'mm1', messageIdHeader: 'm1@teg.com',
-    from: { addr: 'gc@teg.com', name: 'Mike' }, date: '2026-08-28T10:00:00.000Z', text: 'Corridor is 9ft',
+    threadKey: 'rfi-thread@birchwood.example', accountId: 'acct-1', mailMessageId: 'mm1', messageIdHeader: 'm1@tidewater.example',
+    from: { addr: 'gc@tidewater.example', name: 'Mike' }, date: '2026-08-28T10:00:00.000Z', text: 'Corridor is 9ft',
     attachments: [{ attId: 'a1', name: 'sketch.pdf', mime: 'application/pdf', size: 9 }], receivedAt: '2026-08-28T10:00:01.000Z',
   };
 
@@ -1602,7 +1602,7 @@ describe('rfi pending-reply routes', () => {
     expect(after.status).toBe('answered');
     expect(after.responseText).toBe('Corridor is 9ft');
     expect(after.responseSource).toBe('email');
-    expect(after.responseMessageIdHeader).toBe('m1@teg.com');
+    expect(after.responseMessageIdHeader).toBe('m1@tidewater.example');
     expect(after.answeredAt).toBeTruthy();
     expect(after.pendingReply).toBeNull();
     expect((db.prepare(`SELECT message FROM activity WHERE type = 'rfi_answered'`).all() as any[]).map(r => r.message)).toEqual(['RFI RFI-001 answered via email']);
@@ -2050,8 +2050,8 @@ describe('email send routes', () => {
 
   it('lien release send: default subject and file name, thread linked, release marked sent', async () => {
     const created = (await request(app).post('/api/projects/p1/lien-releases').send({
-      paymentType: 'progress', conditional: true, lienorName: 'Big Bear', customerName: 'Acme', ownerName: 'Jane',
-      propertyDescription: 'Lot 4', amountCents: 50000, throughDate: '2026-09-30', releaseDate: '2026-10-15', signerName: 'Nathan',
+      paymentType: 'progress', conditional: true, lienorName: 'Birchwood', customerName: 'Acme', ownerName: 'Jane',
+      propertyDescription: 'Lot 4', amountCents: 50000, throughDate: '2026-09-30', releaseDate: '2026-10-15', signerName: 'Noah',
     })).body;
     await request(app).post(`/api/files/lr?projectId=p1&kind=lien-release&sourceType=lien-release&sourceId=${created.id}&name=LR.pdf`)
       .set('Content-Type', 'application/pdf').send(Buffer.from('LRBYTES'));
@@ -2306,7 +2306,7 @@ describe('email send routes', () => {
   it('POST /api/rfis/:id/send sends via the mail account, links the thread, marks sent', async () => {
     const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Ceilings' })).body;
     const res = await request(emailApp).post(`/api/rfis/${rfi.id}/send`)
-      .send({ to: 'gc@teg.com', fileId: 'primary', subject: 'RFI-001', body: 'See attached' });
+      .send({ to: 'gc@tidewater.example', fileId: 'primary', subject: 'RFI-001', body: 'See attached' });
     expect(res.status).toBe(200);
     expect(res.body.threadKey).toBeTruthy();
     expect(res.body.accountId).toBe(acct.id);
@@ -2341,12 +2341,12 @@ describe('email send routes', () => {
   it('daily report send: sanitizes jobName and the crew name into the attachment filename', async () => {
     const crew = (await request(app).post('/api/projects/p1/daily-report-crews').send({ name: 'Smith / Sons' })).body;
     const dr = (await request(app).post('/api/projects/p1/daily-reports')
-      .send({ crewId: crew.id, reportDate: '2026-08-20', jobName: 'Dania Beach: "Unit 4"' })).body;
+      .send({ crewId: crew.id, reportDate: '2026-08-20', jobName: 'Dunmore Heights: "Unit 4"' })).body;
     const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
     expect(res.status).toBe(200);
     const m = provider.sent[0];
-    expect(m.subject).toBe('Daily Report — 2026-08-20 — Smith / Sons — Dania Beach: "Unit 4"');
-    expect(names(m.attachments)).toEqual(['DailyReport-Dania-Beach-Unit-4-Smith-Sons-2026-08-20.pdf']);
+    expect(m.subject).toBe('Daily Report — 2026-08-20 — Smith / Sons — Dunmore Heights: "Unit 4"');
+    expect(names(m.attachments)).toEqual(['DailyReport-Dunmore-Heights-Unit-4-Smith-Sons-2026-08-20.pdf']);
   });
 
   it('rfi send: marks rfi sent with sentAt set after send', async () => {

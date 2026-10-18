@@ -221,7 +221,7 @@ export function setRfiResponse(db: Database.Database, id: string, input: { fileI
 //
 // version bumps (so live listeners refresh) but updatedAt does NOT — an email
 // merely arriving must not flip the generated-PDF "up to date" freshness chip
-// the way an actual edit to the RFI would (Nathan's ruling). Only accepting
+// the way an actual edit to the RFI would (the owner's ruling). Only accepting
 // the reply into the recorded response (acceptPendingReply → setRfiResponse)
 // is a real content change and bumps updatedAt.
 export function setPendingReply(db: Database.Database, id: string, reply: RfiPendingReply): boolean {

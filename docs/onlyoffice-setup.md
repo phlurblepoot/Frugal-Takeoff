@@ -1,6 +1,6 @@
 # ONLYOFFICE Document Editor — Setup Guide
 
-Frugal Takeoff's document editing (PDFs, Word files, spreadsheets) runs in
+FrugalOmnibuild's document editing (PDFs, Word files, spreadsheets) runs in
 **ONLYOFFICE Docs Community Edition**, a free, self-hosted editor. It runs as a
 **second container** next to the app. Your documents stay in the app's data
 folder; ONLYOFFICE only holds a temporary working copy while a file is open.
@@ -19,18 +19,16 @@ When you're done, **Settings → Document Editor** in the app should show three
 green **Working** checks. If one fails, its message says what to fix, and §6
 covers the common cases.
 
-How it was built, and why: `docs/superpowers/specs/2026-09-25-onlyoffice-checklist.md`.
-
 ---
 
 ## 1. How the pieces talk to each other
 
 ```
  Browser ──HTTPS──▶ Cloudflare ──▶ Nginx Proxy Manager ──▶ onlyoffice-test container   (1)
-                                                     └──▶ Frugal Takeoff test container
+                                                     └──▶ FrugalOmnibuild test container
 
- Frugal Takeoff ──http, Docker network──▶ ONLYOFFICE                                    (2)
- ONLYOFFICE     ──http, Docker network──▶ Frugal Takeoff                                (3)
+ FrugalOmnibuild ──http, Docker network──▶ ONLYOFFICE                                    (2)
+ ONLYOFFICE     ──http, Docker network──▶ FrugalOmnibuild                              (3)
 ```
 
 1. **Browsers** load the editor from ONLYOFFICE's own public HTTPS address:
@@ -38,7 +36,7 @@ How it was built, and why: `docs/superpowers/specs/2026-09-25-onlyoffice-checkli
 2. **The app** talks to ONLYOFFICE directly over the Docker network:
    `ONLYOFFICE_INTERNAL_URL`, e.g. `http://onlyoffice-test`.
 3. **ONLYOFFICE** downloads files from the app and sends saves back over the
-   Docker network: `APP_INTERNAL_URL`, e.g. `http://frugal-takeoff-test:3000`.
+   Docker network: `APP_INTERNAL_URL`, e.g. `http://frugalomnibuild-test:3000`.
 
 All three must work. The Settings tab checks each one separately.
 
@@ -62,10 +60,12 @@ value.
   Keep the output somewhere safe; you'll paste it into both containers. Use a
   different secret for production.
 - **The app image.** ONLYOFFICE support is in the app from 4.0.0: the
-  `testing` image (`ghcr.io/phlurblepoot/frugal-takeoff:testing`) for the test
+  `testing` image (`ghcr.io/phlurblepoot/frugalomnibuild:testing`) for the test
   container, and production once 4.0.0 reaches `main`. (During the project the
   test container ran the `:onlyoffice` tag, which no longer updates; switch it
   back to `:testing`.)
+  Image tags: `:main` (stable), `:testing` (latest testing build), `:cuda-stable`
+  and `:cuda` (the GPU images that track `main` and `testing`).
 
 ---
 
@@ -122,17 +122,17 @@ Leave everything else at its default. In particular, don't set `JWT_ENABLED`
 
 Start it and give it a minute or two. First start takes a while.
 
-### 4.2 Frugal Takeoff test app (existing container)
+### 4.2 FrugalOmnibuild test app (existing container)
 
 Edit your existing test container:
 
 | Field | Value |
 |---|---|
-| Repository | `ghcr.io/phlurblepoot/frugal-takeoff:testing` (4.0.0 or later) |
+| Repository | `ghcr.io/phlurblepoot/frugalomnibuild:testing` (4.0.0 or later) |
 | Network Type | `Custom: frugal` (the same network as ONLYOFFICE) |
 | Variable `ONLYOFFICE_PUBLIC_URL` | `https://docs-test.<your-domain>` |
 | Variable `ONLYOFFICE_INTERNAL_URL` | `http://onlyoffice-test` |
-| Variable `APP_INTERNAL_URL` | `http://<this container's name>:3000`, e.g. `http://frugal-takeoff-test:3000` |
+| Variable `APP_INTERNAL_URL` | `http://<this container's name>:3000`, e.g. `http://frugalomnibuild-test:3000` |
 | Variable `ONLYOFFICE_JWT_SECRET` | the same secret as ONLYOFFICE's `JWT_SECRET` |
 
 The container names in the internal URLs must match what Unraid shows in the

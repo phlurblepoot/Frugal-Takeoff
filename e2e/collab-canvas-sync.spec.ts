@@ -11,7 +11,7 @@ import { openAuthedContext } from './fixtures/collab';
 // and collab-follow) prove that drawing now persists via server-applied
 // measurement ops (T2/T3), decoupled from the full-project PUT (T5), with
 // join-time backfill (T3) and live cross-session sync (measurement-applied)
-// — plus the Nathan-requested scope addition (scenario 4b): foreign, non-
+// — plus the owner-requested scope addition (scenario 4b): foreign, non-
 // measurement project changes (scale/takeoff) still live-refresh an open
 // canvas via the version-gated entity-changed path (T5 contract item 6).
 //
@@ -200,7 +200,7 @@ test.describe('WS4 two-context canvas sync', () => {
         .not.toHaveText(beforeValueText, { timeout: 15_000 });
       await a.page.screenshot({ path: 'test-results/ws4-drag-sync-A.png' });
 
-      // ── Scenario 4b (Nathan-requested addition): foreign scale/takeoff
+      // ── Scenario 4b (owner-requested addition): foreign scale/takeoff
       // live-refresh ──────────────────────────────────────────────────────
       // A non-measurement project change (a takeoff rename here — scale
       // recalibration travels the identical full-project-PUT path) must

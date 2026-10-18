@@ -34,7 +34,7 @@ const h = vi.hoisted(() => ({
   bannerProps: { last: null as any },
 }));
 
-const OK_ACCOUNT = { id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 };
+const OK_ACCOUNT = { id: 'a1', provider: 'fake', emailAddress: 'me@birchwood.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 };
 
 vi.mock('../../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: null, sessions: [], mySessionId: 'me' }),
@@ -194,7 +194,7 @@ beforeEach(() => {
   h.mailThread.mockRejectedValue(new Error('not found'));
   h.bannerProps.last = null;
   h.getAssignableUsers.mockResolvedValue([
-    { id: 'u1', username: 'nathan', role: 'admin' }, { id: 'u2', username: 'maria', role: 'user' },
+    { id: 'u1', username: 'noah', role: 'admin' }, { id: 'u2', username: 'maria', role: 'user' },
   ]);
 });
 
@@ -460,8 +460,8 @@ describe('RfiEditor — PDF attachments', () => {
 // against the RFI but stays pending until a human accepts it here.
 
 const PENDING = {
-  threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@teg.com',
-  from: { addr: 'gc@teg.com', name: 'Mike Ruiz' },
+  threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@tidewater.example',
+  from: { addr: 'gc@tidewater.example', name: 'Mike Ruiz' },
   date: '2026-08-28T10:00:00.000Z',
   text: 'Corridor is 9 ft per the RCP.',
   attachments: [], receivedAt: '2026-08-28T10:00:05.000Z',

@@ -9,7 +9,7 @@ import { registerRealtime, type RealtimeOptions, type RealtimeHandle } from './r
 export const TEST_SECRET = 'test-secret';
 
 export function makeToken(payload: Record<string, unknown> = {}): string {
-  return jwt.sign({ id: 'u1', username: 'nathan', role: 'admin', ...payload }, TEST_SECRET, { expiresIn: '1h' });
+  return jwt.sign({ id: 'u1', username: 'noah', role: 'admin', ...payload }, TEST_SECRET, { expiresIn: '1h' });
 }
 
 export function verifyTestToken(token: string) {

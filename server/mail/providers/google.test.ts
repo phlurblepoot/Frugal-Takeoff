@@ -73,11 +73,11 @@ describe('GmailProvider', () => {
       folderProviderIds: expect.arrayContaining(['INBOX', 'STARRED']),
     });
     expect(m.messageIdHeader).toBe('cab9xyz.4.qm@mail.gmail.com');
-    expect(m.inReplyTo).toBe('reply-2@teg.com');
-    expect(m.references).toEqual(['root-1@bigbearplaster.com', 'reply-2@teg.com']);
-    expect(m.from).toEqual({ addr: 'mike@teg.com', name: 'Mike Ross' });
+    expect(m.inReplyTo).toBe('reply-2@tidewater.example');
+    expect(m.references).toEqual(['root-1@birchwoodplaster.example', 'reply-2@tidewater.example']);
+    expect(m.from).toEqual({ addr: 'mike@tidewater.example', name: 'Mike Ross' });
     expect(m.to.map(a => a.addr)).toEqual(['me@x']);
-    expect(m.cc.map(a => a.addr)).toEqual(['ap@teg.com', 'pm@teg.com']);
+    expect(m.cc.map(a => a.addr)).toEqual(['ap@tidewater.example', 'pm@tidewater.example']);
     expect(m.date).toBe(new Date(Number(fx('gmail-message-full.json').internalDate)).toISOString());
     expect(m.snippet).toContain('COR-4');
     expect(m.attachments.map(a => a.name)).toContain('COR-4.pdf');
@@ -286,12 +286,12 @@ describe('GmailProvider', () => {
 
   it('a reply resolves its parent thread and sends with threadId; a new message does neither', async () => {
     const f = fakeFetch([
-      [/\/messages\?/, url => { expect(url).toMatch(/q=rfc822msgid%3Aroot-1%40bigbearplaster\.com/); return { messages: [{ id: 'p1', threadId: 't1' }] }; }],
+      [/\/messages\?/, url => { expect(url).toMatch(/q=rfc822msgid%3Aroot-1%40birchwoodplaster.example/); return { messages: [{ id: 'p1', threadId: 't1' }] }; }],
       [/\/messages\/send$/, () => ({ id: 's2', threadId: 't1' })],
       [/\/messages\/s2\?/, () => ({ id: 's2', payload: { headers: [] } })],
     ]);
     const p = provider(f);
-    await p.send({ ...outgoing(), inReplyTo: 'root-1@bigbearplaster.com', references: ['root-1@bigbearplaster.com'] });
+    await p.send({ ...outgoing(), inReplyTo: 'root-1@birchwoodplaster.example', references: ['root-1@birchwoodplaster.example'] });
     expect(f.calls[0].url).toMatch(/maxResults=1/);
     expect(JSON.parse(f.calls[1].init.body)).toEqual({ raw: expect.any(String), threadId: 't1' });
 

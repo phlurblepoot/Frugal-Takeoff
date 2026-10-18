@@ -8,3 +8,12 @@ data
 *.db-journal
 *.db-wal
 *.db-shm
+.knowledge
+.demo-data
+.e2e-data
+e2e/
+docs/screenshots/
+docs/superpowers
+playwright*.config.ts
+test-results/
+playwright-report/

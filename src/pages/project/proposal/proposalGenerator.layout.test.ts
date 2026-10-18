@@ -19,7 +19,7 @@ import type { ProposalRenderInput } from './proposalGenerator';
 import type { Proposal } from '../../../utils/store';
 import type { Project } from '../../../types';
 
-const project = { id: 'p', name: 'Dania Beach', createdAt: 0, pages: [], takeoffs: [], address: '1 Main St' } as unknown as Project;
+const project = { id: 'p', name: 'Dunmore Heights', createdAt: 0, pages: [], takeoffs: [], address: '1 Main St' } as unknown as Project;
 
 const line = (o: Partial<Proposal['lines'][number]>) => ({
   id: 'l', sortOrder: 0, kind: 'manual', takeoffId: null, description: 'x',
@@ -38,7 +38,7 @@ const base = (o: Partial<Proposal> = {}): Proposal => ({
 
 const input = (proposal: Proposal, extra: Partial<ProposalRenderInput> = {}): ProposalRenderInput => ({
   proposal, project, takeoffTotals: [], currentPageIds: new Set(),
-  letterhead: { brandRgb: [153, 203, 56], company: { name: 'Big Bear' } },
+  letterhead: { brandRgb: [153, 203, 56], company: { name: 'Birchwood' } },
   photos: [], attachments: [], includeHighlights: false, ...extra,
 });
 
@@ -87,13 +87,13 @@ const JPEG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQg
 
 describe('proposal layout', () => {
   it('names the file from project + date, never the number', () => {
-    expect(proposalFileName(project, new Date(2026, 7, 28, 12, 0, 0))).toBe('Proposal – Dania Beach – 2026-08-28');
+    expect(proposalFileName(project, new Date(2026, 7, 28, 12, 0, 0))).toBe('Proposal – Dunmore Heights – 2026-08-28');
   });
 
   it('a bare proposal is a single cover/pricing page', async () => {
     const { pdfBytes, suggestedName, sections } = await generateProposalPdf(input(base({ lines: [line({})] })));
     expect(await pages(pdfBytes)).toBe(1);
-    expect(suggestedName).toMatch(/^Proposal – Dania Beach – \d{4}-\d{2}-\d{2}$/);
+    expect(suggestedName).toMatch(/^Proposal – Dunmore Heights – \d{4}-\d{2}-\d{2}$/);
     expect(suggestedName).not.toContain('#7');
     expect(sections.grandTotal).toBe(1);
   });
@@ -360,7 +360,7 @@ describe('proposal layout', () => {
   // and it is also what a mis-measured section would produce — ensure() breaks
   // on the RESERVE a row asks for, which can exceed what the row then draws.
   it('never strands an inline divider at the foot of a page', async () => {
-    const DIVIDERS = /^(PRICING|PAYMENT SCHEDULE|INCLUSIONS & EXCLUSIONS|NOTES|ALTERNATES|COST DETAIL|TERMS & CONDITIONS|PHOTOS)$/;
+    const DIVIDERS = /^(PRICING|PAYMENT SCHEDULE|INCLUSIONS & EXCLUSIONS|NOTES|ALTERNICKS|COST DETAIL|TERMS & CONDITIONS|PHOTOS)$/;
     const stranded: string[] = [];
 
     for (const priceLines of [1, 2, 3, 4, 5, 6, 7, 8]) {

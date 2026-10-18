@@ -51,7 +51,7 @@ test('mail inbox: seeded threads, unread badge, blocked images, save an attachme
     threads: [
       {
         subject: detailSubject,
-        from: { addr: 'mike@teg.test', name: 'Mike Torres' },
+        from: { addr: 'mike@tidewater.test', name: 'Mike Torres' },
         messages: [{
           text: 'The corridor detail needs a dimension.',
           // The remote <img> is the point: server/mail/sanitize.ts must park it
@@ -63,7 +63,7 @@ test('mail inbox: seeded threads, unread badge, blocked images, save an attachme
       },
       {
         subject: scheduleSubject,
-        from: { addr: 'dana@teg.test', name: 'Dana Lee' },
+        from: { addr: 'dana@tidewater.test', name: 'Dana Lee' },
         messages: [{ text: 'Next week’s schedule is up on the portal.' }],
       },
     ],
@@ -131,7 +131,7 @@ test('mail inbox: seeded threads, unread badge, blocked images, save an attachme
   await thread.getByRole('button', { name: 'Reply', exact: true }).click();
   const inlineComposer = authedPage.getByTestId('mail-composer-inline');
   await expect(inlineComposer).toBeVisible();
-  await expect(inlineComposer.getByTestId('recipient-pill')).toContainText('mike@teg.test');
+  await expect(inlineComposer.getByTestId('recipient-pill')).toContainText('mike@tidewater.test');
   await inlineComposer.locator('.ft-mail-body').click();
   await authedPage.keyboard.type('The corridor is 9 ft to the underside.');
   await inlineComposer.getByTestId('mail-composer-send').click();
@@ -169,7 +169,7 @@ test('mail compose: recipient autocomplete off a customer, sent message lands in
   const auth = { Authorization: `Bearer ${token}` };
   const short = randomUUID().slice(0, 8);
 
-  const gcEmail = `gc-${short}@teg.test`;
+  const gcEmail = `gc-${short}@tidewater.test`;
   const customerRes = await request.post('/api/customers', {
     headers: auth,
     data: { name: `E2E Mail Customer ${short}`, emails: { general: { to: gcEmail } } },
@@ -233,7 +233,7 @@ test('mail on a phone: the list and the thread take turns, Back returns to the l
     emailAddress: `phone-${short}@e2e.test`,
     threads: [{
       subject,
-      from: { addr: 'dana@teg.test', name: 'Dana Lee' },
+      from: { addr: 'dana@tidewater.test', name: 'Dana Lee' },
       messages: [{ text: 'Reading this on a phone.' }],
     }],
   });

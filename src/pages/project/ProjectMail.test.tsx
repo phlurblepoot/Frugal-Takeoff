@@ -45,8 +45,8 @@ import { ProjectMail } from './ProjectMail';
 
 const row = (over: Partial<ProjectThreadRow> = {}): ProjectThreadRow => ({
   threadKey: 'tk-1',
-  subjectSnapshot: 'Re: Invoice 12 — Dania Beach',
-  participants: [{ addr: 'gc@teg.com', name: 'Mike GC' }, { addr: 'nathan@bigbearplaster.com', name: 'Nathan' }],
+  subjectSnapshot: 'Re: Invoice 12 — Dunmore Heights',
+  participants: [{ addr: 'gc@tidewater.example', name: 'Mike GC' }, { addr: 'noah@birchwoodplaster.example', name: 'Noah' }],
   firstDate: '2026-08-27T12:00:00.000Z',
   links: [{ itemType: 'invoice', itemId: 'inv-1', label: 'INV-012' }],
   lastInboundDate: null,
@@ -70,7 +70,7 @@ const renderPage = () =>
 
 beforeEach(() => {
   h.projectThreads.mockReset().mockResolvedValue([]);
-  h.accounts.mockReset().mockResolvedValue([{ id: 'a1', emailAddress: 'nathan@bigbearplaster.com' }]);
+  h.accounts.mockReset().mockResolvedValue([{ id: 'a1', emailAddress: 'noah@birchwoodplaster.example' }]);
   h.openThreadLink.mockReset();
   h.fakeSocket.on.mockClear();
   h.fakeSocket.off.mockClear();
@@ -86,7 +86,7 @@ describe('ProjectMail', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByTestId('project-mail-row')).toBeInTheDocument());
-    expect(screen.getByText('Re: Invoice 12 — Dania Beach')).toBeInTheDocument();
+    expect(screen.getByText('Re: Invoice 12 — Dunmore Heights')).toBeInTheDocument();
     expect(screen.getByText('INV-012')).toBeInTheDocument();
     // "me" replaces the viewer's own address in the compact participants label.
     expect(screen.getByText(/Mike, me/)).toBeInTheDocument();
@@ -167,7 +167,7 @@ describe('ProjectMail', () => {
     await waitFor(() => expect(h.openThreadLink).toHaveBeenCalledTimes(1));
     const [pseudoLink, navigateFn] = h.openThreadLink.mock.calls[0];
     expect(pseudoLink.threadKey).toBe('tk-1');
-    expect(pseudoLink.subjectSnapshot).toBe('Re: Invoice 12 — Dania Beach');
+    expect(pseudoLink.subjectSnapshot).toBe('Re: Invoice 12 — Dunmore Heights');
     expect(pseudoLink.firstDate).toBe('2026-08-27T12:00:00.000Z');
     expect(JSON.parse(pseudoLink.participantsJson)).toEqual(r.participants);
     expect(typeof navigateFn).toBe('function');

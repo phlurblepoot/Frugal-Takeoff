@@ -20,7 +20,7 @@ describe('LinkTokens', () => {
   });
 
   it('never crosses over with login tokens signed by the app secret', () => {
-    const login = jwt.sign({ id: 'u1', username: 'nathan', role: 'admin', sub: 'file:abc', aud: 'onlyoffice' }, 'app-secret');
+    const login = jwt.sign({ id: 'u1', username: 'noah', role: 'admin', sub: 'file:abc', aud: 'onlyoffice' }, 'app-secret');
     expect(tokens.verify(login, 'file:abc')).toBe(false);
     expect(() => jwt.verify(tokens.sign('file:abc', 60), 'app-secret')).toThrow();
   });

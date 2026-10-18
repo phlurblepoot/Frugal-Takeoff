@@ -23,9 +23,9 @@ let db: Database.Database;
 
 const valid = (over: LienReleaseInput = {}): LienReleaseInput => ({
   paymentType: 'progress', conditional: false,
-  lienorName: 'Big Bear Plaster', customerName: 'Acme Builders', ownerName: 'Jane Owner',
+  lienorName: 'Birchwood Plaster', customerName: 'Acme Builders', ownerName: 'Jane Owner',
   propertyDescription: 'Lot 4, 12 Palm Way\nTampa, FL', amountCents: 1234567,
-  throughDate: '2026-09-30', releaseDate: '2026-10-15', signerName: 'Nathan', signerTitle: 'Owner',
+  throughDate: '2026-09-30', releaseDate: '2026-10-15', signerName: 'Noah', signerTitle: 'Owner',
   ...over,
 });
 
@@ -37,7 +37,7 @@ beforeEach(() => {
   db.prepare('INSERT INTO projects (id, name, address, contractor, meta, createdAt) VALUES (?, ?, ?, ?, ?, ?)')
     .run('p1', 'Palm Way Stucco', '12 Palm Way, Tampa', 'Acme Builders', JSON.stringify({ aiaSettings: { ownerName: 'Jane Owner' } }), 1);
   db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p2', 'Other', 1);
-  db.prepare("INSERT INTO settings (key, value) VALUES ('companyName', 'Big Bear Plaster LLC')").run();
+  db.prepare("INSERT INTO settings (key, value) VALUES ('companyName', 'Birchwood Plaster LLC')").run();
 });
 
 describe('create / numbering', () => {
@@ -174,24 +174,24 @@ function seedPayApp(): string {
 }
 
 describe('prefill (spec §5.3)', () => {
-  const user = { id: 'u1', username: 'Nathan' };
+  const user = { id: 'u1', username: 'Noah' };
 
   it('fills the names from settings, the project and the AIA settings', () => {
     const p = prefillLienRelease(db, 'p1', { paymentType: 'final', conditional: true }, user);
     expect(p).toMatchObject({
-      lienorName: 'Big Bear Plaster LLC', customerName: 'Acme Builders', ownerName: 'Palm Way Stucco',
-      propertyDescription: 'Palm Way Stucco\n12 Palm Way, Tampa', signerName: 'Nathan',
+      lienorName: 'Birchwood Plaster LLC', customerName: 'Acme Builders', ownerName: 'Palm Way Stucco',
+      propertyDescription: 'Palm Way Stucco\n12 Palm Way, Tampa', signerName: 'Noah',
       throughDate: null, conditionKind: 'funds', checkMaker: 'Acme Builders', source: null,
     });
     expect(p.releaseDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it('prefills the lienor from the legal name, entity type and state in settings', () => {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('companyLegalName', 'Big Bear Plaster, LLC')").run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('companyLegalName', 'Birchwood Plaster, LLC')").run();
     db.prepare("INSERT INTO settings (key, value) VALUES ('companyEntityType', 'llc')").run();
     db.prepare("INSERT INTO settings (key, value) VALUES ('companyStateOfFormation', 'Florida')").run();
     expect(prefillLienRelease(db, 'p1', {}, user)).toMatchObject({
-      lienorName: 'Big Bear Plaster, LLC', lienorEntityType: 'llc', lienorState: 'Florida',
+      lienorName: 'Birchwood Plaster, LLC', lienorEntityType: 'llc', lienorState: 'Florida',
     });
     db.prepare("UPDATE settings SET value = 'bogus' WHERE key = 'companyEntityType'").run();
     expect(prefillLienRelease(db, 'p1', {}, user).lienorEntityType).toBeNull();
@@ -207,11 +207,11 @@ describe('prefill (spec §5.3)', () => {
 
   it('falls back to the app name, and to the customer record, when the settings are missing', () => {
     db.prepare("DELETE FROM settings WHERE key = 'companyName'").run();
-    db.prepare("INSERT INTO settings (key, value) VALUES ('appName', 'Frugal Takeoff')").run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('appName', 'FrugalOmnibuild')").run();
     db.prepare("UPDATE projects SET contractor = NULL, customerId = 'c1' WHERE id = 'p1'").run();
     db.prepare("INSERT INTO customers (id, name, createdAt, updatedAt) VALUES ('c1', 'Customer Co', 1, 1)").run();
     const p = prefillLienRelease(db, 'p1', {}, user);
-    expect(p).toMatchObject({ lienorName: 'Frugal Takeoff', customerName: 'Customer Co' });
+    expect(p).toMatchObject({ lienorName: 'FrugalOmnibuild', customerName: 'Customer Co' });
   });
 
   it('uses the project name as the owner, ahead of the AIA owner', () => {

@@ -60,7 +60,7 @@ export const BackupSetupGuide: React.FC<{
           </ol>
           <Code>{`    volumes:
       - ./data:/app/data
-      - /mnt/backups/frugal-takeoff:/backups
+      - /mnt/backups/frugalomnibuild:/backups
     environment:
       - BACKUP_PATH=/backups`}</Code>
           <ol className="list-decimal space-y-1 pl-5" start={3}>
@@ -132,7 +132,7 @@ export const BackupSetupGuide: React.FC<{
           <ol className="list-decimal space-y-1 pl-5" start={5}>
             <Step>
               Back on this page: <strong>Connect Google Drive</strong> → pick the account → allow access → <strong>Back up to Drive now</strong>.
-              A <strong>Frugal Takeoff Backups</strong> folder appears in that account&rsquo;s Drive. Then turn on the Drive schedule below.
+              A <strong>FrugalOmnibuild Backups</strong> folder (or <strong>Frugal Takeoff Backups</strong> on older installs) appears in that account&rsquo;s Drive. Then turn on the Drive schedule below.
             </Step>
           </ol>
           <p className="flex items-start gap-2 rounded-lg border border-edge bg-sunken px-3 py-2 text-xs text-ink-soft">

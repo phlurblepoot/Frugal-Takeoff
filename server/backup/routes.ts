@@ -198,7 +198,7 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
   app.get('/api/backup/snapshots/:id/download', authOrQueryToken, requireAdmin, async (req, res) => {
     if (!isSnapshotId(req.params.id)) return res.status(400).json({ error: 'bad snapshot id' });
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="frugal-takeoff-backup-${req.params.id}.zip"`);
+    res.setHeader('Content-Disposition', `attachment; filename="frugalomnibuild-backup-${req.params.id}.zip"`);
     try { await streamSnapshotZip(local, req.params.id, res); }
     catch (e) { console.error('[backup] download failed', e); if (!res.headersSent) res.status(404).json({ error: 'Snapshot not found' }); else res.destroy(); }
   });

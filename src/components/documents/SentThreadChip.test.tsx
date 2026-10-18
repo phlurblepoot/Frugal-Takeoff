@@ -22,7 +22,7 @@ vi.mock('../../pages/mail/ThreadReferenceCard', () => ({
 import { SentThreadChip } from './SentThreadChip';
 
 const link = (over: Partial<ThreadLink> = {}): ThreadLink => ({
-  id: 'l1', threadKey: 'tk 1', subjectSnapshot: 'Invoice 12 — Dania Beach',
+  id: 'l1', threadKey: 'tk 1', subjectSnapshot: 'Invoice 12 — Dunmore Heights',
   firstDate: '2026-08-27T12:00:00.000Z', participantsJson: null, itemType: 'invoice', itemId: 'inv-1',
   projectId: 'p1', customerId: null, linkedByUserId: 'u1', createdAt: '2026-08-27T12:00:00.000Z',
   ...over,
@@ -50,7 +50,7 @@ describe('SentThreadChip', () => {
     // `_` is MailPage's "any folder" segment; the key is URL-encoded because a
     // threadKey is opaque server text, not a path-safe id.
     expect(chip).toHaveAttribute('href', '/mail/a1/_/tk%201');
-    expect(chip).toHaveAttribute('title', 'Invoice 12 — Dania Beach');
+    expect(chip).toHaveAttribute('title', 'Invoice 12 — Dunmore Heights');
     // A known match is a real link — no need to ask the server again.
     expect(h.openThreadLink).not.toHaveBeenCalled();
   });

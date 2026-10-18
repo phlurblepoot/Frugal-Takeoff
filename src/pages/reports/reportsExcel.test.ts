@@ -12,7 +12,7 @@ import type { OpenInvoicesReport, PaymentsReport, ChangeOrdersReport, RetainageR
 vi.mock('../../utils/download', () => ({ downloadBlob: vi.fn() }));
 beforeEach(() => { vi.mocked(downloadBlob).mockReset(); });
 
-const proj = { projectId: 'p1', projectName: 'Dania Beach', customerId: 'c1', customerName: 'Acme', archived: false };
+const proj = { projectId: 'p1', projectName: 'Dunmore Heights', customerId: 'c1', customerName: 'Acme', archived: false };
 
 const openInvoices: OpenInvoicesReport = {
   rows: [
@@ -28,8 +28,8 @@ describe('sheet builders', () => {
     const s = openInvoicesSheet(openInvoices, ['Customer: All customers']);
     expect(s.columns.map(c => c.header)).toEqual(['Customer', 'Project', 'Document', 'Date', 'Days outstanding', 'Aging', 'Total', 'Paid', 'Balance']);
     expect(s.rows).toEqual([
-      ['Acme', 'Dania Beach', 'Invoice 1001', '2026-08-01', 66, '61+ days', 50000, 10000, 40000],
-      ['', 'Dania Beach', 'Pay App #2', null, null, 'No date', 25050, 0, 25050],
+      ['Acme', 'Dunmore Heights', 'Invoice 1001', '2026-08-01', 66, '61+ days', 50000, 10000, 40000],
+      ['', 'Dunmore Heights', 'Pay App #2', null, null, 'No date', 25050, 0, 25050],
     ]);
     expect(s.summary).toEqual([
       ['Total (2)', null, null, null, null, null, 75050, 10000, 65050],
@@ -48,7 +48,7 @@ describe('sheet builders', () => {
     };
     const s = paymentsSheet(report, []);
     expect(s.columns.map(c => c.header)).toEqual(['Date', 'Customer', 'Project', 'Applied to', 'Method', 'Note', 'Amount']);
-    expect(s.rows).toEqual([['2026-10-01', 'Acme', 'Dania Beach', 'Invoice 1001', 'ACH', '', 12345]]);
+    expect(s.rows).toEqual([['2026-10-01', 'Acme', 'Dunmore Heights', 'Invoice 1001', 'ACH', '', 12345]]);
     expect(s.summary).toEqual([['Total (1)', null, null, null, null, null, 12345]]);
   });
 
@@ -82,7 +82,7 @@ describe('sheet builders', () => {
       totals: { contractSumCents: 1000000, completedStoredCents: 600000, retainageHeldCents: 36000, retainageReleasedCents: 24000 },
     };
     const s = retainageSheet(report, []);
-    expect(s.rows).toEqual([['Acme', 'Dania Beach', 'Pay App #2', '2026-09-30', 1000000, 600000, 0.6, '10% − 4 pts released', 36000, 24000]]);
+    expect(s.rows).toEqual([['Acme', 'Dunmore Heights', 'Pay App #2', '2026-09-30', 1000000, 600000, 0.6, '10% − 4 pts released', 36000, 24000]]);
     expect(s.summary).toEqual([['Total (1)', null, null, null, 1000000, 600000, 0.6, null, 36000, 24000]]);
   });
 });

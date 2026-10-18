@@ -16,7 +16,7 @@ const project = (id: string, name: string, over: Record<string, unknown> = {}) =
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.getProjectsSummary.mockResolvedValue([project('p1', 'Dania Beach'), project('p2', 'Old job', { archived: true })]);
+  h.getProjectsSummary.mockResolvedValue([project('p1', 'Dunmore Heights'), project('p2', 'Old job', { archived: true })]);
   h.getDocumentTypes.mockResolvedValue([{ id: 'sub', label: 'Subcontract' }]);
   h.saveBinaryFile.mockResolvedValue({ fileId: 'stored-id', versioned: false });
 });
@@ -33,7 +33,7 @@ describe('OpenFromComputerModal', () => {
     expect(screen.getByTestId('open-computer-filename')).toHaveTextContent('Scope.docx');
     expect(upload).toBeDisabled(); // no project yet
 
-    await screen.findByRole('option', { name: 'Dania Beach' });
+    await screen.findByRole('option', { name: 'Dunmore Heights' });
     expect(screen.queryByRole('option', { name: 'Old job' })).toBeNull(); // archived projects aren't offered
     fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'p1' } });
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'custom:sub' } });
@@ -54,7 +54,7 @@ describe('OpenFromComputerModal', () => {
     render(<OpenFromComputerModal open onClose={() => {}} onUploaded={onUploaded} />);
     choose(new File(['x'], 'Spec.pages', { type: '' }));
     expect(screen.queryByRole('alert')).toBeNull();
-    await screen.findByRole('option', { name: 'Dania Beach' });
+    await screen.findByRole('option', { name: 'Dunmore Heights' });
     fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'p1' } });
     fireEvent.click(screen.getByTestId('open-computer-upload'));
     await waitFor(() => expect(onUploaded).toHaveBeenCalledWith('stored-id'));
@@ -80,7 +80,7 @@ describe('OpenFromComputerModal', () => {
     h.saveBinaryFile.mockRejectedValue(new Error('File too large'));
     render(<OpenFromComputerModal open onClose={() => {}} onUploaded={() => {}} />);
     choose(new File(['x'], 'Bid.pdf', { type: 'application/pdf' }));
-    await screen.findByRole('option', { name: 'Dania Beach' });
+    await screen.findByRole('option', { name: 'Dunmore Heights' });
     fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'p1' } });
     fireEvent.click(screen.getByTestId('open-computer-upload'));
     expect(await screen.findByRole('alert')).toHaveTextContent('File too large');

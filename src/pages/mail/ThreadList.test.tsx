@@ -38,7 +38,7 @@ const props = (over: Partial<Props> = {}): Props => ({
   q: '',
   onQueryChange: vi.fn(),
   selectedKey: null,
-  ownAddresses: ['nathan@bigbearplaster.com'],
+  ownAddresses: ['noah@birchwoodplaster.example'],
   onOpen: vi.fn(),
   onToggleStar: vi.fn(),
   onReload: vi.fn(),

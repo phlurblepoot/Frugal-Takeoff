@@ -20,7 +20,7 @@ const buildApp = (role: 'admin' | 'user') => {
   a.use(express.json({ limit: '50mb' }));
   registerDataRoutes(a, {
     db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
-    authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role, username: 'nate' }; next(); },
+    authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role, username: 'nick' }; next(); },
     requireAdmin: (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' })),
     verifyToken: () => null,
     broadcastChange: (ev) => events.push(ev),

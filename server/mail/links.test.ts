@@ -11,8 +11,8 @@ import { resolveChain, createLink, listLinksForItem, listLinksForThread, deleteL
 let db: Database.Database; let projectId: string; let customerId: string; let rfiId: string;
 beforeEach(() => {
   db = openDb(':memory:'); runMigrations(db, fs.mkdtempSync(path.join(os.tmpdir(), 'ft-ln-')), migrations);
-  customerId = 'c1'; saveCustomer(db, { id: 'c1', name: 'TEG' } as any);   // saveCustomer(db, c: Customer) — server/customerStore.ts:55; fill required fields if it throws
-  projectId = 'p1'; createProject(db, { id: projectId, name: 'Dania', createdAt: 1, customerId, pages: [], takeoffs: [] } as any);
+  customerId = 'c1'; saveCustomer(db, { id: 'c1', name: 'Tidewater' } as any);   // saveCustomer(db, c: Customer) — server/customerStore.ts:55; fill required fields if it throws
+  projectId = 'p1'; createProject(db, { id: projectId, name: 'Dunmore', createdAt: 1, customerId, pages: [], takeoffs: [] } as any);
   rfiId = createRfi(db, projectId, { title: 'Ceilings' }).id;
 });
 describe('links', () => {
@@ -58,9 +58,9 @@ describe('resolveLinkLabel', () => {
     db.prepare(`INSERT INTO daily_reports (id, projectId, crewId, reportDate, createdAt, updatedAt) VALUES ('dr1', ?, 'crew1', '2026-09-01', 1, 1)`).run(projectId);
     expect(resolveLinkLabel(db, 'dailyReport', 'dr1')).toBe('Daily Report — Sep 1, 2026 — Smith Drywall');
 
-    expect(resolveLinkLabel(db, 'punch', projectId)).toBe('Dania');
-    expect(resolveLinkLabel(db, 'project', projectId)).toBe('Dania');
-    expect(resolveLinkLabel(db, 'customer', customerId)).toBe('TEG');
+    expect(resolveLinkLabel(db, 'punch', projectId)).toBe('Dunmore');
+    expect(resolveLinkLabel(db, 'project', projectId)).toBe('Dunmore');
+    expect(resolveLinkLabel(db, 'customer', customerId)).toBe('Tidewater');
 
     db.prepare(`INSERT INTO tasks (id, title, createdAt) VALUES ('t1', 'Order shingles', 1)`).run();
     expect(resolveLinkLabel(db, 'task', 't1')).toBe('Order shingles');

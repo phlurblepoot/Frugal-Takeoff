@@ -57,7 +57,7 @@ describe('geocodeAddress', () => {
       json: async () => [{ lat: '26.0521', lon: '-80.1425' }],
     });
     vi.stubGlobal('fetch', fetchMock);
-    const result = await geocodeAddress('123 Main St, Dania Beach, FL');
+    const result = await geocodeAddress('123 Main St, Dunmore Heights, FL');
     expect(result).toEqual({ lat: 26.0521, lon: -80.1425 });
   });
 

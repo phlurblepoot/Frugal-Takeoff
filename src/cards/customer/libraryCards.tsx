@@ -140,7 +140,7 @@ const OpenItemsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx }
 
 // ── cu-open-tasks ────────────────────────────────────────────────────────
 // Restores the task-count tile the old (pre-card-system) Overview tab had —
-// a product note carried over from Wave 2 (Nathan noticed the count was
+// a product note carried over from Wave 2 (the owner noticed the count was
 // gone). Reads overview.taskCounts, which the server already computes
 // (customerStore.ts) — no new endpoint needed.
 const OpenTasksTile: React.FC<{ label: string; value: number; alert?: boolean }> = ({ label, value, alert }) => (

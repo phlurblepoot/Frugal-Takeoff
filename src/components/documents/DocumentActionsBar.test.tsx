@@ -384,7 +384,7 @@ describe('DocumentActionsBar — staleness unknown', () => {
 // the mail composer speaks, so nobody had to teach seven editors about Addr[].
 describe('DocumentActionsBar — composer wiring', () => {
   it('converts the editor prefill into the composer\u2019s structured initial', () => {
-    h.accounts = [{ id: 'a1', emailAddress: 'me@bigbear.test' }];
+    h.accounts = [{ id: 'a1', emailAddress: 'me@birchwood.test' }];
     renderBar({
       send: sendProp({
         composer: {
@@ -485,7 +485,7 @@ describe('DocumentActionsBar — composer wiring', () => {
     expect(screen.queryByTestId('doc-sent-thread')).toBeNull();
     unmount();
 
-    h.accounts = [{ id: 'a1', emailAddress: 'me@bigbear.test' }];
+    h.accounts = [{ id: 'a1', emailAddress: 'me@birchwood.test' }];
     h.threads.links = [LINK];
     h.threads.newest = LINK;
     h.threads.myThread = { accountId: 'a1', threadKey: 'tk-1', subject: 'Invoice 12' };
@@ -496,7 +496,7 @@ describe('DocumentActionsBar — composer wiring', () => {
   // The chip is about the record, not about the Send button: a read-only or
   // unsendable editor still has to show that the thing went out.
   it('shows the chip even when the bar has no send configured', () => {
-    h.accounts = [{ id: 'a1', emailAddress: 'me@bigbear.test' }];
+    h.accounts = [{ id: 'a1', emailAddress: 'me@birchwood.test' }];
     h.threads.links = [LINK];
     h.threads.newest = LINK;
     h.threads.myThread = null;

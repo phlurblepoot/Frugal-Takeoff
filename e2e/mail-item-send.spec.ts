@@ -67,7 +67,7 @@ test('RFI Email: prefilled composer, send stamps Sent + links a thread, second s
   const { token } = apiToken;
   const auth = { Authorization: `Bearer ${token}` };
   const short = randomUUID().slice(0, 8);
-  const gcEmail = `gc-${short}@teg.test`;
+  const gcEmail = `gc-${short}@tidewater.test`;
 
   const { projectId } = await seedProjectWithContact(request, token, gcEmail);
   const rfiTitle = `Corridor ceiling height ${short}`;
@@ -161,7 +161,7 @@ test('RFI Email is blocked once the last mail account is removed', async ({ auth
   const { token } = apiToken;
   const short = randomUUID().slice(0, 8);
 
-  const { projectId } = await seedProjectWithContact(request, token, `gc-${short}@teg.test`);
+  const { projectId } = await seedProjectWithContact(request, token, `gc-${short}@tidewater.test`);
   const rfiTitle = `Slab edge detail ${short}`;
   const rfi = await seedRfi(request, token, projectId, rfiTitle);
 

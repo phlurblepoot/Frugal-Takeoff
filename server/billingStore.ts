@@ -35,7 +35,7 @@ interface LineInput { description?: string; qty?: number; unitPrice?: number; }
 interface InvoiceInput {
   number?: string; date?: number | null; terms?: string; status?: string; lines?: LineInput[];
   /** Internal-only — never printed on the invoice PDF or included in invoice
-   *  emails (Nathan's ruling). See saveInvoice's freshness handling below. */
+   *  emails (the owner's ruling). See saveInvoice's freshness handling below. */
   notes?: string | null;
 }
 
@@ -150,7 +150,7 @@ export function listInvoices(db: Database.Database, projectId: string): any[] {
 
 // Universal invoice numbering: unlike RFI/proposal numbers (per-project
 // counters on the `projects` row), invoice numbers are assigned from ONE
-// counter app-wide — Nathan wants a new invoice to pick up the next number
+// counter app-wide — the owner wants a new invoice to pick up the next number
 // after the highest one used anywhere, not just on this project. The counter
 // lives in the generic `settings` key/value table (base-schema, migration 1)
 // under key 'invoiceNumber' — no new table/migration needed for it.
@@ -224,7 +224,7 @@ export function saveInvoice(db: Database.Database, id: string, input: InvoiceInp
     const status = autoInvoiceStatus(input.status ?? 'draft', sumCents(lines), paidCentsFor(db, 'invoice', id));
 
     // notes is internal-only — never printed on the invoice PDF or included in
-    // invoice emails (Nathan's ruling) — so a save that only touches notes must
+    // invoice emails (the owner's ruling) — so a save that only touches notes must
     // not flip the generated-PDF "up to date" freshness chip the way an edit to
     // number/date/status/terms/lines would (same reasoning as the RFI
     // pendingReply exemption, commit 5907997). Everything else in this UPDATE

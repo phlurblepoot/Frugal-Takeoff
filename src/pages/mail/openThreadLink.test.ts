@@ -8,7 +8,7 @@ import { openThreadLink, resolveThreadMatch, parseLinkParticipants } from './ope
 import type { ThreadLink } from './types';
 
 const link = (over: Partial<ThreadLink> = {}): ThreadLink => ({
-  id: 'l1', threadKey: 'tk 1', subjectSnapshot: 'Invoice 12 — Dania Beach',
+  id: 'l1', threadKey: 'tk 1', subjectSnapshot: 'Invoice 12 — Dunmore Heights',
   firstDate: '2026-08-27T12:00:00.000Z', participantsJson: null, itemType: 'invoice', itemId: 'inv-1',
   projectId: 'p1', customerId: null, linkedByUserId: 'u1', createdAt: '2026-08-27T12:00:00.000Z',
   ...over,
@@ -18,8 +18,8 @@ beforeEach(() => { h.resolveThread.mockReset(); });
 
 describe('parseLinkParticipants', () => {
   it('parses a JSON array snapshot', () => {
-    expect(parseLinkParticipants(JSON.stringify([{ addr: 'gc@teg.com', name: 'GC' }])))
-      .toEqual([{ addr: 'gc@teg.com', name: 'GC' }]);
+    expect(parseLinkParticipants(JSON.stringify([{ addr: 'gc@tidewater.example', name: 'GC' }])))
+      .toEqual([{ addr: 'gc@tidewater.example', name: 'GC' }]);
   });
 
   it('defaults to empty for null, malformed, or non-array JSON', () => {
@@ -33,12 +33,12 @@ describe('parseLinkParticipants', () => {
 describe('resolveThreadMatch', () => {
   it('sends the link snapshot as the resolve-thread query, joining participants', async () => {
     h.resolveThread.mockResolvedValue({ match: { accountId: 'a1', threadKey: 'tk 1' } });
-    const l = link({ participantsJson: JSON.stringify([{ addr: 'gc@teg.com' }, { addr: ' me@bb.com ' }]) });
+    const l = link({ participantsJson: JSON.stringify([{ addr: 'gc@tidewater.example' }, { addr: ' me@birchwood.example ' }]) });
     const match = await resolveThreadMatch(l);
     expect(match).toEqual({ accountId: 'a1', threadKey: 'tk 1' });
     expect(h.resolveThread).toHaveBeenCalledWith({
-      threadKey: 'tk 1', subject: 'Invoice 12 — Dania Beach',
-      firstDate: '2026-08-27T12:00:00.000Z', participants: 'gc@teg.com,me@bb.com',
+      threadKey: 'tk 1', subject: 'Invoice 12 — Dunmore Heights',
+      firstDate: '2026-08-27T12:00:00.000Z', participants: 'gc@tidewater.example,me@birchwood.example',
     });
   });
 

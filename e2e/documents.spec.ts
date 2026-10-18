@@ -88,7 +88,7 @@ test('documents page: project + kind multi-select filters, search narrows, real 
   await expect(tableRows(authedPage).filter({ hasText: 'site-photo-' }).locator('a'))
     .toHaveAttribute('href', `/project/${seeded.inProgressProjectId}/issues`);
 
-  // Screenshot for Nathan of a populated, filtered page (spec item f).
+  // Screenshot for the owner of a populated, filtered page (spec item f).
   await authedPage.screenshot({ path: 'test-results/documents-page.png', fullPage: true });
 
   // ── Kind multi-select on top of the still-active project filter: narrow to

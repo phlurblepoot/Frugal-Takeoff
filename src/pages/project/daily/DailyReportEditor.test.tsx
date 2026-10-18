@@ -49,7 +49,7 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   getDocumentBySource: h.getDocumentBySource,
   getDocumentsBySource: vi.fn(async () => ({})),
   getSettings: vi.fn(async () => ({})),
-  getMailAccounts: vi.fn(async () => [{ id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 }]),
+  getMailAccounts: vi.fn(async () => [{ id: 'a1', provider: 'fake', emailAddress: 'me@birchwood.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 }]),
   getAlwaysCc: vi.fn(async () => ''),
   getProject: vi.fn(async () => null),
   getCustomer: vi.fn(async () => undefined),

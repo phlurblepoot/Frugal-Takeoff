@@ -23,7 +23,7 @@ const buildApp = (role: 'admin' | 'user') => {
   a.use(express.json());
   registerDataRoutes(a, {
     db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
-    authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role, username: 'nate' }; next(); },
+    authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role, username: 'nick' }; next(); },
     requireAdmin: (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' })),
     verifyToken: () => null,
     broadcastChange: () => {},
@@ -37,7 +37,7 @@ beforeEach(() => {
   db = openDb(':memory:');
   runMigrations(db, dir, migrations);
   db.prepare(`INSERT INTO customers (id, name, createdAt, updatedAt) VALUES ('c1', 'Acme', 1, 1)`).run();
-  db.prepare(`INSERT INTO projects (id, name, customerId, meta, createdAt) VALUES ('p1', 'Dania', 'c1', '{}', 1), ('p2', 'Archived', NULL, '{"archived":true}', 1)`).run();
+  db.prepare(`INSERT INTO projects (id, name, customerId, meta, createdAt) VALUES ('p1', 'Dunmore', 'c1', '{}', 1), ('p2', 'Archived', NULL, '{"archived":true}', 1)`).run();
   app = buildApp('admin');
 });
 
@@ -56,7 +56,7 @@ describe('report routes', () => {
     createInvoice(db, 'p2', { number: '1002', status: 'sent', date: now, lines: [{ description: 'x', qty: 1, unitPrice: 80 }] });
     const all = (await request(app).get('/api/reports/open-invoices')).body;
     expect(all.rows.map((r: any) => r.document)).toEqual(['Invoice 1001', 'Invoice 1002']);
-    expect(all.rows[0]).toMatchObject({ projectName: 'Dania', customerName: 'Acme', daysOutstanding: 40, bucket: 'days31to60', balanceCents: 12000 });
+    expect(all.rows[0]).toMatchObject({ projectName: 'Dunmore', customerName: 'Acme', daysOutstanding: 40, bucket: 'days31to60', balanceCents: 12000 });
     expect(all.totals.balanceCents).toBe(20000);
     expect(all.buckets).toEqual({ current: 8000, days31to60: 12000, days61plus: 0, undated: 0 });
     const active = (await request(app).get('/api/reports/open-invoices?includeArchived=0')).body;
@@ -93,7 +93,7 @@ describe('report routes', () => {
     savePayAppLines(db, pa.id, [{ sovLineId: sov, percentComplete: 50, storedMaterialsCents: 0 }], 1);
     setPayApp(db, pa.id, { status: 'finalized' });
     const res = await request(app).get('/api/reports/retainage?customerId=c1');
-    expect(res.body.rows).toEqual([expect.objectContaining({ projectName: 'Dania', payAppNumber: 1, completedStoredCents: 500000, retainageHeldCents: 50000 })]);
+    expect(res.body.rows).toEqual([expect.objectContaining({ projectName: 'Dunmore', payAppNumber: 1, completedStoredCents: 500000, retainageHeldCents: 50000 })]);
   });
 
   it('options: the project and customer pickers', async () => {

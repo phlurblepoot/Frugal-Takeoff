@@ -18,7 +18,7 @@ test('a Word attachment opens the viewer in a new tab, with the download to fall
     emailAddress: `viewer-${short}@e2e.test`,
     threads: [{
       subject,
-      from: { addr: 'mike@teg.test', name: 'Mike Torres' },
+      from: { addr: 'mike@tidewater.test', name: 'Mike Torres' },
       messages: [{
         text: 'Revised scope attached.',
         attachments: [{ name: 'Scope.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', bytesBase64: Buffer.from('docx').toString('base64') }],

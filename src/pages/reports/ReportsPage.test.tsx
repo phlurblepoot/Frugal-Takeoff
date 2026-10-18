@@ -47,12 +47,12 @@ vi.mock('./reportsExcel', async (importOriginal) => ({
 
 import { ReportsPage } from './ReportsPage';
 
-const proj = { projectId: 'p1', projectName: 'Dania Beach', customerId: 'c1', customerName: 'Acme Builders', archived: false };
+const proj = { projectId: 'p1', projectName: 'Dunmore Heights', customerId: 'c1', customerName: 'Acme Builders', archived: false };
 
 const OPTIONS: ReportFilterOptions = {
   projects: [
-    { id: 'p1', name: 'Dania Beach', customerId: 'c1', archived: false },
-    { id: 'p2', name: 'Hollywood', customerId: 'c2', archived: false },
+    { id: 'p1', name: 'Dunmore Heights', customerId: 'c1', archived: false },
+    { id: 'p2', name: 'Hartwell', customerId: 'c2', archived: false },
     { id: 'p3', name: 'Old Job', customerId: 'c1', archived: true },
   ],
   customers: [{ id: 'c1', name: 'Acme Builders' }, { id: 'c2', name: 'Beta GC' }],
@@ -101,7 +101,7 @@ const money = (cents: number) => (cents / 100).toLocaleString(undefined, { style
 const lastCall = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls[fn.mock.calls.length - 1][0];
 
 beforeEach(() => {
-  localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan', role: 'admin' }));
+  localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'noah', role: 'admin' }));
   h.getReportOptions.mockReset().mockResolvedValue(OPTIONS);
   h.getOpenInvoicesReport.mockReset().mockResolvedValue(OPEN);
   h.getPaymentsReport.mockReset().mockResolvedValue(PAYMENTS);
@@ -145,12 +145,12 @@ describe('ReportsPage', () => {
   it('filters by customer (narrowing the project list), project, and archived projects', async () => {
     mount();
     await screen.findByTestId('report-table');
-    await waitFor(() => expect(screen.getAllByRole('option', { name: /Dania Beach/ })).toHaveLength(1));
+    await waitFor(() => expect(screen.getAllByRole('option', { name: /Dunmore Heights/ })).toHaveLength(1));
 
     fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'c1' } });
     await waitFor(() => expect(lastCall(h.getOpenInvoicesReport)).toMatchObject({ customerId: 'c1' }));
     const projectSelect = screen.getByLabelText('Project') as HTMLSelectElement;
-    expect(Array.from(projectSelect.options).map(o => o.text)).toEqual(['All projects', 'Dania Beach', 'Old Job (archived)']);
+    expect(Array.from(projectSelect.options).map(o => o.text)).toEqual(['All projects', 'Dunmore Heights', 'Old Job (archived)']);
 
     fireEvent.change(projectSelect, { target: { value: 'p3' } });
     await waitFor(() => expect(lastCall(h.getOpenInvoicesReport)).toMatchObject({ customerId: 'c1', projectId: 'p3' }));
@@ -158,7 +158,7 @@ describe('ReportsPage', () => {
     // Leaving archived projects out drops the archived project picked.
     fireEvent.click(screen.getByLabelText('Include archived projects'));
     await waitFor(() => expect(lastCall(h.getOpenInvoicesReport)).toEqual({ customerId: 'c1', projectId: undefined, includeArchived: false }));
-    expect(Array.from(projectSelect.options).map(o => o.text)).toEqual(['All projects', 'Dania Beach']);
+    expect(Array.from(projectSelect.options).map(o => o.text)).toEqual(['All projects', 'Dunmore Heights']);
 
     // A customer that doesn't own the picked project clears it.
     fireEvent.change(projectSelect, { target: { value: 'p1' } });

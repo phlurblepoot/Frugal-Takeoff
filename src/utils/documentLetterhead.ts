@@ -3,7 +3,7 @@ import { jsPDF } from 'jspdf';
 // ---------------------------------------------------------------------------
 // Shared branded letterhead (header + footer) for generated documents.
 //
-// Reproduces Nathan's branded template (docs/Template.pdf):
+// Reproduces a branded letterhead design:
 //   - HEADER: a short BRAND-GREEN band at the top-left, an angled diagonal
 //     transition, then a tall BLACK band filling the top-right. The company
 //     contact block sits in white inside the black band, with the logo at the
@@ -104,7 +104,7 @@ export interface LetterheadContext {
 }
 
 // --- Letterhead geometry (Letter portrait, pt) ---------------------------------
-// Matches the source template (docs/Template.pdf):
+// Matches the letterhead design:
 //   • HEADER — a tall BRAND-GREEN parallelogram on the left and a tall BLACK
 //     block on the right, meeting along a diagonal seam that slopes down-right
 //     (the green widens toward the bottom). A thin white bevel runs along the

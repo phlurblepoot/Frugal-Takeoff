@@ -6,7 +6,7 @@ import { PDFDocument } from 'pdf-lib';
 // Real-plan-set proof for the transport fix + email shrink. Gated on the big
 // local fixture so CI never pays the 60MB cost — run it locally as the
 // real-browser proof (house rule for canvas-adjacent changes).
-const BIG_PDF = 'docs/TEG Dania Beach REV.pdf';
+const BIG_PDF = process.env.BIG_PLAN_PDF ?? 'docs/large-plan-set.pdf';
 
 test.skip(!existsSync(BIG_PDF), 'big plan-set fixture not present');
 test.setTimeout(600_000);

@@ -170,7 +170,7 @@ export const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ open, onClose,
           </Field>
           <Field label="Display name" htmlFor="imap-display" hint="Shown as the sender name on mail you send.">
             <Input id="imap-display" value={form.displayName}
-              onChange={e => set('displayName', e.target.value)} placeholder="Nathan at Big Bear" />
+              onChange={e => set('displayName', e.target.value)} placeholder="Jane at Example Co" />
           </Field>
         </div>
 

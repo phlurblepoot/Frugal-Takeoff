@@ -6,7 +6,7 @@ import path from 'node:path';
 import { webAppManifest } from './pushRoutes';
 
 describe('manifest share_target', () => {
-  const m = webAppManifest('Takeoff Pro') as any;
+  const m = webAppManifest('FrugalOmnibuild') as any;
 
   it('posts shared files to /share-target as multipart', () => {
     expect(m.share_target).toMatchObject({ action: '/share-target', method: 'POST', enctype: 'multipart/form-data' });

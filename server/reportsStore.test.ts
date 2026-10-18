@@ -27,8 +27,8 @@ beforeEach(() => {
   runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-rep-')), migrations);
   db.prepare(`INSERT INTO customers (id, name, createdAt, updatedAt) VALUES ('c1', 'Acme Builders', 1, 1), ('c2', 'Beta GC', 1, 1)`).run();
   const proj = db.prepare('INSERT INTO projects (id, name, customerId, meta, createdAt) VALUES (?, ?, ?, ?, 1)');
-  proj.run('p1', 'Dania Beach', 'c1', '{}');
-  proj.run('p2', 'Hollywood', 'c2', '{}');
+  proj.run('p1', 'Dunmore Heights', 'c1', '{}');
+  proj.run('p2', 'Hartwell', 'c2', '{}');
   proj.run('p3', 'Old Job', 'c1', JSON.stringify({ archived: true }));
 });
 
@@ -62,9 +62,9 @@ describe('openInvoicesReport', () => {
 
     const r = openInvoicesReport(db, {}, NOW);
     expect(r.rows.map(x => [x.document, x.projectName, x.customerName, x.status, x.balanceCents])).toEqual([
-      ['Pay App #1', 'Hollywood', 'Beta GC', 'finalized', 450000],
-      ['Invoice 1001', 'Dania Beach', 'Acme Builders', 'sent', 50000],
-      ['Invoice 2001', 'Hollywood', 'Beta GC', 'paid', 20000],
+      ['Pay App #1', 'Hartwell', 'Beta GC', 'finalized', 450000],
+      ['Invoice 1001', 'Dunmore Heights', 'Acme Builders', 'sent', 50000],
+      ['Invoice 2001', 'Hartwell', 'Beta GC', 'paid', 20000],
     ]);
     expect(r.rows[0]).toMatchObject({ kind: 'payapp', id: app.id, date: '2026-09-01', totalCents: 450000, paidCents: 0 });
     expect(r.rows[1]).toMatchObject({ kind: 'invoice', id: open, date: '2026-09-26', daysOutstanding: 10, bucket: 'current' });
@@ -129,8 +129,8 @@ describe('paymentsReport', () => {
   it('lists payments in the range (both ends inclusive), newest first, with what they paid and a cents total', () => {
     const r = paymentsReport(db, { from: '2026-10-01', to: '2026-10-31' });
     expect(r.rows.map(x => [x.date, x.target, x.projectName, x.customerName, x.method, x.note, x.amountCents])).toEqual([
-      ['2026-10-31', 'Pay App #1', 'Hollywood', 'Beta GC', 'wire', 'App 1', 25050],
-      ['2026-10-01', 'Invoice 1001', 'Dania Beach', 'Acme Builders', 'ach', null, 20],
+      ['2026-10-31', 'Pay App #1', 'Hartwell', 'Beta GC', 'wire', 'App 1', 25050],
+      ['2026-10-01', 'Invoice 1001', 'Dunmore Heights', 'Acme Builders', 'ach', null, 20],
     ]);
     expect(r.totals).toEqual({ count: 2, amountCents: 25070 });
     // Attachments stay on the payment — never in a report.
@@ -184,12 +184,12 @@ describe('changeOrdersReport', () => {
   it('lists every change order by project then number, with per-status totals; legacy pending counts as draft', () => {
     const r = changeOrdersReport(db);
     expect(r.rows.map(x => [x.projectName, x.number, x.title, x.status, x.statusGroup, x.amountCents, x.scheduleImpactDays])).toEqual([
-      ['Dania Beach', '000', 'Old extra', 'pending', 'draft', 7500, null],
-      ['Dania Beach', '001', 'Patch wall', 'approved', 'approved', 30010, null],
-      ['Dania Beach', '002', 'Extra soffit', 'sent', 'sent', 120000, 3],
-      ['Hollywood', '001', 'Night work', 'sent', 'sent', 80000, 2],
-      ['Hollywood', '002', 'Wrong color', 'rejected', 'rejected', 15000, null],
-      ['Hollywood', '003', 'Scaffold', 'draft', 'draft', 20, 1],
+      ['Dunmore Heights', '000', 'Old extra', 'pending', 'draft', 7500, null],
+      ['Dunmore Heights', '001', 'Patch wall', 'approved', 'approved', 30010, null],
+      ['Dunmore Heights', '002', 'Extra soffit', 'sent', 'sent', 120000, 3],
+      ['Hartwell', '001', 'Night work', 'sent', 'sent', 80000, 2],
+      ['Hartwell', '002', 'Wrong color', 'rejected', 'rejected', 15000, null],
+      ['Hartwell', '003', 'Scaffold', 'draft', 'draft', 20, 1],
     ]);
     expect(r.rows[1].date).toBe('2026-09-15');
     expect(r.byStatus).toEqual({
@@ -227,7 +227,7 @@ describe('retainageReport', () => {
     const g = computeG702(db, second.id);
     const r = retainageReport(db);
     expect(r.rows.map(x => [x.projectName, x.payAppNumber, x.applicationDate])).toEqual([
-      ['Dania Beach', 2, '2026-09-30'], ['Hollywood', 1, '2026-09-15'],
+      ['Dunmore Heights', 2, '2026-09-30'], ['Hartwell', 1, '2026-09-15'],
     ]);
     expect(r.rows[0]).toMatchObject({
       payAppId: second.id,
@@ -242,8 +242,8 @@ describe('retainageReport', () => {
   it('filters by project and customer, and can leave archived projects out', () => {
     finalizedPayApp('p1', 50, null);
     finalizedPayApp('p3', 50, null);
-    expect(retainageReport(db, { customerId: 'c1' }).rows.map(x => x.projectName)).toEqual(['Dania Beach', 'Old Job']);
-    expect(retainageReport(db, { customerId: 'c1', includeArchived: false }).rows.map(x => x.projectName)).toEqual(['Dania Beach']);
+    expect(retainageReport(db, { customerId: 'c1' }).rows.map(x => x.projectName)).toEqual(['Dunmore Heights', 'Old Job']);
+    expect(retainageReport(db, { customerId: 'c1', includeArchived: false }).rows.map(x => x.projectName)).toEqual(['Dunmore Heights']);
     expect(retainageReport(db, { projectId: 'p2' }).rows).toEqual([]);
   });
 });
@@ -252,8 +252,8 @@ describe('reportFilterOptions', () => {
   it('lists projects (with customer and archived flag) and customers by name', () => {
     expect(reportFilterOptions(db)).toEqual({
       projects: [
-        { id: 'p1', name: 'Dania Beach', customerId: 'c1', archived: false },
-        { id: 'p2', name: 'Hollywood', customerId: 'c2', archived: false },
+        { id: 'p1', name: 'Dunmore Heights', customerId: 'c1', archived: false },
+        { id: 'p2', name: 'Hartwell', customerId: 'c2', archived: false },
         { id: 'p3', name: 'Old Job', customerId: 'c1', archived: true },
       ],
       customers: expect.arrayContaining([{ id: 'c1', name: 'Acme Builders' }, { id: 'c2', name: 'Beta GC' }]),

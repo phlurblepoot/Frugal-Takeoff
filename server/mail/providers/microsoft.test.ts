@@ -82,9 +82,9 @@ describe('GraphProvider', () => {
     expect(folders.find(x => x.providerId === 'AAMkFolderJunk')!.role).toBe('spam');
     expect(folders.find(x => x.providerId === 'AAMkFolderArchive')!.role).toBe('archive');
     expect(folders.find(x => x.providerId === 'AAMkFolderBids')).toMatchObject({ name: 'Bids', role: null });
-    // A child folder is listed under its parent's name so two "TEG" folders in
+    // A child folder is listed under its parent's name so two "Tidewater" folders in
     // different parents stay distinguishable.
-    expect(folders.find(x => x.providerId === 'AAMkFolderInboxTEG')).toMatchObject({ name: 'Inbox/TEG', role: null });
+    expect(folders.find(x => x.providerId === 'AAMkFolderInboxTidewater')).toMatchObject({ name: 'Inbox/Tidewater', role: null });
     // Inbox first regardless of the order Graph listed the folders in.
     expect(folders[0].providerId).toBe('AAMkFolderInbox');
     expect(f.calls[0].init.headers.Authorization).toBe('Bearer AT');
@@ -114,12 +114,12 @@ describe('GraphProvider', () => {
       folderProviderIds: ['AAMkFolderInbox'],
     });
     expect(m.messageIdHeader).toBe('as8pr01mb1234.eurprd01.prod.outlook.com');
-    expect(m.inReplyTo).toBe('reply-2@teg.com');
-    expect(m.references).toEqual(['root-1@bigbearplaster.com', 'reply-2@teg.com']);
-    expect(m.from).toEqual({ addr: 'mike@teg.com', name: 'Mike Ross' });
+    expect(m.inReplyTo).toBe('reply-2@tidewater.example');
+    expect(m.references).toEqual(['root-1@birchwoodplaster.example', 'reply-2@tidewater.example']);
+    expect(m.from).toEqual({ addr: 'mike@tidewater.example', name: 'Mike Ross' });
     expect(m.to).toEqual([{ addr: 'me@x' }]);                       // an empty name is dropped
-    expect(m.cc.map(a => a.addr)).toEqual(['ap@teg.com', 'pm@teg.com']);
-    expect(m.cc[1]).toEqual({ addr: 'pm@teg.com' });                // name === address is noise
+    expect(m.cc.map(a => a.addr)).toEqual(['ap@tidewater.example', 'pm@tidewater.example']);
+    expect(m.cc[1]).toEqual({ addr: 'pm@tidewater.example' });                // name === address is noise
     expect(m.date).toBe('2026-08-10T14:22:05.000Z');
     expect(m.snippet).toContain('COR-4');
     expect(m.attachments.map(a => a.name)).toEqual(['COR-4.pdf', 'signature.png']);
@@ -332,11 +332,11 @@ describe('GraphProvider', () => {
       [/sentitems\/messages\?/, () => sentItemsNow({ subject: 'Re: COR-4' })],
     ]);
     const r = await provider(f).send({
-      ...outgoing(), subject: 'Re: COR-4', inReplyTo: 'root-1@bigbearplaster.com', references: ['root-1@bigbearplaster.com'],
+      ...outgoing(), subject: 'Re: COR-4', inReplyTo: 'root-1@birchwoodplaster.example', references: ['root-1@birchwoodplaster.example'],
       attachments: [{ name: 'COR-4.pdf', mime: 'application/pdf', content: Buffer.from('%PDF') }],
     });
 
-    expect(f.calls[0].url).toContain("internetMessageId%20eq%20'%3Croot-1%40bigbearplaster.com%3E'");
+    expect(f.calls[0].url).toContain("internetMessageId%20eq%20'%3Croot-1%40birchwoodplaster.example%3E'");
     expect(f.calls.map(c => `${c.init.method ?? 'GET'} ${c.url.replace(/^.*\/v1\.0\//, '').split('?')[0]}`)).toEqual([
       'GET me/messages',
       'POST me/messages/p1/createReply',
@@ -389,7 +389,7 @@ describe('GraphProvider', () => {
         ],
       })],
     ]);
-    expect(await provider(f).send({ ...outgoing(), subject: 'Re: COR-4', inReplyTo: 'root-1@bigbearplaster.com' }))
+    expect(await provider(f).send({ ...outgoing(), subject: 'Re: COR-4', inReplyTo: 'root-1@birchwoodplaster.example' }))
       .toEqual({ providerMessageId: 'SENT-REPLY', providerThreadId: 't1', messageIdHeader: 'real@outlook.com' });
   });
 
@@ -410,14 +410,14 @@ describe('GraphProvider', () => {
       [/\/me\/messages\/d1\/send$/, () => new Response('{"error":{"code":"ErrorSendFailed"}}', { status: 500 })],
       [/\/me\/messages\/d1$/, () => new Response(null, { status: 204 })],
     ]);
-    await expect(provider(f).send({ ...outgoing(), inReplyTo: 'root-1@bigbearplaster.com' })).rejects.toThrow(/Graph 500/);
+    await expect(provider(f).send({ ...outgoing(), inReplyTo: 'root-1@birchwoodplaster.example' })).rejects.toThrow(/Graph 500/);
     expect(f.calls.some(c => /\/me\/messages\/d1$/.test(c.url) && c.init.method === 'DELETE')).toBe(true);
 
     // The size check runs before anything is sent, so an oversize attachment
     // costs no request at all — there is no draft left to clean up.
     const big = fakeFetch([[/./, () => ({})]]);
     await expect(provider(big).send({
-      ...outgoing(), inReplyTo: 'root-1@bigbearplaster.com',
+      ...outgoing(), inReplyTo: 'root-1@birchwoodplaster.example',
       attachments: [{ name: 'huge.pdf', mime: 'application/pdf', content: Buffer.alloc(4 * 1024 * 1024) }],
     })).rejects.toThrow(/huge\.pdf.*3 MB/);
     expect(big.calls).toEqual([]);
@@ -462,7 +462,7 @@ describe('GraphProvider', () => {
       [/\/me\/messages$/, () => { throw new Error('a reply draft must not be created standalone'); }],
     ]);
     const r = await provider(f).saveDraft({
-      ...outgoing(), subject: 'Re: COR-4', inReplyTo: 'root-1@bigbearplaster.com', references: ['root-1@bigbearplaster.com'],
+      ...outgoing(), subject: 'Re: COR-4', inReplyTo: 'root-1@birchwoodplaster.example', references: ['root-1@birchwoodplaster.example'],
       attachments: [{ name: 'COR-4.pdf', mime: 'application/pdf', content: Buffer.from('%PDF') }],
     });
     expect(r).toEqual({ providerMessageId: 'rd1' });

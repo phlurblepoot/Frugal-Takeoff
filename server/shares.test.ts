@@ -35,7 +35,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-shares-'));
   db = openDb(':memory:');
   runMigrations(db, dir, migrations);
-  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','nathan','x','admin'), ('u2','maria','x','user')`).run();
+  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','noah','x','admin'), ('u2','maria','x','user')`).run();
   putBuffer(db, dir, 'doc1', Buffer.from('docx bytes'), DOCX, { projectId: 'p1', kind: 'document', name: 'Scope.docx' });
   putBuffer(db, dir, 'pdf1', Buffer.from('%PDF-1.7'), 'application/pdf', { projectId: 'p1', kind: 'takeoff-print', name: 'Bid set.pdf' });
   putBuffer(db, dir, 'inv1', Buffer.from('%PDF inv'), 'application/pdf', { projectId: 'p1', kind: 'invoice', name: 'Invoice 7.pdf' });
@@ -154,7 +154,7 @@ describe('several documents under one link', () => {
     const { id } = (await make({ type: 'files', fileIds: ['doc1', 'pdf1'], name: 'For the GC' })).body;
     await make({ type: 'file', resourceId: 'doc1', name: 'Scope' });
     const forPdf = (await request(app).get('/api/shares?fileId=pdf1')).body.shares;
-    expect(forPdf).toEqual([expect.objectContaining({ id, type: 'files', fileCount: 2, createdByName: 'nathan' })]);
+    expect(forPdf).toEqual([expect.objectContaining({ id, type: 'files', fileCount: 2, createdByName: 'noah' })]);
     expect((await request(app).get('/api/shares?fileId=doc1')).body.shares).toHaveLength(2);
     await request(app).delete(`/api/shares/${id}`);
     expect((await request(app).get('/api/shares?fileId=pdf1')).body.shares).toEqual([]);

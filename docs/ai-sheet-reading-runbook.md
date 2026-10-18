@@ -28,12 +28,12 @@ extraction + manual naming.
    reboot. The RTX 5070 (Blackwell) needs a recent driver branch (570+) — pick
    the latest/production driver in the plugin if the card isn't detected.
    Confirm with `nvidia-smi` on the host; note the UUID from `nvidia-smi -L`.
-2. **Build/pull the CUDA image** (`docker build -f Dockerfile.cuda -t frugal-takeoff:cuda .`).
+2. **Build/pull the CUDA image** (`docker build -f Dockerfile.cuda -t frugalomnibuild:cuda .`).
 3. In the container template (Advanced view):
    - **Extra Parameters:** `--runtime=nvidia`
    - **Variable** `NVIDIA_VISIBLE_DEVICES` = `GPU-<uuid>` (or `all`)
    - **Variable** `NVIDIA_DRIVER_CAPABILITIES` = `all`
-   - **Path** `/models` → e.g. `/mnt/user/appdata/frugal-takeoff/models` (read/write)
+   - **Path** `/models` → e.g. `/mnt/user/appdata/frugalomnibuild/models` (read/write)
 
 ## Config (environment variables)
 - `AI_ENABLED` — default on; set `false`/`0` to disable entirely.
@@ -61,7 +61,7 @@ To use a different model, e.g. the tiny fallback SmolVLM-500M:
 If you prefer to pre-seed the weights instead of first-run auto-download:
 ```bash
 pip install -U "huggingface_hub[cli]"
-cd /mnt/user/appdata/frugal-takeoff/models
+cd /mnt/user/appdata/frugalomnibuild/models
 huggingface-cli download ggml-org/Qwen2.5-VL-3B-Instruct-GGUF \
   Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf \
   mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf --local-dir .
