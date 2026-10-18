@@ -41,11 +41,11 @@ let currentUser = { id: 'u1', role: 'admin' };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const env = (id: string, o: any = {}) => ({
-  providerMessageId: id, references: [], from: { addr: 'gc@teg.com', name: 'Mike' }, to: [{ addr: 'me@bb.com' }], cc: [], bcc: [],
+  providerMessageId: id, references: [], from: { addr: 'gc@tidewater.example', name: 'Mike' }, to: [{ addr: 'me@birchwood.example' }], cc: [], bcc: [],
   subject: 'CO 4', snippet: 'hello', date: '2026-08-10T10:00:00.000Z',
   isRead: false, isStarred: false, isDraft: false,
   attachments: [{ attId: 'a1', name: 'cor.pdf', mime: 'application/pdf', size: 4 }],
-  sizeBytes: 10, folderProviderIds: ['INBOX'], messageIdHeader: id + '@teg.com',
+  sizeBytes: 10, folderProviderIds: ['INBOX'], messageIdHeader: id + '@tidewater.example',
   html: '<p>Hi <img src="https://x/y.png"></p>', attachmentBytes: { a1: Buffer.from('%PDF') }, ...o,
 });
 
@@ -55,14 +55,14 @@ beforeEach(() => {
   resetFakes();
   currentUser = { id: 'u1', role: 'admin' };
   routeEnv = {};
-  oauthStub = async () => ({ refreshToken: 'RT', accessToken: 'AT', email: 'oauth@bb.com', name: 'OAuth Nate' });
+  oauthStub = async () => ({ refreshToken: 'RT', accessToken: 'AT', email: 'oauth@birchwood.example', name: 'OAuth Nick' });
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-mr-'));
   db = openDb(':memory:');
   runMigrations(db, dir, migrations, { mailCrypto: crypto });
   db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','admin'), ('u2','b','x','user')`).run();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createProject(db, { id: 'p1', name: 'P', createdAt: 1, pages: [], takeoffs: [] } as any);
-  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', auth: { refreshToken: 'r' } });
+  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@birchwood.example', auth: { refreshToken: 'r' } });
   provider = getFakeProvider(acct.id);
   provider.seed([env('m1')]);
   ctx = { db, dataDir: dir, crypto, providerFactory: a => getFakeProvider(a.id), broadcastChange: () => {} };
@@ -121,7 +121,7 @@ describe('mail routes', () => {
   it('GET /api/mail/accounts lists own accounts without secrets', async () => {
     const r = await request(app).get('/api/mail/accounts');
     expect(r.status).toBe(200);
-    expect(r.body[0]).toMatchObject({ id: acct.id, emailAddress: 'me@bb.com', isDefault: 1, unreadCount: 1 });
+    expect(r.body[0]).toMatchObject({ id: acct.id, emailAddress: 'me@birchwood.example', isDefault: 1, unreadCount: 1 });
     expect(r.body[0].authBlob).toBeUndefined();
     // acct is a 'fake' provider (see beforeEach), so it never gets imapAuth.
     expect(r.body[0].imapAuth).toBeUndefined();
@@ -173,24 +173,24 @@ describe('mail routes', () => {
   it('threads list + detail, scoped by owner', async () => {
     // Linking the thread to project 'p1' (named 'P' in beforeEach) exercises the
     // resolved `label` on both the threads-list chip payload and thread detail.
-    await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'project', itemId: 'p1' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm1@tidewater.example', itemType: 'project', itemId: 'p1' });
     const folders = (await request(app).get('/api/mail/folders').query({ accountId: acct.id })).body;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const inbox = folders.find((f: any) => f.role === 'inbox');
     const list = await request(app).get('/api/mail/threads').query({ accountId: acct.id, folderId: inbox.id });
     expect(list.status).toBe(200);
     expect(list.body.threads.length).toBe(1);
-    expect(list.body.threads[0]).toMatchObject({ threadKey: 'm1@teg.com', unreadCount: 1, hasAttachments: 1, snippet: 'hello' });
+    expect(list.body.threads[0]).toMatchObject({ threadKey: 'm1@tidewater.example', unreadCount: 1, hasAttachments: 1, snippet: 'hello' });
     expect(list.body.threads[0].links).toMatchObject([{ itemType: 'project', itemId: 'p1', label: 'P' }]);
-    const detail = await request(app).get(`/api/mail/threads/${acct.id}/${encodeURIComponent('m1@teg.com')}`);
-    expect(detail.body.messages[0]).toMatchObject({ subject: 'CO 4', from: { addr: 'gc@teg.com' } });
+    const detail = await request(app).get(`/api/mail/threads/${acct.id}/${encodeURIComponent('m1@tidewater.example')}`);
+    expect(detail.body.messages[0]).toMatchObject({ subject: 'CO 4', from: { addr: 'gc@tidewater.example' } });
     expect(detail.body.messages[0].providerMessageId).toBeUndefined();
     expect(detail.body.thread.links).toMatchObject([{ itemType: 'project', itemId: 'p1', label: 'P' }]);
     expect(detail.body.links).toMatchObject([{ itemType: 'project', itemId: 'p1', label: 'P' }]);
     currentUser = { id: 'u2', role: 'user' };
     expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id })).status).toBe(404);
     expect((await request(app).get('/api/mail/folders').query({ accountId: acct.id })).status).toBe(404);
-    expect((await request(app).get(`/api/mail/threads/${acct.id}/${encodeURIComponent('m1@teg.com')}`)).status).toBe(404);
+    expect((await request(app).get(`/api/mail/threads/${acct.id}/${encodeURIComponent('m1@tidewater.example')}`)).status).toBe(404);
   });
 
   it('the folderId filter matches whole ids, not id prefixes', async () => {
@@ -206,14 +206,14 @@ describe('mail routes', () => {
   });
 
   it('GET /api/mail/search indexes provider hits older than the local window and names the threads it filed', async () => {
-    provider.injectInbound(env('old1', { subject: 'ancient CO', date: '2020-01-01T00:00:00.000Z', messageIdHeader: 'old1@teg.com' }));
+    provider.injectInbound(env('old1', { subject: 'ancient CO', date: '2020-01-01T00:00:00.000Z', messageIdHeader: 'old1@tidewater.example' }));
     const r = await request(app).get('/api/mail/search').query({ accountId: acct.id, q: 'ancient' });
     expect(r.status).toBe(200);
     expect(r.body.count).toBe(1);
     // The keys, not just a count: the hit is archived and matched on body text,
     // so nothing but asking for it BY KEY will show it to the user.
-    expect(r.body.threadKeys).toEqual(['old1@teg.com']);
-    expect(db.prepare('SELECT 1 FROM mail_messages WHERE messageIdHeader = ?').get('old1@teg.com')).toBeTruthy();
+    expect(r.body.threadKeys).toEqual(['old1@tidewater.example']);
+    expect(db.prepare('SELECT 1 FROM mail_messages WHERE messageIdHeader = ?').get('old1@tidewater.example')).toBeTruthy();
     currentUser = { id: 'u2', role: 'user' };
     expect((await request(app).get('/api/mail/search').query({ accountId: acct.id, q: 'x' })).status).toBe(404);
   });
@@ -222,27 +222,27 @@ describe('mail routes', () => {
   // and the hit is usually archived, so the active Inbox filter would hide it.
   describe('GET /api/mail/threads?threadKeys=', () => {
     const fileArchived = () => {
-      provider.injectInbound(env('old1', { subject: 'ancient CO', date: '2020-01-01T00:00:00.000Z', messageIdHeader: 'old1@teg.com', folderProviderIds: ['ARCHIVE'] }));
-      upsertEnvelopes(ctx, acct, [env('old1', { subject: 'ancient CO', date: '2020-01-01T00:00:00.000Z', messageIdHeader: 'old1@teg.com', folderProviderIds: ['ARCHIVE'] })]);
+      provider.injectInbound(env('old1', { subject: 'ancient CO', date: '2020-01-01T00:00:00.000Z', messageIdHeader: 'old1@tidewater.example', folderProviderIds: ['ARCHIVE'] }));
+      upsertEnvelopes(ctx, acct, [env('old1', { subject: 'ancient CO', date: '2020-01-01T00:00:00.000Z', messageIdHeader: 'old1@tidewater.example', folderProviderIds: ['ARCHIVE'] })]);
     };
     const inboxId = () => (db.prepare(`SELECT id FROM mail_folders WHERE accountId = ? AND role = 'inbox'`).get(acct.id) as { id: string }).id;
 
     it('returns exactly those threads, past the folder filter and the q filter', async () => {
       fileArchived();
       // Both filters would hide it on their own.
-      expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id, folderId: inboxId() })).body.threads.map((t: { threadKey: string }) => t.threadKey)).toEqual(['m1@teg.com']);
+      expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id, folderId: inboxId() })).body.threads.map((t: { threadKey: string }) => t.threadKey)).toEqual(['m1@tidewater.example']);
       expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id, q: 'nothing-matches-this' })).body.threads.length).toBe(0);
 
       const r = await request(app).get('/api/mail/threads').query({
-        accountId: acct.id, folderId: inboxId(), q: 'nothing-matches-this', threadKeys: 'old1@teg.com',
+        accountId: acct.id, folderId: inboxId(), q: 'nothing-matches-this', threadKeys: 'old1@tidewater.example',
       });
       expect(r.status).toBe(200);
-      expect(r.body.threads.map((t: { threadKey: string }) => t.threadKey)).toEqual(['old1@teg.com']);
+      expect(r.body.threads.map((t: { threadKey: string }) => t.threadKey)).toEqual(['old1@tidewater.example']);
     });
 
     it('accepts a comma-separated list or a repeated param, newest first', async () => {
       fileArchived();
-      const both = ['m1@teg.com', 'old1@teg.com'];
+      const both = ['m1@tidewater.example', 'old1@tidewater.example'];
       const byComma = await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: both.join(',') });
       expect(byComma.body.threads.map((t: { threadKey: string }) => t.threadKey)).toEqual(both);   // 2026 before 2020
       const byRepeat = await request(app).get(`/api/mail/threads?accountId=${acct.id}&threadKeys=${encodeURIComponent(both[0])}&threadKeys=${encodeURIComponent(both[1])}`);
@@ -251,17 +251,17 @@ describe('mail routes', () => {
 
     it('caps the key list at 50 rather than building an unbounded IN clause', async () => {
       const keys = Array.from({ length: 80 }, (_, i) => `k${i}`);
-      // 'm1@teg.com' sits past the cap, so it must NOT come back.
-      const r = await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: [...keys, 'm1@teg.com'].join(',') });
+      // 'm1@tidewater.example' sits past the cap, so it must NOT come back.
+      const r = await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: [...keys, 'm1@tidewater.example'].join(',') });
       expect(r.status).toBe(200);
       expect(r.body.threads).toEqual([]);
-      const under = await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: [...keys.slice(0, 49), 'm1@teg.com'].join(',') });
+      const under = await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: [...keys.slice(0, 49), 'm1@tidewater.example'].join(',') });
       expect(under.body.threads.length).toBe(1);
     });
 
     it('is still owner-scoped', async () => {
       currentUser = { id: 'u2', role: 'user' };
-      expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: 'm1@teg.com' })).status).toBe(404);
+      expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: 'm1@tidewater.example' })).status).toBe(404);
     });
   });
 
@@ -284,8 +284,8 @@ describe('mail routes', () => {
     // A send whose Sent Items read-back lost the race is indexed under a
     // "sent:" placeholder; asking the provider for it would 404 on the user's
     // own message.
-    upsertEnvelopes(ctx, acct, [env('sent:out-9@bb.com', { messageIdHeader: 'out-9@bb.com', from: { addr: 'me@bb.com' }, subject: 'Pending one' })], { sentFromApp: true });
-    const id = (db.prepare('SELECT id FROM mail_messages WHERE providerMessageId = ?').get('sent:out-9@bb.com') as { id: string }).id;
+    upsertEnvelopes(ctx, acct, [env('sent:out-9@birchwood.example', { messageIdHeader: 'out-9@birchwood.example', from: { addr: 'me@birchwood.example' }, subject: 'Pending one' })], { sentFromApp: true });
+    const id = (db.prepare('SELECT id FROM mail_messages WHERE providerMessageId = ?').get('sent:out-9@birchwood.example') as { id: string }).id;
 
     const b = await request(app).get(`/api/mail/messages/${id}/body`);
     expect(b.status).toBe(202);
@@ -322,7 +322,7 @@ describe('mail routes', () => {
     expect(rows).toEqual([{ name: 'one.pdf', kind: 'email-attachment' }, { name: 'two.pdf', kind: 'email-attachment' }]);
   });
 
-  // Nathan's real Gmail flow: pick several attachments, choose a type for them
+  // The owner's real Gmail flow: pick several attachments, choose a type for them
   // (the modal ALWAYS sends a kind), Save. Each attachment is its own document.
   it('saves several attachments under one picked kind as SEPARATE documents, not versions', async () => {
     const atts = [
@@ -495,8 +495,8 @@ describe('mail routes', () => {
   });
 
   it('saving from a message the provider has not filed yet fails readably per item, without asking the provider', async () => {
-    upsertEnvelopes(ctx, acct, [env('sent:out-9@bb.com', { messageIdHeader: 'out-9@bb.com', from: { addr: 'me@bb.com' }, subject: 'Pending one' })], { sentFromApp: true });
-    const id = (db.prepare('SELECT id FROM mail_messages WHERE providerMessageId = ?').get('sent:out-9@bb.com') as { id: string }).id;
+    upsertEnvelopes(ctx, acct, [env('sent:out-9@birchwood.example', { messageIdHeader: 'out-9@birchwood.example', from: { addr: 'me@birchwood.example' }, subject: 'Pending one' })], { sentFromApp: true });
+    const id = (db.prepare('SELECT id FROM mail_messages WHERE providerMessageId = ?').get('sent:out-9@birchwood.example') as { id: string }).id;
     const getAttachment = vi.spyOn(provider, 'getAttachment');
     const getBody = vi.spyOn(provider, 'getBody');
     const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1', kind: 'document' }, { attId: 'a2' }] });
@@ -601,7 +601,7 @@ describe('mail routes', () => {
       const id = firstMessageId();
       provider.rotateAttachmentIds('m1', a => `${a}-rotated`);
       await request(app).get(`/api/mail/messages/${id}/attachments/a1`).query({ token: 'tok' });
-      expect(seen).toContainEqual({ type: 'mailThread', id: 'm1@teg.com', action: 'updated', byUserId: 'u1' });
+      expect(seen).toContainEqual({ type: 'mailThread', id: 'm1@tidewater.example', action: 'updated', byUserId: 'u1' });
     });
 
     it('matches by position + name when two attachments share a name but not a size', async () => {
@@ -662,7 +662,7 @@ describe('mail routes', () => {
     expect(r.body.error).toBe('Mail provider request failed');   // §7: never echo the provider's raw message
     expect(JSON.stringify(r.body)).not.toContain('down');
     expect((db.prepare('SELECT isStarred FROM mail_messages').get() as { isStarred: number }).isStarred).toBe(0);
-    expect((await request(app).post('/api/mail/threads/actions').send({ accountId: acct.id, threadKeys: ['m1@teg.com'], action: 'archive' })).status).toBe(200);
+    expect((await request(app).post('/api/mail/threads/actions').send({ accountId: acct.id, threadKeys: ['m1@tidewater.example'], action: 'archive' })).status).toBe(200);
     expect(JSON.parse((db.prepare('SELECT folderIdsJson FROM mail_messages').get() as { folderIdsJson: string }).folderIdsJson))
       .toEqual([(db.prepare(`SELECT id FROM mail_folders WHERE role='archive'`).get() as { id: string }).id]);
   });
@@ -739,11 +739,11 @@ describe('mail routes', () => {
     expect((await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'move' })).status).toBe(400);
     currentUser = { id: 'u2', role: 'user' };
     expect((await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'read' })).status).toBe(404);
-    expect((await request(app).post('/api/mail/threads/actions').send({ accountId: acct.id, threadKeys: ['m1@teg.com'], action: 'read' })).status).toBe(404);
+    expect((await request(app).post('/api/mail/threads/actions').send({ accountId: acct.id, threadKeys: ['m1@tidewater.example'], action: 'read' })).status).toBe(404);
   });
 
   it('send + drafts + links + unread + recipients + heartbeat + setup-info', async () => {
-    const s = await request(app).post('/api/mail/send').send({ to: [{ addr: 'gc@teg.com' }], subject: 'Hi', html: '<p>x</p>', attachments: [] });
+    const s = await request(app).post('/api/mail/send').send({ to: [{ addr: 'gc@tidewater.example' }], subject: 'Hi', html: '<p>x</p>', attachments: [] });
     expect(s.status).toBe(200);
     expect(s.body.threadKey).toBeTruthy();
     expect(provider.sent.length).toBe(1);
@@ -759,9 +759,9 @@ describe('mail routes', () => {
     expect(gl.body[0].label).toBe('P');
     expect((await request(app).delete(`/api/mail/links/${l.body.id}`)).status).toBe(200);
     expect((await request(app).get('/api/mail/unread-count')).body).toEqual({ total: 1, byAccount: { [acct.id]: 1 } });
-    const rc = await request(app).get('/api/mail/recipients').query({ q: 'teg' });
+    const rc = await request(app).get('/api/mail/recipients').query({ q: 'tidewater' });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(rc.body.some((x: any) => x.addr === 'gc@teg.com')).toBe(true);
+    expect(rc.body.some((x: any) => x.addr === 'gc@tidewater.example')).toBe(true);
     expect((await request(app).post('/api/mail/heartbeat').send({ accountIds: [acct.id] })).status).toBe(204);
     const si = await request(app).get('/api/mail/setup-info');
     // These are the URIs an admin pastes into the provider console, so they must
@@ -801,8 +801,8 @@ describe('mail routes', () => {
 
   it('reopens a reply draft with its content and attachments, keeps it threaded, and send removes it', async () => {
     const draftEnv = env('dr1', {
-      messageIdHeader: 'dr1@bb.com', inReplyTo: 'm1@teg.com', references: ['m1@teg.com'],
-      from: { addr: 'me@bb.com' }, to: [{ addr: 'gc@teg.com', name: 'Mike' }], cc: [{ addr: 'pm@teg.com' }],
+      messageIdHeader: 'dr1@birchwood.example', inReplyTo: 'm1@tidewater.example', references: ['m1@tidewater.example'],
+      from: { addr: 'me@birchwood.example' }, to: [{ addr: 'gc@tidewater.example', name: 'Mike' }], cc: [{ addr: 'pm@tidewater.example' }],
       subject: 'Re: CO 4', date: '2026-08-11T10:00:00.000Z', isRead: true, isDraft: true, folderProviderIds: ['DRAFTS'],
       html: '<p style="color:red">Draft text <img src="https://x/logo.png"><script>alert(1)</script></p>',
       attachments: [{ attId: 'da1', name: 'takeoff.pdf', mime: 'application/pdf', size: 4 }],
@@ -817,7 +817,7 @@ describe('mail routes', () => {
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({
       accountId: acct.id, draftId: 'dr1', subject: 'Re: CO 4',
-      to: [{ addr: 'gc@teg.com', name: 'Mike' }], cc: [{ addr: 'pm@teg.com' }],
+      to: [{ addr: 'gc@tidewater.example', name: 'Mike' }], cc: [{ addr: 'pm@tidewater.example' }],
       replyTo: { accountId: acct.id, threadKey: parentThread },
     });
     // Lightly cleaned: styles and remote images stay, script goes.
@@ -830,27 +830,27 @@ describe('mail routes', () => {
 
     // Saving updates the SAME provider draft and answers the parent, never the draft itself.
     const put = await request(app).put('/api/mail/drafts/dr1').send({
-      accountId: acct.id, to: [{ addr: 'gc@teg.com' }], subject: 'Re: CO 4', html: '<p>edited</p>',
+      accountId: acct.id, to: [{ addr: 'gc@tidewater.example' }], subject: 'Re: CO 4', html: '<p>edited</p>',
       attachments: [{ uploadId }], replyTo: r.body.replyTo,
     });
     expect(put.status).toBe(200);
     expect(put.body.draftId).toBe('dr1');
     const saved = provider.drafts.get('dr1')!;
-    expect(saved.inReplyTo).toBe('m1@teg.com');
-    expect(saved.references).toEqual(['m1@teg.com']);
+    expect(saved.inReplyTo).toBe('m1@tidewater.example');
+    expect(saved.references).toEqual(['m1@tidewater.example']);
     expect(saved.attachments.map(a => [a.name, a.content.toString()])).toEqual([['takeoff.pdf', '%PDF']]);
 
     const seen: Array<{ type: string; id: string }> = [];
     ctx.broadcastChange = ev => { seen.push(ev); };
     const s = await request(app).post('/api/mail/send').send({
-      accountId: acct.id, to: [{ addr: 'gc@teg.com' }], subject: 'Re: CO 4', html: '<p>edited</p>',
+      accountId: acct.id, to: [{ addr: 'gc@tidewater.example' }], subject: 'Re: CO 4', html: '<p>edited</p>',
       attachments: [{ uploadId }], replyTo: r.body.replyTo, draftProviderId: 'dr1',
     });
     expect(s.status).toBe(200);
     // The draft's local row is gone at once (not at the next sync), and the change was broadcast.
     expect(db.prepare("SELECT 1 FROM mail_messages WHERE providerMessageId = 'dr1'").get()).toBeUndefined();
     expect(seen.some(e => e.type === 'mailThread')).toBe(true);
-    expect(provider.sent.at(-1)!.inReplyTo).toBe('m1@teg.com');
+    expect(provider.sent.at(-1)!.inReplyTo).toBe('m1@tidewater.example');
     expect(s.body.threadKey).toBe(parentThread);
     expect(provider.drafts.has('dr1')).toBe(false);
   });
@@ -870,32 +870,32 @@ describe('mail routes', () => {
   });
 
   it('recipients include customer role addresses with the customer name and role', async () => {
-    saveCustomer(db, { id: 'c1', name: 'TEG Builders', contactName: 'Mike', emails: { accounting: { to: 'ap@tegbuilders.com, ap2@tegbuilders.com' }, general: { to: 'info@other.com' } } });
-    const r = await request(app).get('/api/mail/recipients').query({ q: 'tegbuilders' });
+    saveCustomer(db, { id: 'c1', name: 'Tidewater Builders', contactName: 'Mike', emails: { accounting: { to: 'ap@tidewaterbuilders.example, ap2@tidewaterbuilders.example' }, general: { to: 'info@other.com' } } });
+    const r = await request(app).get('/api/mail/recipients').query({ q: 'tidewaterbuilders' });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const hit = r.body.find((x: any) => x.addr === 'ap@tegbuilders.com');
+    const hit = r.body.find((x: any) => x.addr === 'ap@tidewaterbuilders.example');
     expect(hit).toMatchObject({ customerId: 'c1', role: 'accounting' });
-    expect(hit.source).toContain('TEG Builders');
+    expect(hit.source).toContain('Tidewater Builders');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(r.body.some((x: any) => x.addr === 'ap2@tegbuilders.com')).toBe(true);
+    expect(r.body.some((x: any) => x.addr === 'ap2@tidewaterbuilders.example')).toBe(true);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(r.body.some((x: any) => x.addr === 'info@other.com')).toBe(false);
   });
 
   it('POST /api/mail/links validates itemType and backfills reply state from existing messages', async () => {
-    expect((await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'nope', itemId: 'p1' })).status).toBe(400);
-    expect((await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemId: 'p1' })).status).toBe(400);
-    // Thread has one inbound message (from gc@teg.com) and one outbound (from the app account).
-    upsertEnvelopes(ctx, acct, [env('m2', { messageIdHeader: 'm2@bb.com', inReplyTo: 'm1@teg.com', from: { addr: 'ME@bb.com', name: 'Me' }, date: '2026-08-11T10:00:00.000Z', folderProviderIds: ['SENT'] })]);
-    const l = await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'project', itemId: 'p1' });
+    expect((await request(app).post('/api/mail/links').send({ threadKey: 'm1@tidewater.example', itemType: 'nope', itemId: 'p1' })).status).toBe(400);
+    expect((await request(app).post('/api/mail/links').send({ threadKey: 'm1@tidewater.example', itemId: 'p1' })).status).toBe(400);
+    // Thread has one inbound message (from gc@tidewater.example) and one outbound (from the app account).
+    upsertEnvelopes(ctx, acct, [env('m2', { messageIdHeader: 'm2@birchwood.example', inReplyTo: 'm1@tidewater.example', from: { addr: 'ME@birchwood.example', name: 'Me' }, date: '2026-08-11T10:00:00.000Z', folderProviderIds: ['SENT'] })]);
+    const l = await request(app).post('/api/mail/links').send({ threadKey: 'm1@tidewater.example', itemType: 'project', itemId: 'p1' });
     expect(l.status).toBe(200);
     expect(l.body).toMatchObject({ itemType: 'project', itemId: 'p1', projectId: 'p1' });
-    expect(db.prepare('SELECT lastInboundDate, lastOutboundDate FROM mail_thread_reply_state WHERE threadKey = ?').get('m1@teg.com'))
+    expect(db.prepare('SELECT lastInboundDate, lastOutboundDate FROM mail_thread_reply_state WHERE threadKey = ?').get('m1@tidewater.example'))
       .toEqual({ lastInboundDate: '2026-08-10T10:00:00.000Z', lastOutboundDate: '2026-08-11T10:00:00.000Z' });
   });
 
   it('links and their subject/participant snapshots are visible app-wide; only the linker or an admin can unlink', async () => {
-    const l = await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'project', itemId: 'p1' });
+    const l = await request(app).post('/api/mail/links').send({ threadKey: 'm1@tidewater.example', itemType: 'project', itemId: 'p1' });
     expect(l.status).toBe(200);
     expect(l.body.subjectSnapshot).toBe('CO 4');
 
@@ -926,7 +926,7 @@ describe('mail routes', () => {
   });
 
   it('POST /api/mail/send rejects an unknown itemType and an empty recipient list before anything is sent', async () => {
-    const base = { to: [{ addr: 'gc@teg.com' }], subject: 's', html: '<p>h</p>', attachments: [] };
+    const base = { to: [{ addr: 'gc@tidewater.example' }], subject: 's', html: '<p>h</p>', attachments: [] };
     const badLink = await request(app).post('/api/mail/send').send({ ...base, links: [{ itemType: 'nope', itemId: 'p1' }] });
     expect(badLink.status).toBe(400);
     expect(badLink.body.error).toBe('Invalid itemType');
@@ -953,45 +953,45 @@ describe('mail routes', () => {
   /** A second mailbox owned by u2, so "the caller's accounts" can be tested for
    *  what it excludes as well as what it finds. */
   const seedOtherUsersMailbox = () => {
-    const a2 = accounts.createAccount(db, crypto, { userId: 'u2', provider: 'fake', emailAddress: 'other@bb.com', auth: { refreshToken: 'r' } });
+    const a2 = accounts.createAccount(db, crypto, { userId: 'u2', provider: 'fake', emailAddress: 'other@birchwood.example', auth: { refreshToken: 'r' } });
     const p2 = getFakeProvider(a2.id);
     upsertFolders(db, a2.id, p2.folders);
-    upsertEnvelopes(ctx, a2, [env('z1', { messageIdHeader: 'z1@teg.com', subject: 'Secret job', date: '2026-08-10T10:00:00.000Z' })]);
+    upsertEnvelopes(ctx, a2, [env('z1', { messageIdHeader: 'z1@tidewater.example', subject: 'Secret job', date: '2026-08-10T10:00:00.000Z' })]);
     return a2;
   };
 
   it('GET /api/mail/project-threads gives one row per thread with every link labeled, newest activity first', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     createProject(db, { id: 'p2', name: 'Q', createdAt: 1, pages: [], takeoffs: [] } as any);
-    saveCustomer(db, { id: 'c1', name: 'Big Bear', emails: {} });
+    saveCustomer(db, { id: 'c1', name: 'Birchwood', emails: {} });
     upsertEnvelopes(ctx, acct, [
-      env('m2', { messageIdHeader: 'm2@teg.com', subject: 'Invoice 12', date: '2026-08-12T10:00:00.000Z' }),
-      env('m3', { messageIdHeader: 'm3@teg.com', subject: 'Other job', date: '2026-08-13T10:00:00.000Z' }),
+      env('m2', { messageIdHeader: 'm2@tidewater.example', subject: 'Invoice 12', date: '2026-08-12T10:00:00.000Z' }),
+      env('m3', { messageIdHeader: 'm3@tidewater.example', subject: 'Other job', date: '2026-08-13T10:00:00.000Z' }),
     ]);
-    await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'project', itemId: 'p1' });
-    await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'customer', itemId: 'c1' });
-    await request(app).post('/api/mail/links').send({ threadKey: 'm2@teg.com', itemType: 'project', itemId: 'p1' });
-    await request(app).post('/api/mail/links').send({ threadKey: 'm3@teg.com', itemType: 'project', itemId: 'p2' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm1@tidewater.example', itemType: 'project', itemId: 'p1' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm1@tidewater.example', itemType: 'customer', itemId: 'c1' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm2@tidewater.example', itemType: 'project', itemId: 'p1' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm3@tidewater.example', itemType: 'project', itemId: 'p2' });
     // Pin the clock-derived columns so ordering is a fact, not a race.
-    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-14T00:00:00.000Z' WHERE threadKey = 'm1@teg.com'").run();
-    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-15T00:00:00.000Z' WHERE threadKey = 'm2@teg.com'").run();
-    db.prepare("UPDATE mail_thread_reply_state SET lastInboundDate = '2026-08-20T00:00:00.000Z', lastOutboundDate = '2026-08-19T00:00:00.000Z' WHERE threadKey = 'm1@teg.com'").run();
+    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-14T00:00:00.000Z' WHERE threadKey = 'm1@tidewater.example'").run();
+    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-15T00:00:00.000Z' WHERE threadKey = 'm2@tidewater.example'").run();
+    db.prepare("UPDATE mail_thread_reply_state SET lastInboundDate = '2026-08-20T00:00:00.000Z', lastOutboundDate = '2026-08-19T00:00:00.000Z' WHERE threadKey = 'm1@tidewater.example'").run();
 
     const r = await request(app).get('/api/mail/project-threads').query({ projectId: 'p1' });
     expect(r.status).toBe(200);
-    expect(r.body.map((t: any) => t.threadKey)).toEqual(['m1@teg.com', 'm2@teg.com']);  // m3 is p2's, not p1's
+    expect(r.body.map((t: any) => t.threadKey)).toEqual(['m1@tidewater.example', 'm2@tidewater.example']);  // m3 is p2's, not p1's
     expect(r.body[0]).toMatchObject({
-      threadKey: 'm1@teg.com', subjectSnapshot: 'CO 4', firstDate: '2026-08-10T10:00:00.000Z',
+      threadKey: 'm1@tidewater.example', subjectSnapshot: 'CO 4', firstDate: '2026-08-10T10:00:00.000Z',
       lastInboundDate: '2026-08-20T00:00:00.000Z', lastOutboundDate: '2026-08-19T00:00:00.000Z',
       lastActivity: '2026-08-20T00:00:00.000Z',
       // Both m1 links (project + customer) were pinned to the same createdAt above.
       earliestLinkCreatedAt: '2026-08-14T00:00:00.000Z',
     });
-    expect(r.body[0].participants).toEqual(expect.arrayContaining([{ addr: 'gc@teg.com', name: 'Mike' }]));
+    expect(r.body[0].participants).toEqual(expect.arrayContaining([{ addr: 'gc@tidewater.example', name: 'Mike' }]));
     // Every link on the key — the customer link too, though it carries no projectId.
     expect(r.body[0].links).toEqual([
       { itemType: 'project', itemId: 'p1', label: 'P' },
-      { itemType: 'customer', itemId: 'c1', label: 'Big Bear' },
+      { itemType: 'customer', itemId: 'c1', label: 'Birchwood' },
     ]);
     // m2 never got a reply-state bump past its own message, so the link date is its activity.
     expect(r.body[1]).toMatchObject({
@@ -999,7 +999,7 @@ describe('mail routes', () => {
     });
 
     const other = await request(app).get('/api/mail/project-threads').query({ projectId: 'p2' });
-    expect(other.body.map((t: any) => t.threadKey)).toEqual(['m3@teg.com']);
+    expect(other.body.map((t: any) => t.threadKey)).toEqual(['m3@tidewater.example']);
 
     // Viewer-independent by design: links are app data, so a user with no mailbox
     // at all sees the same rows (same trust model as GET /api/mail/links).
@@ -1016,13 +1016,13 @@ describe('mail routes', () => {
   it('GET /api/mail/project-threads.earliestLinkCreatedAt is the MIN createdAt across every link on the thread', async () => {
     // Two links on the SAME thread, deliberately created out of chronological
     // order so a naive "first row" read (rather than an actual MIN) would fail.
-    await request(app).post('/api/mail/links').send({ threadKey: 'm5@teg.com', itemType: 'project', itemId: 'p1' });
-    await request(app).post('/api/mail/links').send({ threadKey: 'm5@teg.com', itemType: 'customer', itemId: 'c1' });
-    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-20T00:00:00.000Z' WHERE threadKey = 'm5@teg.com' AND itemType = 'project'").run();
-    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-05T00:00:00.000Z' WHERE threadKey = 'm5@teg.com' AND itemType = 'customer'").run();
+    await request(app).post('/api/mail/links').send({ threadKey: 'm5@tidewater.example', itemType: 'project', itemId: 'p1' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm5@tidewater.example', itemType: 'customer', itemId: 'c1' });
+    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-20T00:00:00.000Z' WHERE threadKey = 'm5@tidewater.example' AND itemType = 'project'").run();
+    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-05T00:00:00.000Z' WHERE threadKey = 'm5@tidewater.example' AND itemType = 'customer'").run();
 
     const r = await request(app).get('/api/mail/project-threads').query({ projectId: 'p1' });
-    const m5 = r.body.find((t: any) => t.threadKey === 'm5@teg.com');
+    const m5 = r.body.find((t: any) => t.threadKey === 'm5@tidewater.example');
     expect(m5).toBeTruthy();
     expect(m5.earliestLinkCreatedAt).toBe('2026-08-05T00:00:00.000Z');
   });
@@ -1036,13 +1036,13 @@ describe('mail routes', () => {
   });
 
   it('GET /api/mail/project-threads accepts a customerId filter instead of projectId, and rejects both/neither', async () => {
-    saveCustomer(db, { id: 'c1', name: 'Big Bear', emails: {} });
-    await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'customer', itemId: 'c1' });
+    saveCustomer(db, { id: 'c1', name: 'Birchwood', emails: {} });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm1@tidewater.example', itemType: 'customer', itemId: 'c1' });
 
     const byCustomer = await request(app).get('/api/mail/project-threads').query({ customerId: 'c1' });
     expect(byCustomer.status).toBe(200);
-    expect(byCustomer.body.map((t: any) => t.threadKey)).toEqual(['m1@teg.com']);
-    expect(byCustomer.body[0].links).toEqual([{ itemType: 'customer', itemId: 'c1', label: 'Big Bear' }]);
+    expect(byCustomer.body.map((t: any) => t.threadKey)).toEqual(['m1@tidewater.example']);
+    expect(byCustomer.body[0].links).toEqual([{ itemType: 'customer', itemId: 'c1', label: 'Birchwood' }]);
 
     // A customer with no linked mail is an empty list, not an error.
     saveCustomer(db, { id: 'c2', name: 'Nobody', emails: {} });
@@ -1057,15 +1057,15 @@ describe('mail routes', () => {
   });
 
   it('GET /api/mail/resolve-thread matches an exact threadKey in the caller\'s own mailbox', async () => {
-    const r = await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'm1@teg.com' });
+    const r = await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'm1@tidewater.example' });
     expect(r.status).toBe(200);
-    expect(r.body.match).toEqual({ accountId: acct.id, threadKey: 'm1@teg.com' });
+    expect(r.body.match).toEqual({ accountId: acct.id, threadKey: 'm1@tidewater.example' });
   });
 
   it('GET /api/mail/resolve-thread falls back to normalized subject + a 3-day window + a shared participant', async () => {
-    const q = { threadKey: 'not-mine@elsewhere', subject: 'Re: Re: CO 4', firstDate: '2026-08-11T00:00:00.000Z', participants: 'GC@teg.com, someone@else.com' };
+    const q = { threadKey: 'not-mine@elsewhere', subject: 'Re: Re: CO 4', firstDate: '2026-08-11T00:00:00.000Z', participants: 'GC@tidewater.example, someone@else.com' };
     const hit = await request(app).get('/api/mail/resolve-thread').query(q);
-    expect(hit.body.match).toEqual({ accountId: acct.id, threadKey: 'm1@teg.com' });
+    expect(hit.body.match).toEqual({ accountId: acct.id, threadKey: 'm1@tidewater.example' });
 
     const wrongSubject = await request(app).get('/api/mail/resolve-thread').query({ ...q, subject: 'CO 5' });
     expect(wrongSubject.body.match).toBeNull();
@@ -1082,19 +1082,19 @@ describe('mail routes', () => {
 
   it('GET /api/mail/resolve-thread never reaches into another user\'s mailbox', async () => {
     seedOtherUsersMailbox();
-    const exact = await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'z1@teg.com' });
+    const exact = await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'z1@tidewater.example' });
     expect(exact.body.match).toBeNull();
     const fallback = await request(app).get('/api/mail/resolve-thread')
-      .query({ threadKey: 'z1@teg.com', subject: 'Secret job', firstDate: '2026-08-10T10:00:00.000Z', participants: 'gc@teg.com' });
+      .query({ threadKey: 'z1@tidewater.example', subject: 'Secret job', firstDate: '2026-08-10T10:00:00.000Z', participants: 'gc@tidewater.example' });
     expect(fallback.body.match).toBeNull();
     // ...and the owner of that mailbox does find it.
     currentUser = { id: 'u2', role: 'user' };
-    expect((await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'z1@teg.com' })).body.match)
-      .toMatchObject({ threadKey: 'z1@teg.com' });
+    expect((await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'z1@tidewater.example' })).body.match)
+      .toMatchObject({ threadKey: 'z1@tidewater.example' });
   });
 
   it('GET /api/mail/resolve-thread caps subject length and participant count', async () => {
-    const base = { subject: 'CO 4', firstDate: '2026-08-11T00:00:00.000Z', participants: 'gc@teg.com' };
+    const base = { subject: 'CO 4', firstDate: '2026-08-11T00:00:00.000Z', participants: 'gc@tidewater.example' };
     const longSubject = await request(app).get('/api/mail/resolve-thread').query({ ...base, subject: 'x'.repeat(501) });
     expect(longSubject.status).toBe(400);
     const manyParticipants = await request(app).get('/api/mail/resolve-thread')
@@ -1218,7 +1218,7 @@ describe('mail routes', () => {
     const before = acct.indexedSince;
     expect((await request(app).post(`/api/mail/accounts/${acct.id}/load-older`).send({ months: 6 })).status).toBe(200);
     expect(accounts.getAccountAny(db, acct.id)!.indexedSince < before).toBe(true);
-    expect((await request(app).patch(`/api/mail/accounts/${acct.id}`).send({ signatureHtml: '<p>sig</p>', displayName: 'Nate' })).status).toBe(200);
+    expect((await request(app).patch(`/api/mail/accounts/${acct.id}`).send({ signatureHtml: '<p>sig</p>', displayName: 'Nick' })).status).toBe(200);
     expect(accounts.getAccountAny(db, acct.id)!.signatureHtml).toBe('<p>sig</p>');
     expect((await request(app).delete(`/api/mail/accounts/${acct.id}`)).status).toBe(200);
     expect(accounts.getAccountAny(db, acct.id)).toBeNull();
@@ -1326,15 +1326,15 @@ describe('mail routes', () => {
   it('callback exchanges the code, creates the account and starts the worker', async () => {
     const state = signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v1' });
     const seen: Array<{ provider: string; code: string; verifier: string }> = [];
-    oauthStub = async (provider, _env, _url, code, verifier) => { seen.push({ provider, code, verifier }); return { refreshToken: 'RT', accessToken: 'AT', email: 'New@BB.com', name: 'Nate' }; };
+    oauthStub = async (provider, _env, _url, code, verifier) => { seen.push({ provider, code, verifier }); return { refreshToken: 'RT', accessToken: 'AT', email: 'New@Birchwood.example', name: 'Nick' }; };
     const startSpy = vi.spyOn(ctx.scheduler!, 'startAccount');
     const r = await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c1', state });
     expect(r.status).toBe(302);
-    const created = accounts.listAccounts(db, 'u1').find(a => a.emailAddress === 'new@bb.com')!;
+    const created = accounts.listAccounts(db, 'u1').find(a => a.emailAddress === 'new@birchwood.example')!;
     expect(created).toBeTruthy();
     expect(created.provider).toBe('google');
     expect(created.status).toBe('ok');
-    expect(created.displayName).toBe('Nate');
+    expect(created.displayName).toBe('Nick');
     expect(accounts.readAuth(db, crypto, created.id)).toEqual({ refreshToken: 'RT' });
     expect(r.headers.location).toBe(`/settings?tab=mail&connected=${created.id}`);
     // code + verifier reached the exchange; the refresh token never reaches the browser.
@@ -1347,14 +1347,14 @@ describe('mail routes', () => {
   it('a second callback for the same address reconnects instead of duplicating', async () => {
     const state = () => signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v' });
     await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c1', state: state() });
-    const first = accounts.listAccounts(db, 'u1').find(a => a.emailAddress === 'oauth@bb.com')!;
+    const first = accounts.listAccounts(db, 'u1').find(a => a.emailAddress === 'oauth@birchwood.example')!;
     accounts.updateAccount(db, first.id, { status: 'auth_error', lastError: 'expired' });
     const dropSpy = vi.spyOn(ctx.scheduler!, 'dropProvider');
     // Same mailbox, different casing from the provider — still one account.
-    oauthStub = async () => ({ refreshToken: 'RT2', accessToken: 'AT', email: 'OAuth@BB.com', name: 'OAuth Nate' });
+    oauthStub = async () => ({ refreshToken: 'RT2', accessToken: 'AT', email: 'OAuth@Birchwood.example', name: 'OAuth Nick' });
     const r = await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c2', state: state() });
     expect(r.headers.location).toBe(`/settings?tab=mail&connected=${first.id}`);
-    expect(accounts.listAccounts(db, 'u1').filter(a => a.emailAddress === 'oauth@bb.com')).toHaveLength(1);
+    expect(accounts.listAccounts(db, 'u1').filter(a => a.emailAddress === 'oauth@birchwood.example')).toHaveLength(1);
     const after = accounts.getAccountAny(db, first.id)!;
     expect(after.status).toBe('ok');
     expect(after.lastError).toBeNull();
@@ -1366,13 +1366,13 @@ describe('mail routes', () => {
   it('reconnecting a running account rebuilds its provider on the NEW refresh token', async () => {
     const state = () => signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v' });
     await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c1', state: state() });
-    const a = accounts.listAccounts(db, 'u1').find(x => x.emailAddress === 'oauth@bb.com')!;
+    const a = accounts.listAccounts(db, 'u1').find(x => x.emailAddress === 'oauth@birchwood.example')!;
     // The worker is live, and it captured its provider (holding RT) when it started.
     expect(ctx.scheduler!.isRunning(a.id)).toBe(true);
     const stopSpy = vi.spyOn(ctx.scheduler!, 'stopAccount');
     const factorySpy = vi.spyOn(ctx, 'providerFactory');
 
-    oauthStub = async () => ({ refreshToken: 'RT2', accessToken: 'AT', email: 'oauth@bb.com', name: 'OAuth Nate' });
+    oauthStub = async () => ({ refreshToken: 'RT2', accessToken: 'AT', email: 'oauth@birchwood.example', name: 'OAuth Nick' });
     await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c2', state: state() });
 
     expect(accounts.readAuth(db, crypto, a.id)).toEqual({ refreshToken: 'RT2' });
@@ -1390,8 +1390,8 @@ describe('mail routes', () => {
   it('another user connecting the same address gets their own account', async () => {
     await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c', state: signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v' }) });
     await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c', state: signState(JWT_SECRET, { userId: 'u2', provider: 'google', verifier: 'v' }) });
-    expect(accounts.listAccounts(db, 'u1').filter(a => a.emailAddress === 'oauth@bb.com')).toHaveLength(1);
-    expect(accounts.listAccounts(db, 'u2').filter(a => a.emailAddress === 'oauth@bb.com')).toHaveLength(1);
+    expect(accounts.listAccounts(db, 'u1').filter(a => a.emailAddress === 'oauth@birchwood.example')).toHaveLength(1);
+    expect(accounts.listAccounts(db, 'u2').filter(a => a.emailAddress === 'oauth@birchwood.example')).toHaveLength(1);
   });
 
   it('callback redirects with a safe error and creates nothing when anything is wrong', async () => {
@@ -1545,19 +1545,19 @@ describe('POST /api/mail/google/webhook', () => {
     accounts.createAccount(db, crypto, { userId, provider: 'google', emailAddress: email, auth: { refreshToken: 'r' } });
 
   it('pokes every google account holding the pushed address, whatever its case', async () => {
-    const a = gmailAccount('Nate@BigBear.com');
-    const b = gmailAccount('nate@bigbear.com', 'u2');
+    const a = gmailAccount('Nick@Birchwood.example');
+    const b = gmailAccount('nick@birchwood.example', 'u2');
     const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
-    const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'NATE@bigbear.com', historyId: 42 }));
+    const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'NICK@birchwood.example', historyId: 42 }));
     expect(r.status).toBe(204);
     expect(new Set(poke.mock.calls.map(c => c[0]))).toEqual(new Set([a.id, b.id]));
     poke.mockRestore();
   });
 
   it('refuses a missing or wrong token with 403 and does not act on the body', async () => {
-    gmailAccount('nate@bigbear.com');
+    gmailAccount('nick@birchwood.example');
     const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
-    const body = push({ emailAddress: 'nate@bigbear.com' });
+    const body = push({ emailAddress: 'nick@birchwood.example' });
     expect((await request(app).post(GOOGLE_WEBHOOK_PATH).send(body)).status).toBe(403);
     expect((await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: 'forged' }).send(body)).status).toBe(403);
     // A token of the right length must fail too — the compare is on content.
@@ -1581,7 +1581,7 @@ describe('POST /api/mail/google/webhook', () => {
   });
 
   it('acks an undecodable push instead of making Pub/Sub redeliver it', async () => {
-    gmailAccount('nate@bigbear.com');
+    gmailAccount('nick@birchwood.example');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
     const post = (body: unknown) => request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(body as object);
@@ -1594,7 +1594,7 @@ describe('POST /api/mail/google/webhook', () => {
   });
 
   it('acks an address no account holds', async () => {
-    gmailAccount('nate@bigbear.com');
+    gmailAccount('nick@birchwood.example');
     const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
     const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'stranger@elsewhere.com' }));
     expect(r.status).toBe(204);
@@ -1605,31 +1605,31 @@ describe('POST /api/mail/google/webhook', () => {
   // ── open to the internet, same hardening as the Graph webhook ──
 
   it('rejects an oversized body with 413 before the token is even consulted', async () => {
-    gmailAccount('nate@bigbear.com');
+    gmailAccount('nick@birchwood.example');
     const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
     const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: token() })
-      .send(push({ emailAddress: 'nate@bigbear.com', pad: 'x'.repeat(WEBHOOK_MAX_BODY_BYTES) }));
+      .send(push({ emailAddress: 'nick@birchwood.example', pad: 'x'.repeat(WEBHOOK_MAX_BODY_BYTES) }));
     expect(r.status).toBe(413);
     expect(poke).not.toHaveBeenCalled();
     poke.mockRestore();
   });
 
   it('parses its own body, so the cap does not depend on the app-level parser', async () => {
-    const a = gmailAccount('nate@bigbear.com');
+    const a = gmailAccount('nick@birchwood.example');
     const bare = altApp({}, { json: false });
     const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
-    const r = await request(bare).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'nate@bigbear.com' }));
+    const r = await request(bare).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'nick@birchwood.example' }));
     expect(r.status).toBe(204);
     expect(poke).toHaveBeenCalledWith(a.id);
     poke.mockRestore();
   });
 
   it('runs its own rate limiter before the handler', async () => {
-    gmailAccount('nate@bigbear.com');
+    gmailAccount('nick@birchwood.example');
     let calls = 0;
     const limited = altApp({ googleWebhookRateLimit: (_req, res) => { calls++; res.status(429).end(); } });
     const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
-    const r = await request(limited).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'nate@bigbear.com' }));
+    const r = await request(limited).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'nick@birchwood.example' }));
     expect(r.status).toBe(429);
     expect(calls).toBe(1);
     expect(poke).not.toHaveBeenCalled();
@@ -1637,10 +1637,10 @@ describe('POST /api/mail/google/webhook', () => {
   });
 
   it('throttles at the same documented ceiling as the Graph webhook', async () => {
-    gmailAccount('nate@bigbear.com');
+    gmailAccount('nick@birchwood.example');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const limited = altApp({ googleWebhookRateLimit: createWebhookRateLimit(2, 'Pub/Sub') });
-    const post = () => request(limited).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'nate@bigbear.com' }));
+    const post = () => request(limited).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'nick@birchwood.example' }));
     expect((await post()).status).toBe(204);
     expect((await post()).status).toBe(204);
     expect((await post()).status).toBe(429);
@@ -1669,7 +1669,7 @@ describe('Gmail watch teardown on delete / disable', () => {
   // the app has stopped syncing. Best effort throughout: the account operation
   // must succeed whatever Gmail says.
   const flush = () => new Promise(r => setTimeout(r, 0));
-  const watched = (email = 'nate@bigbear.com', userId = 'u1') => {
+  const watched = (email = 'nick@birchwood.example', userId = 'u1') => {
     const g = accounts.createAccount(db, crypto, { userId, provider: 'google', emailAddress: email, auth: { refreshToken: 'r' } });
     accounts.updateAccount(db, g.id, { syncState: JSON.stringify({ historyId: '100', watchExpiration: Date.now() + 3 * 86400_000 }) });
     const p = getFakeProvider(g.id) as FakeMailProvider & GmailWatchApi;
@@ -1709,8 +1709,8 @@ describe('Gmail watch teardown on delete / disable', () => {
   it('does not cancel a shared mailbox\'s watch when a sibling account remains', async () => {
     // users/me/stop is mailbox-scoped, and the webhook pokes every account on
     // an address on purpose. Deleting one must not take the other's push down.
-    const { g: a, p } = watched('shared@bigbear.com');
-    const { g: b } = watched('Shared@bigbear.com');
+    const { g: a, p } = watched('shared@birchwood.example');
+    const { g: b } = watched('Shared@birchwood.example');
     expect((await request(app).delete(`/api/mail/accounts/${a.id}`)).status).toBe(200);
     await flush();
     expect(p.stopWatch).not.toHaveBeenCalled();
@@ -1753,8 +1753,8 @@ describe('mail _test fixture routes', () => {
     const seedRes = await request(fakeApp).post('/api/mail/_test/seed').send({
       emailAddress: 'inbox@e2e.test',
       threads: [
-        { subject: 'RFI 12', from: { addr: 'gc@teg.com', name: 'GC' }, messages: [{ text: 'first message' }] },
-        { subject: 'Change order', from: { addr: 'gc@teg.com', name: 'GC' }, messages: [{ text: 'co message' }] },
+        { subject: 'RFI 12', from: { addr: 'gc@tidewater.example', name: 'GC' }, messages: [{ text: 'first message' }] },
+        { subject: 'Change order', from: { addr: 'gc@tidewater.example', name: 'GC' }, messages: [{ text: 'co message' }] },
       ],
     });
     expect(seedRes.status).toBe(200);
@@ -1772,11 +1772,11 @@ describe('mail _test fixture routes', () => {
     const fakeApp = altApp();
     const first = await request(fakeApp).post('/api/mail/_test/seed').send({
       emailAddress: 'reuse@e2e.test',
-      threads: [{ subject: 'A', from: { addr: 'gc@teg.com' }, messages: [{ text: 'hi' }] }],
+      threads: [{ subject: 'A', from: { addr: 'gc@tidewater.example' }, messages: [{ text: 'hi' }] }],
     });
     const second = await request(fakeApp).post('/api/mail/_test/seed').send({
       emailAddress: 'reuse@e2e.test',
-      threads: [{ subject: 'B', from: { addr: 'gc@teg.com' }, messages: [{ text: 'hi again' }] }],
+      threads: [{ subject: 'B', from: { addr: 'gc@tidewater.example' }, messages: [{ text: 'hi again' }] }],
     });
     expect(second.body.accountId).toBe(first.body.accountId);
   });
@@ -1786,11 +1786,11 @@ describe('mail _test fixture routes', () => {
     const fakeApp = altApp();
     const seedRes = await request(fakeApp).post('/api/mail/_test/seed').send({
       emailAddress: 'inject@e2e.test',
-      threads: [{ subject: 'RFI 1', from: { addr: 'gc@teg.com', name: 'GC' }, messages: [{ text: 'root message' }] }],
+      threads: [{ subject: 'RFI 1', from: { addr: 'gc@tidewater.example', name: 'GC' }, messages: [{ text: 'root message' }] }],
     });
     const { accountId, threadKeys } = seedRes.body;
     const injectRes = await request(fakeApp).post('/api/mail/_test/inject').send({
-      accountId, threadKey: threadKeys[0], from: { addr: 'gc@teg.com', name: 'GC' }, text: 'here is my reply',
+      accountId, threadKey: threadKeys[0], from: { addr: 'gc@tidewater.example', name: 'GC' }, text: 'here is my reply',
     });
     expect(injectRes.status).toBe(200);
     expect(injectRes.body).toEqual({ ok: true });
@@ -1807,8 +1807,8 @@ describe('mail _test fixture routes', () => {
     const seedRes = await request(fakeApp).post('/api/mail/_test/seed').send({
       emailAddress: 'sanity@e2e.test',
       threads: [
-        { subject: 'Thread one', from: { addr: 'gc@teg.com', name: 'GC' }, messages: [{ text: 'thread one root' }] },
-        { subject: 'Thread two', from: { addr: 'owner@teg.com', name: 'Owner' }, messages: [{ text: 'thread two root' }] },
+        { subject: 'Thread one', from: { addr: 'gc@tidewater.example', name: 'GC' }, messages: [{ text: 'thread one root' }] },
+        { subject: 'Thread two', from: { addr: 'owner@tidewater.example', name: 'Owner' }, messages: [{ text: 'thread two root' }] },
       ],
     });
     expect(seedRes.status).toBe(200);
@@ -1816,7 +1816,7 @@ describe('mail _test fixture routes', () => {
     expect(threadKeys).toHaveLength(2);
 
     const injectRes = await request(fakeApp).post('/api/mail/_test/inject').send({
-      accountId, threadKey: threadKeys[0], from: { addr: 'gc@teg.com', name: 'GC' }, subject: 'Re: Thread one', text: 'a reply on thread one',
+      accountId, threadKey: threadKeys[0], from: { addr: 'gc@tidewater.example', name: 'GC' }, subject: 'Re: Thread one', text: 'a reply on thread one',
     });
     expect(injectRes.status).toBe(200);
     await settle();
@@ -1825,7 +1825,7 @@ describe('mail _test fixture routes', () => {
     expect(touched.status).toBe(200);
     expect(touched.body.thread.messageCount).toBe(2);
     const last = touched.body.messages[touched.body.messages.length - 1];
-    expect(last.from.addr).toBe('gc@teg.com');
+    expect(last.from.addr).toBe('gc@tidewater.example');
     expect(last.from.addr).not.toBe('sanity@e2e.test');   // inbound: not from the account's own address
 
     // The other thread is untouched.

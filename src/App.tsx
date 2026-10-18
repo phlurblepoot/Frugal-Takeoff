@@ -82,7 +82,7 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
 };
 
 export default function App() {
-  const [appName, setAppName] = useState('Takeoff Pro');
+  const [appName, setAppName] = useState('FrugalOmnibuild');
   const [logoUrl, setLogoUrl] = useState('');
 
   useEffect(() => {

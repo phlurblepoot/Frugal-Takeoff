@@ -5,7 +5,7 @@ import { test, expect, seedProjectWithPage } from './fixtures/test';
 
 // Regression spec for FilePickerModal's row checkboxes
 // (src/components/FilePickerModal.tsx), driven through the proposal editor's
-// Attachments card because that is where Nathan hit it.
+// Attachments card because that is where the owner hit it.
 //
 // The bug this pins: DocumentHoverPreview registers a CAPTURE-phase window
 // `click` listener that hides the card. A checkbox's `checked` is toggled by

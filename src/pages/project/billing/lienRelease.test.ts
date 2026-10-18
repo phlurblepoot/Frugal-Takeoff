@@ -10,9 +10,9 @@ import { useTimeZone } from '../../../test/timeZone';
 const release = (over: Partial<LienRelease> = {}): LienRelease => ({
   id: 'lr1', projectId: 'p1', number: '3', paymentType: 'progress', conditional: false,
   sourceType: null, sourceId: null, supersedesId: null,
-  lienorName: 'Big Bear Plaster LLC', lienorEntityType: null, lienorState: null, customerName: 'Acme Builders', ownerName: 'Jane Owner',
+  lienorName: 'Birchwood Plaster LLC', lienorEntityType: null, lienorState: null, customerName: 'Acme Builders', ownerName: 'Jane Owner',
   propertyDescription: 'Lot 4, 12 Palm Way\nTampa, FL 33601', amountCents: 1234567,
-  throughDate: '2026-09-30', releaseDate: '2026-10-15', signerName: 'Nathan Smith', signerTitle: 'Owner',
+  throughDate: '2026-09-30', releaseDate: '2026-10-15', signerName: 'Noah Smith', signerTitle: 'Owner',
   conditionKind: null, checkNumber: null, checkMaker: null, checkBank: null, exceptions: null,
   signatureFileId: null, status: 'draft', version: 1, createdAt: 0, updatedAt: 0,
   ...over,
@@ -89,9 +89,9 @@ describe('notary acknowledgment, Fla. Stat. 695.25 (owner decision: every releas
     const n = lienReleaseNotary(release());
     expect(n.venue).toEqual(['STATE OF ______________________', 'COUNTY OF ______________________']);
     const text = segsText(n.text);
-    expect(text).toContain(`The foregoing instrument was acknowledged before me by means of ${NOTARY_BOX} physical presence or ${NOTARY_BOX} online notarization, this ______________________ (date) by Nathan Smith, Owner, of Big Bear Plaster LLC, a ______________________ (state or place of formation)`);
+    expect(text).toContain(`The foregoing instrument was acknowledged before me by means of ${NOTARY_BOX} physical presence or ${NOTARY_BOX} online notarization, this ______________________ (date) by Noah Smith, Owner, of Birchwood Plaster LLC, a ______________________ (state or place of formation)`);
     expect(text).toContain('(corporation or limited liability company), on behalf of the company, who is personally known to me or has produced ______________________ (type of identification) as identification.');
-    expect(n.text.filter(s => s.fill).map(s => s.text)).toEqual(['Nathan Smith, Owner', 'Big Bear Plaster LLC']);
+    expect(n.text.filter(s => s.fill).map(s => s.text)).toEqual(['Noah Smith, Owner', 'Birchwood Plaster LLC']);
     expect(n.captions).toEqual([
       '(Signature of person taking acknowledgment)', '(Name typed, printed or stamped)', '(Title or rank)', '(Serial number, if any)',
     ]);
@@ -99,8 +99,8 @@ describe('notary acknowledgment, Fla. Stat. 695.25 (owner decision: every releas
 
   it('prints "a <state> <entity type>" from the release, and keeps a blank only for an empty value', () => {
     const full = lienReleaseNotary(release({ lienorEntityType: 'llc', lienorState: 'Florida' }));
-    expect(segsText(full.text)).toContain('of Big Bear Plaster LLC, a Florida limited liability company, on behalf of the company');
-    expect(full.text.filter(s => s.fill).map(s => s.text)).toEqual(['Nathan Smith, Owner', 'Big Bear Plaster LLC', 'Florida', 'limited liability company']);
+    expect(segsText(full.text)).toContain('of Birchwood Plaster LLC, a Florida limited liability company, on behalf of the company');
+    expect(full.text.filter(s => s.fill).map(s => s.text)).toEqual(['Noah Smith, Owner', 'Birchwood Plaster LLC', 'Florida', 'limited liability company']);
     expect(segsText(lienReleaseNotary(release({ lienorEntityType: 'sole_proprietor', lienorState: 'Georgia' })).text)).toContain('a Georgia sole proprietorship, on');
     const noState = segsText(lienReleaseNotary(release({ lienorEntityType: 'corporation' })).text);
     expect(noState).toContain('a ______________________ (state or place of formation) corporation, on behalf');
@@ -110,7 +110,7 @@ describe('notary acknowledgment, Fla. Stat. 695.25 (owner decision: every releas
   });
 
   it('leaves the title out when the signer has none', () => {
-    expect(segsText(lienReleaseNotary(release({ signerTitle: null })).text)).toContain('(date) by Nathan Smith, of Big Bear');
+    expect(segsText(lienReleaseNotary(release({ signerTitle: null })).text)).toContain('(date) by Noah Smith, of Birchwood');
   });
 });
 
@@ -128,7 +128,7 @@ describe('formats and names', () => {
     expect(lienReleaseFileName(release({ paymentType: 'final' }))).toBe('LR-3 Unconditional Final Release.pdf');
     expect(lienReleaseReference(release(), 'Palm Way', 'Pay App #2')).toBe('Release LR-3 · Palm Way · Pay App #2');
     expect(lienReleaseReference(release(), 'Palm Way')).toBe('Release LR-3 · Palm Way');
-    expect(lienReleaseSignatureLines(release())).toEqual({ company: 'Big Bear Plaster LLC', by: 'By:', signer: 'Nathan Smith, Owner' });
+    expect(lienReleaseSignatureLines(release())).toEqual({ company: 'Birchwood Plaster LLC', by: 'By:', signer: 'Noah Smith, Owner' });
     expect(lienReleaseEmailDefaults({ paymentType: 'final', conditional: true }, 'Job')).toEqual({
       subject: 'Conditional Waiver and Release of Lien upon Final Payment — Job',
       body: 'Please find attached our conditional waiver and release of lien for Job.',
@@ -142,7 +142,7 @@ const pdfText = (bytes: Uint8Array): string[] =>
 const pageCount = (bytes: Uint8Array): number =>
   (Buffer.from(bytes).toString('latin1').match(/\/Type\s*\/Page\b(?!s)/g) ?? []).length;
 
-const letterhead = { brandRgb: [153, 203, 56] as [number, number, number], company: { name: 'Big Bear Plaster' } };
+const letterhead = { brandRgb: [153, 203, 56] as [number, number, number], company: { name: 'Birchwood Plaster' } };
 const build = (over: Partial<LienRelease> = {}, extra: Record<string, unknown> = {}) =>
   buildLienReleasePdf({ release: release(over), projectName: 'Palm Way Stucco', letterhead, ...extra });
 
@@ -159,9 +159,9 @@ describe('buildLienReleasePdf', () => {
     expect(text.join(' ')).toContain('Jane Owner');
     expect(text.join(' ')).toContain('Lot 4, 12 Palm Way');
     expect(text.join(' ')).toContain('Tampa, FL 33601');
-    expect(text.join(' ')).toContain('Big Bear Plaster LLC');
+    expect(text.join(' ')).toContain('Birchwood Plaster LLC');
     expect(text).toContain('By:');
-    expect(text.join(' ')).toContain('Nathan Smith, Owner');
+    expect(text.join(' ')).toContain('Noah Smith, Owner');
     expect(text.join(' ')).toContain('STATE OF ______________________');
     expect(text.join(' ')).toContain('acknowledged before me by means of [\u00a0\u00a0] physical presence');
     expect(text).toContain('(Signature of person taking acknowledgment)');
@@ -197,7 +197,7 @@ describe('buildLienReleasePdf', () => {
   });
 
   it('fits every variant, notary block included, on one page with typical content', () => {
-    const lh = { brandRgb: [153, 203, 56] as [number, number, number], company: { name: 'Big Bear Plaster', address: '100 Main St, Tampa, FL 33601', phone: '813-555-0100', email: 'office@bigbear.example', website: 'bigbear.example' } };
+    const lh = { brandRgb: [153, 203, 56] as [number, number, number], company: { name: 'Birchwood Plaster', address: '100 Main St, Tampa, FL 33601', phone: '813-555-0100', email: 'office@birchwood.example', website: 'birchwood.example' } };
     for (const paymentType of ['progress', 'final'] as const) {
       for (const conditional of [false, true]) {
         for (const conditionKind of conditional ? ['funds', 'check'] as const : [null]) {
@@ -215,7 +215,7 @@ describe('buildLienReleasePdf', () => {
     expect(pageCount(bytes)).toBeGreaterThanOrEqual(2);
     // The notary block is never split from its heading: it lands whole on the last page.
     const text = pdfText(bytes);
-    expect(text.filter(t => t === 'Big Bear Plaster').length).toBe(pageCount(bytes)); // letterhead on each page
+    expect(text.filter(t => t === 'Birchwood Plaster').length).toBe(pageCount(bytes)); // letterhead on each page
     expect(text.join(' ')).toContain('Parcel 40: lot 40, block B');
     expect(text).toContain('(Title or rank)');
   });

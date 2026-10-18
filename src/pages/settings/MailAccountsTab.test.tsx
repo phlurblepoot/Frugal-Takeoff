@@ -50,7 +50,7 @@ vi.mock('../mail/MailSetupGuide', () => ({ MailSetupGuide: () => <div data-testi
 import { MailAccountsTab, lastErrorTone } from './MailAccountsTab';
 
 const acct = (over: Partial<MailAccount> = {}): MailAccount => ({
-  id: 'a1', provider: 'imap', emailAddress: 'nathan@bigbearplaster.com', displayName: 'Nathan',
+  id: 'a1', provider: 'imap', emailAddress: 'noah@birchwoodplaster.example', displayName: 'Noah',
   signatureHtml: null, isDefault: 1, status: 'ok', lastSyncAt: null, lastError: null,
   indexedSince: '2026-02-01T00:00:00.000Z', unreadCount: 0, ...over,
 });
@@ -76,10 +76,10 @@ describe('MailAccountsTab', () => {
   it('renders a card per account with its address, provider and status pill', async () => {
     h.accounts.mockResolvedValue([
       acct(),
-      acct({ id: 'a2', provider: 'google', emailAddress: 'nate@gmail.com', isDefault: 0, status: 'syncing' }),
+      acct({ id: 'a2', provider: 'google', emailAddress: 'nick@gmail.com', isDefault: 0, status: 'syncing' }),
     ]);
     mount();
-    expect(within(await card('a1')).getByText('nathan@bigbearplaster.com')).toBeInTheDocument();
+    expect(within(await card('a1')).getByText('noah@birchwoodplaster.example')).toBeInTheDocument();
     expect(within(await card('a1')).getByText('Connected')).toBeInTheDocument();
     expect(within(await card('a2')).getByText('Syncing')).toBeInTheDocument();
     expect(within(await card('a2')).getByText('Google')).toBeInTheDocument();
@@ -180,7 +180,7 @@ describe('MailAccountsTab', () => {
 
     await waitFor(() => expect(screen.queryByLabelText('IMAP host')).not.toBeInTheDocument());
     fireEvent.click(within(await card()).getByRole('button', { name: 'Edit' }));
-    expect(await screen.findByLabelText('Email address')).toHaveValue('nathan@bigbearplaster.com');
+    expect(await screen.findByLabelText('Email address')).toHaveValue('noah@birchwoodplaster.example');
   });
 
   it('keeps the Always CC card working', async () => {
@@ -209,7 +209,7 @@ describe('MailAccountsTab', () => {
     await waitFor(() => expect(screen.getByTestId('setup-guide')).toBeInTheDocument());
   });
   // A mailbox import being throttled by Google is a wait the server is already
-  // handling, not something the user has to fix — a red error there sent Nathan
+  // handling, not something the user has to fix — a red error there sent Noah
   // looking for a broken connection that was working fine.
   it('shows a throttled import in amber and a real fault in red', async () => {
     h.accounts.mockResolvedValue([

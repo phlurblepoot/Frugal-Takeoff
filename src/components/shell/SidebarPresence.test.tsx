@@ -42,7 +42,7 @@ const renderIt = () => render(
 describe('SidebarPresence', () => {
   beforeEach(() => {
     collab.sessions = [
-      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Nathan' }),
+      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Noah' }),
       mkSession({ sessionId: 's2', userId: 'u2', name: 'Sarah' }),
     ];
     collab.setFollowedSessionId.mockClear();
@@ -64,7 +64,7 @@ describe('SidebarPresence', () => {
   });
 
   it('renders nothing when you are the only session', () => {
-    collab.sessions = [mkSession({ sessionId: 'me', name: 'Nathan' })];
+    collab.sessions = [mkSession({ sessionId: 'me', name: 'Noah' })];
     renderIt();
     // Still shows the stack (1 online) — presence is a permanent fixture:
     expect(screen.getByTestId('sidebar-presence')).toHaveTextContent('1 online');
@@ -72,8 +72,8 @@ describe('SidebarPresence', () => {
 
   it('merges a second tab of my own account into the self group instead of dropping it', () => {
     collab.sessions = [
-      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Nathan', device: 'Windows · Chrome' }),
-      mkSession({ sessionId: 'me2', userId: 'me-u', name: 'Nathan', device: 'iPad · Safari' }),
+      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Noah', device: 'Windows · Chrome' }),
+      mkSession({ sessionId: 'me2', userId: 'me-u', name: 'Noah', device: 'iPad · Safari' }),
     ];
     renderIt();
     // One user online (both sessions are mine), not two:
@@ -93,7 +93,7 @@ describe('SidebarPresence', () => {
 
   it('single-session other user: the row is a jump button that navigates to their path and closes the popover', async () => {
     collab.sessions = [
-      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Nathan' }),
+      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Noah' }),
       mkSession({ sessionId: 's2', userId: 'u2', name: 'Sarah', location: { path: '/project/p1/billing', projectId: 'p1', section: 'billing' } }),
     ];
     renderIt();
@@ -113,7 +113,7 @@ describe('SidebarPresence', () => {
 
   it('single-session other user: the user-level Follow checkbox does not trigger the jump', () => {
     collab.sessions = [
-      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Nathan' }),
+      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Noah' }),
       mkSession({ sessionId: 's2', userId: 'u2', name: 'Sarah', location: { path: '/project/p1/billing', projectId: 'p1' } }),
     ];
     renderIt();
@@ -126,7 +126,7 @@ describe('SidebarPresence', () => {
 
   it('two-session other user: each session line jumps to ITS path and has its own Follow', async () => {
     collab.sessions = [
-      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Nathan' }),
+      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Noah' }),
       mkSession({ sessionId: 's2', userId: 'u2', name: 'Sarah', device: 'Windows · Chrome', location: { path: '/project/p1/takeoff', projectId: 'p1', section: 'takeoff' } }),
       mkSession({ sessionId: 's3', userId: 'u2', name: 'Sarah', device: 'iPad · Safari', location: { path: '/project/p1/issues', projectId: 'p1', section: 'issues' } }),
     ];
@@ -157,7 +157,7 @@ describe('SidebarPresence', () => {
 
   it('two-session other user: checked state tracks followedSessionId per session', () => {
     collab.sessions = [
-      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Nathan' }),
+      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Noah' }),
       mkSession({ sessionId: 's2', userId: 'u2', name: 'Sarah', device: 'Windows · Chrome' }),
       mkSession({ sessionId: 's3', userId: 'u2', name: 'Sarah', device: 'iPad · Safari' }),
     ];
@@ -177,8 +177,8 @@ describe('SidebarPresence', () => {
 
   it('own sessions: other tabs are jumpable, this tab is not, and there is never a Follow', () => {
     collab.sessions = [
-      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Nathan', device: 'Windows · Chrome', location: { path: '/dashboard' } }),
-      mkSession({ sessionId: 'me2', userId: 'me-u', name: 'Nathan', device: 'iPad · Safari', location: { path: '/project/p1/punch', projectId: 'p1', section: 'punch' } }),
+      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Noah', device: 'Windows · Chrome', location: { path: '/dashboard' } }),
+      mkSession({ sessionId: 'me2', userId: 'me-u', name: 'Noah', device: 'iPad · Safari', location: { path: '/project/p1/punch', projectId: 'p1', section: 'punch' } }),
     ];
     renderIt();
     fireEvent.click(screen.getByTestId('sidebar-presence'));
@@ -194,7 +194,7 @@ describe('SidebarPresence', () => {
 
   it('a session with no known path is not a jump target', () => {
     collab.sessions = [
-      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Nathan' }),
+      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Noah' }),
       mkSession({ sessionId: 's2', userId: 'u2', name: 'Sarah', location: null }),
     ];
     renderIt();

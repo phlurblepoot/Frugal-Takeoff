@@ -25,12 +25,12 @@ vi.mock('../../components/Toast', async orig => ({
 import { ImapAccountForm } from './ImapAccountForm';
 
 const ACCOUNT: MailAccount = {
-  id: 'a1', provider: 'imap', emailAddress: 'nathan@bigbearplaster.com', displayName: 'Nathan',
+  id: 'a1', provider: 'imap', emailAddress: 'noah@birchwoodplaster.example', displayName: 'Noah',
   signatureHtml: null, isDefault: 1, status: 'needs_review', lastSyncAt: null, lastError: null,
   indexedSince: '2026-02-01T00:00:00.000Z', unreadCount: 0,
   imapAuth: {
-    imapHost: 'imap.bigbearplaster.com', imapPort: 993, imapSecure: true,
-    smtpHost: 'smtp.bigbearplaster.com', smtpPort: 587, smtpSecure: false, username: 'nathan-imap',
+    imapHost: 'imap.birchwoodplaster.example', imapPort: 993, imapSecure: true,
+    smtpHost: 'smtp.birchwoodplaster.example', smtpPort: 587, smtpSecure: false, username: 'noah-imap',
   },
 };
 
@@ -48,10 +48,10 @@ const mount = (existing?: MailAccount) => {
 };
 
 const fill = () => {
-  fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'Nathan@BigBear.com' } });
-  fireEvent.change(screen.getByLabelText('IMAP host'), { target: { value: 'imap.bigbear.com' } });
-  fireEvent.change(screen.getByLabelText('SMTP host'), { target: { value: 'smtp.bigbear.com' } });
-  fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'nathan' } });
+  fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'Noah@Birchwood.example' } });
+  fireEvent.change(screen.getByLabelText('IMAP host'), { target: { value: 'imap.birchwood.example' } });
+  fireEvent.change(screen.getByLabelText('SMTP host'), { target: { value: 'smtp.birchwood.example' } });
+  fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'noah' } });
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'app-password' } });
 };
 
@@ -78,15 +78,15 @@ describe('ImapAccountForm', () => {
 
     await waitFor(() => expect(h.testAccount).toHaveBeenCalledWith('new1'));
     expect(h.createImapAccount).toHaveBeenCalledWith({
-      emailAddress: 'Nathan@BigBear.com',
+      emailAddress: 'Noah@Birchwood.example',
       displayName: '',
-      imapHost: 'imap.bigbear.com',
+      imapHost: 'imap.birchwood.example',
       imapPort: 993,
       imapSecure: true,
-      smtpHost: 'smtp.bigbear.com',
+      smtpHost: 'smtp.birchwood.example',
       smtpPort: 587,
       smtpSecure: false,
-      username: 'nathan',
+      username: 'noah',
       password: 'app-password',
     });
     expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: 'new1' }));
@@ -144,23 +144,23 @@ describe('ImapAccountForm', () => {
     h.testAccount.mockResolvedValue(undefined);
     mount(ACCOUNT);
 
-    expect(screen.getByLabelText('Email address')).toHaveValue('nathan@bigbearplaster.com');
-    expect(screen.getByLabelText('Display name')).toHaveValue('Nathan');
-    expect(screen.getByLabelText('IMAP host')).toHaveValue('imap.bigbearplaster.com');
+    expect(screen.getByLabelText('Email address')).toHaveValue('noah@birchwoodplaster.example');
+    expect(screen.getByLabelText('Display name')).toHaveValue('Noah');
+    expect(screen.getByLabelText('IMAP host')).toHaveValue('imap.birchwoodplaster.example');
     expect(screen.getByLabelText('IMAP port')).toHaveValue(993);
     expect(screen.getByLabelText('IMAP uses SSL/TLS')).toBeChecked();
-    expect(screen.getByLabelText('SMTP host')).toHaveValue('smtp.bigbearplaster.com');
+    expect(screen.getByLabelText('SMTP host')).toHaveValue('smtp.birchwoodplaster.example');
     expect(screen.getByLabelText('SMTP port')).toHaveValue(587);
     expect(screen.getByLabelText('SMTP uses SSL/TLS (not STARTTLS)')).not.toBeChecked();
-    expect(screen.getByLabelText('Username')).toHaveValue('nathan-imap');
+    expect(screen.getByLabelText('Username')).toHaveValue('noah-imap');
     expect(screen.getByLabelText('Password')).toHaveValue('');
 
     save();
 
     await waitFor(() => expect(h.createImapAccount).toHaveBeenCalled());
     expect(h.createImapAccount).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'a1', imapHost: 'imap.bigbearplaster.com', smtpHost: 'smtp.bigbearplaster.com',
-      username: 'nathan-imap', password: '',
+      id: 'a1', imapHost: 'imap.birchwoodplaster.example', smtpHost: 'smtp.birchwoodplaster.example',
+      username: 'noah-imap', password: '',
     }));
   });
 

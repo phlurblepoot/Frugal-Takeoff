@@ -58,7 +58,7 @@ const fakeFetch = (async (input: any, init: any = {}) => {
 }) as typeof fetch;
 
 const users: Record<string, any> = {
-  admin: { id: 'u-admin', username: 'nathan', role: 'admin' },
+  admin: { id: 'u-admin', username: 'noah', role: 'admin' },
   user: { id: 'u-user', username: 'crew', role: 'user' },
 };
 
@@ -152,7 +152,7 @@ describe('POST /api/onlyoffice/config/:fileId', () => {
       editorConfig: {
         mode: 'edit',
         callbackUrl: 'http://app:3000/api/onlyoffice/callback/doc1',
-        user: { id: 'u-admin', name: 'nathan' },
+        user: { id: 'u-admin', name: 'noah' },
         customization: { forcesave: true, uiTheme: 'default-dark' },
       },
     });
@@ -380,7 +380,7 @@ describe('callback: what Version History needs', () => {
   const start = async () => (await openConfig()).body.config.document.key as string;
   const session = () => db.prepare('SELECT * FROM editor_sessions WHERE fileId = ?').get('doc1') as any;
   const changes = () => db.prepare('SELECT * FROM editor_changes WHERE fileId = ? ORDER BY versionNumber').all('doc1') as any[];
-  const history = (created = '2026-09-26 10:00:00') => ({ changes: [{ created, user: { id: 'u-admin', name: 'nathan' } }], serverVersion: '9.4.0' });
+  const history = (created = '2026-09-26 10:00:00') => ({ changes: [{ created, user: { id: 'u-admin', name: 'noah' } }], serverVersion: '9.4.0' });
   const changesZip = (content = 'zip bytes') => {
     const url = `https://docs.example.com/cache/files/data/c${++saveCounter}/changes.zip`;
     dsFiles.set(url.replace('https://docs.example.com', 'http://onlyoffice'), Buffer.from(content));

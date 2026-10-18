@@ -90,10 +90,10 @@ describe('Dashboard page', () => {
   afterEach(() => localStorage.removeItem('user'));
 
   it('renders the greeting and the card grid with the default card titles, for an admin', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan', role: 'admin' }));
+    localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'noah', role: 'admin' }));
     mount();
 
-    expect(screen.getByText(/Welcome back, nathan/)).toBeInTheDocument();
+    expect(screen.getByText(/Welcome back, noah/)).toBeInTheDocument();
     expect(await screen.findByTestId('card-grid')).toBeInTheDocument();
 
     expect(await screen.findByText('⚡ Needs your attention')).toBeInTheDocument();
@@ -103,7 +103,7 @@ describe('Dashboard page', () => {
   });
 
   it('hides the Money pulse card for a non-admin', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan', role: 'user' }));
+    localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'noah', role: 'user' }));
     mount();
 
     await screen.findByTestId('card-grid');

@@ -88,6 +88,14 @@ describe('PushService', () => {
     expect(s.devices('u1')[0]).toMatchObject({ device: 'iPhone · Safari', lastUsedAt: expect.any(Number) });
   });
 
+  it('falls back to a neutral contact when none is configured', async () => {
+    const s = service();
+    s.subscribe('u1', browser().subscription, 'Phone');
+    await s.send('u1', { title: 't', body: 'b', link: '/', id: 'n1', unread: 1 });
+    const [, token] = /^vapid t=([^,]+), k=(.+)$/.exec(posted[0].headers.Authorization)!;
+    expect((jwt.decode(token) as { sub: string }).sub).toBe('mailto:admin@example.com');
+  });
+
   it('sends to each of that person’s devices only, and forgets ones the service no longer knows', async () => {
     const s = service();
     const [phone, laptop, gone, other] = [browser(), browser('https://web.push.apple.com/abc'), browser(), browser()];
@@ -169,11 +177,11 @@ describe('push routes', () => {
   });
 
   it('serves the manifest that makes the app installable, named from Settings', async () => {
-    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('appName', 'Frugal Takeoff')").run();
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('appName', 'FrugalOmnibuild')").run();
     const r = await request(app()).get('/manifest.webmanifest');
     expect(r.headers['content-type']).toMatch(/^application\/manifest\+json/);
-    expect(JSON.parse(r.text)).toMatchObject({ name: 'Frugal Takeoff', short_name: 'Frugal', display: 'standalone', start_url: '/dashboard' });
-    expect(webAppManifest('').name).toBe('Takeoff Pro');
+    expect(JSON.parse(r.text)).toMatchObject({ name: 'FrugalOmnibuild', short_name: 'Omnibuild', display: 'standalone', start_url: '/dashboard' });
+    expect(webAppManifest('').name).toBe('FrugalOmnibuild');
     for (const icon of webAppManifest('x').icons as { src: string }[]) {
       expect(fs.existsSync(path.join(__dirname, '..', 'public', icon.src))).toBe(true);
     }

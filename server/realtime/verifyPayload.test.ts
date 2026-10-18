@@ -3,11 +3,11 @@ import { normalizeTokenPayload } from './verifyPayload';
 
 describe('normalizeTokenPayload', () => {
   it('passes a valid payload through', () => {
-    expect(normalizeTokenPayload({ id: 'u1', username: 'nathan', role: 'admin', iat: 1, exp: 2 }))
-      .toEqual({ id: 'u1', username: 'nathan', role: 'admin' });
+    expect(normalizeTokenPayload({ id: 'u1', username: 'noah', role: 'admin', iat: 1, exp: 2 }))
+      .toEqual({ id: 'u1', username: 'noah', role: 'admin' });
   });
   it('rejects missing role (legacy token)', () => {
-    expect(normalizeTokenPayload({ id: 'u1', username: 'nathan' })).toBeNull();
+    expect(normalizeTokenPayload({ id: 'u1', username: 'noah' })).toBeNull();
   });
   it('rejects non-string id and empty strings', () => {
     expect(normalizeTokenPayload({ id: 5, username: 'n', role: 'admin' })).toBeNull();

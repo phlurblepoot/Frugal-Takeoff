@@ -442,7 +442,7 @@ describe('header and blank rows (spec 2026-09-11)', () => {
   });
 });
 
-// Nathan's PDF rules (2026-09-26): landscape, every column fitted to the page
+// The owner's PDF rules (2026-09-26): landscape, every column fitted to the page
 // width, the G702 on one page, the G703 over as many pages as it needs with
 // the change orders starting on a new page. "Make PDF" prints from these.
 // exceljs keeps manual page breaks on the sheet but leaves them out of its types.

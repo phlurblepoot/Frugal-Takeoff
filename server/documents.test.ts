@@ -398,7 +398,7 @@ describe('GET /api/documents — source label resolution', () => {
     const id = over.id ?? 'mm-1';
     db.prepare(`INSERT OR IGNORE INTO users (id, username, password, role) VALUES ('u1','u1','x','admin')`).run();
     db.prepare(`INSERT OR IGNORE INTO mail_accounts (id, userId, provider, emailAddress, authBlob, indexedSince, createdAt, updatedAt)
-      VALUES ('acct-1','u1','imap','pm@bigbearplaster.com','{}','2026-08-01','2026-08-01','2026-08-01')`).run();
+      VALUES ('acct-1','u1','imap','pm@birchwoodplaster.example','{}','2026-08-01','2026-08-01','2026-08-01')`).run();
     db.prepare(`INSERT INTO mail_messages (id, accountId, providerMessageId, threadKey, subject, date, createdAt, updatedAt)
       VALUES (?, 'acct-1', ?, 'thr-9', ?, '2026-08-28', '2026-08-28', '2026-08-28')`)
       .run(id, `p-${id}`, over.subject ?? 'RE: Corridor ceiling height');
@@ -589,7 +589,7 @@ describe('DELETE /api/files/:id', () => {
     const seedMessage = (id: string) => {
       db.prepare(`INSERT OR IGNORE INTO users (id, username, password, role) VALUES ('u1','u1','x','admin')`).run();
       db.prepare(`INSERT OR IGNORE INTO mail_accounts (id, userId, provider, emailAddress, authBlob, indexedSince, createdAt, updatedAt)
-        VALUES ('acct-1','u1','imap','pm@bigbearplaster.com','{}','2026-08-01','2026-08-01','2026-08-01')`).run();
+        VALUES ('acct-1','u1','imap','pm@birchwoodplaster.example','{}','2026-08-01','2026-08-01','2026-08-01')`).run();
       db.prepare(`INSERT INTO mail_messages (id, accountId, providerMessageId, threadKey, subject, date, createdAt, updatedAt)
         VALUES (?, 'acct-1', ?, 'thr-9', 'Attachments', '2026-08-28', '2026-08-28', '2026-08-28')`).run(id, `p-${id}`);
       return id;

@@ -11,7 +11,7 @@ vi.mock('../context/CollaborationContext', () => ({
 }));
 
 const sess = (over: Partial<SessionView>): SessionView => ({
-  sessionId: 's1', userId: 'u1', name: 'nathan', role: 'admin', color: '#3b82f6',
+  sessionId: 's1', userId: 'u1', name: 'noah', role: 'admin', color: '#3b82f6',
   device: 'Windows · Chrome', location: null, editing: null, cursor: null, lastActive: 1,
   ...over,
 });
@@ -51,7 +51,7 @@ describe('PageViewerDots', () => {
 
   it('excludes my own session even if it matches the page', () => {
     setup(
-      [sess({ sessionId: 'me', name: 'nathan', location: { path: '/x', pageId: 'page-1' } })],
+      [sess({ sessionId: 'me', name: 'noah', location: { path: '/x', pageId: 'page-1' } })],
       'me'
     );
     const { container } = render(<PageViewerDots pageId="page-1" />);

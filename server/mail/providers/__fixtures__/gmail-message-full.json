@@ -31,11 +31,11 @@
       },
       {
         "name": "References",
-        "value": "<root-1@bigbearplaster.com> <reply-2@teg.com>"
+        "value": "<root-1@birchwoodplaster.example> <reply-2@tidewater.example>"
       },
       {
         "name": "In-Reply-To",
-        "value": "<reply-2@teg.com>"
+        "value": "<reply-2@tidewater.example>"
       },
       {
         "name": "Message-ID",
@@ -47,15 +47,15 @@
       },
       {
         "name": "From",
-        "value": "Mike Ross <Mike@TEG.com>"
+        "value": "Mike Ross <Mike@Tidewater.example>"
       },
       {
         "name": "To",
-        "value": "\"Nathan\" <me@x>"
+        "value": "\"Noah\" <me@x>"
       },
       {
         "name": "Cc",
-        "value": "ap@teg.com, pm@teg.com"
+        "value": "ap@tidewater.example, pm@tidewater.example"
       },
       {
         "name": "Content-Type",

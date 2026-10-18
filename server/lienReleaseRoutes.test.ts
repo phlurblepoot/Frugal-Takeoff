@@ -20,7 +20,7 @@ const buildApp = (role: 'admin' | 'user') => {
   a.use(express.json());
   registerDataRoutes(a, {
     db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
-    authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role, username: 'nate' }; next(); },
+    authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role, username: 'nick' }; next(); },
     requireAdmin: (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' })),
     verifyToken: () => null,
     broadcastChange: (ev) => events.push(ev),
@@ -31,8 +31,8 @@ let app: express.Express;
 
 const body = (over: Record<string, unknown> = {}) => ({
   paymentType: 'progress', conditional: true,
-  lienorName: 'Big Bear Plaster', customerName: 'Acme', ownerName: 'Jane', propertyDescription: 'Lot 4',
-  amountCents: 50000, throughDate: '2026-09-30', releaseDate: '2026-10-15', signerName: 'Nathan', signerTitle: 'Owner',
+  lienorName: 'Birchwood Plaster', customerName: 'Acme', ownerName: 'Jane', propertyDescription: 'Lot 4',
+  amountCents: 50000, throughDate: '2026-09-30', releaseDate: '2026-10-15', signerName: 'Noah', signerTitle: 'Owner',
   ...over,
 });
 
@@ -121,7 +121,7 @@ describe('lien release routes', () => {
   it('serves prefill defaults from query parameters', async () => {
     const res = await request(app).get('/api/projects/p1/lien-releases/prefill?paymentType=final&conditional=0');
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ paymentType: 'final', conditional: false, throughDate: null, signerName: 'nate' });
+    expect(res.body).toMatchObject({ paymentType: 'final', conditional: false, throughDate: null, signerName: 'nick' });
     expect((await request(app).get('/api/projects/p1/lien-releases/prefill?paymentType=bogus')).status).toBe(400);
     expect((await request(app).get('/api/projects/nope/lien-releases/prefill')).status).toBe(404);
   });

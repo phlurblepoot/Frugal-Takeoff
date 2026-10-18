@@ -37,7 +37,7 @@ vi.mock('../../components/FilePickerModal', () => ({ FilePickerModal: () => null
 import { MailPage } from './MailPage';
 
 const ACCOUNT: MailAccount = {
-  id: 'a1', provider: 'imap', emailAddress: 'nathan@bigbearplaster.com', displayName: 'Nathan',
+  id: 'a1', provider: 'imap', emailAddress: 'noah@birchwoodplaster.example', displayName: 'Noah',
   signatureHtml: null, isDefault: 1, status: 'ok', lastSyncAt: null, lastError: null,
   indexedSince: '2026-02-01T00:00:00.000Z', unreadCount: 2,
 };
@@ -53,7 +53,7 @@ const THREAD: ThreadListRow = {
 };
 const msg = (over: Partial<MessageRow> = {}): MessageRow => ({
   id: 'm1', accountId: 'a1', threadKey: 'tk-1', messageIdHeader: null, inReplyTo: null, references: [],
-  from: { addr: 'bob@acme.com', name: 'Bob Smith' }, to: [{ addr: 'nathan@bigbearplaster.com' }], cc: [], bcc: [],
+  from: { addr: 'bob@acme.com', name: 'Bob Smith' }, to: [{ addr: 'noah@birchwoodplaster.example' }], cc: [], bcc: [],
   subject: 'Roof detail', snippet: 'first message', date: '2026-08-27T12:00:00.000Z',
   isRead: true, isStarred: false, isDraft: false, hasAttachments: false, attachments: [],
   sizeBytes: 10, folderIds: ['f-inbox'], sentFromApp: false, ...over,
@@ -154,7 +154,7 @@ describe('MailPage', () => {
   });
 
   it('waits for the new account\'s own folders before picking its inbox', async () => {
-    const a2: MailAccount = { ...ACCOUNT, id: 'a2', emailAddress: 'office@bigbearplaster.com', isDefault: 0 };
+    const a2: MailAccount = { ...ACCOUNT, id: 'a2', emailAddress: 'office@birchwoodplaster.example', isDefault: 0 };
     const a2Inbox: MailFolder = { ...FOLDERS[0], id: 'f2-inbox', accountId: 'a2' };
     h.accounts.mockResolvedValue([ACCOUNT, a2]);
     h.folders.mockImplementation(async (id: string) => (id === 'a1' ? FOLDERS : [a2Inbox]));
@@ -324,9 +324,9 @@ describe('MailPage', () => {
   describe('reply-discard confirm', () => {
     const THREAD2: ThreadListRow = {
       ...THREAD, threadKey: 'tk-2', subject: 'Stucco mock-up',
-      snippet: 'Approved, please proceed', participants: [{ addr: 'dana@teg.test', name: 'Dana Lee' }],
+      snippet: 'Approved, please proceed', participants: [{ addr: 'dana@tidewater.test', name: 'Dana Lee' }],
     };
-    const MESSAGES2: MessageRow[] = [msg({ id: 'm3', threadKey: 'tk-2', subject: 'Stucco mock-up', from: { addr: 'dana@teg.test', name: 'Dana Lee' } })];
+    const MESSAGES2: MessageRow[] = [msg({ id: 'm3', threadKey: 'tk-2', subject: 'Stucco mock-up', from: { addr: 'dana@tidewater.test', name: 'Dana Lee' } })];
 
     const startTyping = async (text = 'Sounds good, thanks!') => {
       fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));

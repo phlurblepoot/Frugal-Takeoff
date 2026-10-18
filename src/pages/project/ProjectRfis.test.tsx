@@ -174,8 +174,8 @@ describe('ProjectRfis — PDF status on rows', () => {
 
 describe('ProjectRfis — pending reply chip', () => {
   const PENDING = {
-    threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@teg.com',
-    from: { addr: 'gc@teg.com', name: 'Mike Ruiz' }, date: '2026-08-28T10:00:00.000Z',
+    threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@tidewater.example',
+    from: { addr: 'gc@tidewater.example', name: 'Mike Ruiz' }, date: '2026-08-28T10:00:00.000Z',
     text: 'Corridor is 9 ft.', attachments: [], receivedAt: '2026-08-28T10:00:05.000Z',
   };
 

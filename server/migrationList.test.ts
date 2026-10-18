@@ -950,27 +950,27 @@ describe('migration 31 mail-client', () => {
   });
   it('migrates smtp.* prefs into a sealed imap account and deletes the prefs', () => {
     const { db, dir } = setup();
-    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nick','x','admin')`).run();
     const ins = db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
     for (const [k, v] of Object.entries({ 'smtp.host': 'smtp.example.com', 'smtp.port': '465', 'smtp.secure': 'true',
-      'smtp.username': 'nate@example.com', 'smtp.password': 'hunter2', 'smtp.fromName': 'Nate', 'smtp.fromAddress': 'Nate@EXAMPLE.com', 'theme': 'dark' })) ins.run('u9', k, v);
+      'smtp.username': 'nick@example.com', 'smtp.password': 'hunter2', 'smtp.fromName': 'Nick', 'smtp.fromAddress': 'Nick@EXAMPLE.com', 'theme': 'dark' })) ins.run('u9', k, v);
     const crypto = loadMailCrypto(dir, {} as any);
     runMigrations(db, dir, migrations, { mailCrypto: crypto });
     const acct = db.prepare('SELECT * FROM mail_accounts WHERE userId = ?').get('u9') as any;
     expect(acct.provider).toBe('imap');
-    expect(acct.emailAddress).toBe('nate@example.com');
-    expect(acct.displayName).toBe('Nate');
+    expect(acct.emailAddress).toBe('nick@example.com');
+    expect(acct.displayName).toBe('Nick');
     expect(acct.status).toBe('needs_review');
     expect(acct.isDefault).toBe(1);
     expect(acct.authBlob).not.toContain('hunter2');
-    expect(crypto.open<any>(acct.authBlob)).toMatchObject({ smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecure: true, imapHost: 'smtp.example.com', imapPort: 993, imapSecure: true, username: 'nate@example.com', password: 'hunter2' });
+    expect(crypto.open<any>(acct.authBlob)).toMatchObject({ smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecure: true, imapHost: 'smtp.example.com', imapPort: 993, imapSecure: true, username: 'nick@example.com', password: 'hunter2' });
     const left = db.prepare("SELECT key FROM user_preferences WHERE userId='u9'").all().map((r: any) => r.key);
     expect(left).toEqual(['theme']);
     db.close();
   });
   it('warns and keeps the prefs for a half-filled smtp config with no address to send as', () => {
     const { db, dir } = setup();
-    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nick','x','admin')`).run();
     const ins = db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
     // host + password but no fromAddress and no username: nothing to use as the from-address.
     for (const [k, v] of Object.entries({ 'smtp.host': 'smtp.example.com', 'smtp.password': 'hunter2' })) ins.run('u9', k, v);
@@ -994,7 +994,7 @@ describe('migration 31 mail-client', () => {
   });
   it('skips the transform (keeps prefs) when no crypto is supplied', () => {
     const { db, dir } = setup();
-    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nick','x','admin')`).run();
     db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?,?,?)').run('u9', 'smtp.host', 'h');
     runMigrations(db, dir, migrations);
     expect(db.prepare('SELECT COUNT(*) c FROM mail_accounts').get()).toEqual({ c: 0 });
@@ -1283,11 +1283,11 @@ describe('migration 45: daily-report-crews', () => {
     const db = openDb(':memory:');
     runMigrations(db, dir, migrations.filter(m => m.version <= 44));
     expect(columnNames(db, 'daily_reports')).toEqual(V44_COLS);
-    db.prepare(`INSERT INTO projects (id, name, createdAt) VALUES ('p1', 'Dania', 1), ('p2', 'Hollywood', 1), ('p3', 'No reports', 1)`).run();
+    db.prepare(`INSERT INTO projects (id, name, createdAt) VALUES ('p1', 'Dunmore', 1), ('p2', 'Hartwell', 1), ('p3', 'No reports', 1)`).run();
     const ins = db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, startTime, jobName, contractorName, weatherSummary,
         temperature, weatherHourly, manCounts, fieldNotes, issues, createdBy, createdAt, updatedAt, version)
       VALUES (?, ?, ?, ?, 'Job', 'GC', 'Clear', '71–80°F', '[{"hour":"6 AM","tempF":71,"condition":"Clear"}]',
-        '[{"type":"Plasterer","count":4}]', 'notes', 'none', 'nathan', 5, 6, 3)`);
+        '[{"type":"Plasterer","count":4}]', 'notes', 'none', 'noah', 5, 6, 3)`);
     ins.run('d1', 'p1', '2026-08-25', '07:00');
     ins.run('d2', 'p1', '2026-08-26', null);
     ins.run('d3', 'p2', '2026-08-26', '06:00');
@@ -1388,7 +1388,7 @@ describe('migration 46: invoices-auto-paid', () => {
     const dir = tmpDir();
     const db = openDb(':memory:');
     runMigrations(db, dir, migrations.filter(m => m.version <= 45));
-    db.prepare(`INSERT INTO projects (id, name, createdAt) VALUES ('p1', 'Dania', 1)`).run();
+    db.prepare(`INSERT INTO projects (id, name, createdAt) VALUES ('p1', 'Dunmore', 1)`).run();
     const inv = db.prepare(`INSERT INTO invoices (id, projectId, number, status, version, createdAt, updatedAt) VALUES (?, 'p1', ?, ?, 3, 5, 6)`);
     const line = db.prepare(`INSERT INTO invoice_lines (id, invoiceId, description, qty, unitPrice, sortOrder) VALUES (?, ?, 'x', ?, ?, 0)`);
     const pay = db.prepare(`INSERT INTO payments (id, targetType, targetId, date, amount, createdAt) VALUES (?, ?, ?, 1, ?, 1)`);

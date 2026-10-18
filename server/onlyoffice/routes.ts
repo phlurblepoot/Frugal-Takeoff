@@ -63,7 +63,7 @@ export interface OnlyofficeStatus {
 }
 
 const SELFTEST_TTL_SECONDS = 120;
-const SELFTEST_BODY = 'Frugal Takeoff ONLYOFFICE connection test\n';
+const SELFTEST_BODY = 'FrugalOmnibuild ONLYOFFICE connection test\n';
 const selftestSubject = (id: string) => `selftest:${id}`;
 
 export function registerOnlyofficeRoutes(app: express.Express, deps: OnlyofficeRouteDeps): void {

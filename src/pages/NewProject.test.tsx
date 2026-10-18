@@ -25,7 +25,7 @@ vi.mock('../utils/store', async (orig) => ({
 import { NewProject } from './NewProject';
 
 const row = (over: Record<string, unknown> = {}) => ({
-  id: 'doc-1', name: 'Dania Beach.pdf', mime: 'application/pdf', size: 10,
+  id: 'doc-1', name: 'Dunmore Heights.pdf', mime: 'application/pdf', size: 10,
   kind: 'other', createdAt: 0, versionNumber: 1, archived: false,
   projectId: null, projectName: null, customerId: null, customerName: null, source: null,
   ...over,
@@ -56,7 +56,7 @@ describe('NewProject — pick an existing document', () => {
     await act(async () => {
       await props.onPickBlobs([{ row: row(), blob: new Blob(['%PDF-1.4'], { type: 'application/pdf' }) }]);
     });
-    expect(screen.getByTitle('Dania Beach.pdf')).toBeInTheDocument();
-    expect(screen.getByLabelText('Project Name')).toHaveValue('Dania Beach');
+    expect(screen.getByTitle('Dunmore Heights.pdf')).toBeInTheDocument();
+    expect(screen.getByLabelText('Project Name')).toHaveValue('Dunmore Heights');
   });
 });

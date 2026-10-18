@@ -63,7 +63,7 @@ const originalMatchMedia = window.matchMedia;
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan', role: 'admin' }));
+  localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'noah', role: 'admin' }));
   h.theme = 'light';
   constructed = [];
   destroyed = 0;
@@ -183,7 +183,7 @@ describe('DocumentEditor — version history', () => {
   const HISTORY = {
     currentVersion: 2,
     versions: [
-      { version: 1, key: 'k1', createdAt: Date.UTC(2026, 8, 25, 9), user: { id: 'u1', name: 'nathan' }, origin: null },
+      { version: 1, key: 'k1', createdAt: Date.UTC(2026, 8, 25, 9), user: { id: 'u1', name: 'noah' }, origin: null },
       { version: 2, key: 'k2', createdAt: Date.UTC(2026, 8, 26, 9), user: { id: 'u2', name: 'crew' }, origin: 'editor', changes: [{ created: 'x' }], serverVersion: '9.4.0' },
     ],
   };
@@ -204,7 +204,7 @@ describe('DocumentEditor — version history', () => {
     const arg = constructed[0].instance.refreshHistory.mock.calls[0][0];
     expect(arg.currentVersion).toBe(2);
     expect(arg.history).toHaveLength(2);
-    expect(arg.history[0]).toMatchObject({ version: 1, key: 'k1', user: { id: 'u1', name: 'nathan' } });
+    expect(arg.history[0]).toMatchObject({ version: 1, key: 'k1', user: { id: 'u1', name: 'noah' } });
     expect(typeof arg.history[0].created).toBe('string');
     expect(arg.history[0].changes).toBeUndefined();
     expect(arg.history[1]).toMatchObject({ version: 2, changes: [{ created: 'x' }], serverVersion: '9.4.0' });

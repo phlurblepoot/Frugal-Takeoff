@@ -986,7 +986,7 @@ export const migrations: Migration[] = [
     // nullable columns and rewrites `kind` labels / fills sourceType+sourceId
     // (and a missing projectId) from references that already exist elsewhere in
     // the database. No file row and no byte on disk is ever removed. Flag to
-    // Nathan on pull per the migration protocol.
+    // the operator on pull per the migration protocol.
     //
     // IDEMPOTENT BY CONSTRUCTION: every write is guarded by a WHERE clause that
     // matches only rows whose value actually differs, so a replay touches zero
@@ -1579,7 +1579,7 @@ export const migrations: Migration[] = [
     version: 33,
     name: 'invoice-notes',
     // ADDITIVE, IDEMPOTENT: one nullable column, same pattern as migration 24
-    // (change_orders.title). Internal-only notes (Nathan's ruling) — never
+    // (change_orders.title). Internal-only notes (the owner's ruling) — never
     // printed on the invoice PDF or included in invoice emails, so existing
     // rows getting NULL changes nothing about how they render or send.
     up({ db }) {
@@ -1803,7 +1803,7 @@ export const migrations: Migration[] = [
     name: 'share-expiry',
     // ADDITIVE (ONLYOFFICE Phase 7 — sharing upgrades):
     //   * shares.expiresAt — when the link stops working; NULL = never. Links
-    //     made before this keep NULL, so they keep working (Nathan,
+    //     made before this keep NULL, so they keep working (the owner,
     //     2026-09-25) and show in the file's active-links list to be turned off.
     //   * shares.revokedAt — "Stop sharing": the row stays so the link can say
     //     it was turned off, rather than that it never existed.

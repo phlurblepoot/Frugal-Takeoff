@@ -29,6 +29,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '4.6.0',
+    date: 'October 18, 2026',
+    changes: [
+      'Change: the app is now called FrugalOmnibuild, since it does far more than takeoffs. A new install starts with that name; an existing install keeps the app name already saved in Settings. The Google Drive backup folder is now "FrugalOmnibuild Backups" for new installs, and installs that already have a "Frugal Takeoff Backups" folder keep using it.',
+      'Change: the built-in letterhead template (docs/Template.docx) is now a generic placeholder with "Your Company Name", so replace it with your own letterhead under Settings > Document Templates.',
+    ],
+  },
+  {
     version: '4.5.1',
     date: 'October 16, 2026',
     changes: [
@@ -173,7 +181,7 @@ const CHANGELOG: ChangelogEntry[] = [
       'Add crew (next to the tabs) adds a crew under the name you type, and opens its tab. The ⋯ button next to it renames the open crew or deletes it — only a crew with no reports can be deleted, and a project always keeps at least one crew. Your tab is kept in the page address, so a link or a refresh opens the same crew.',
       'A new report starts at the same time as that crew\'s last report, so a crew on nights and a crew on days each keep their own start time.',
       'The All crews tab shows every crew\'s reports on one calendar (or list): each day lists each crew\'s report with its crew name and man count. It is for viewing — click a report to open it; new reports are added on a crew\'s tab.',
-      'Since one day can now have a report from several crews, a report is named with its crew everywhere it is named by its date: the report\'s title, the PDF (in its heading, a new Crew line, and its file name, e.g. DailyReport-Dania-Beach-Crew-1-2026-10-06.pdf), the email subject, Documents (which now opens the report\'s crew tab), mail links, the activity feed and the dashboard\'s Latest daily report card. In the list view the men-on-site column is now called "Men".',
+      'Since one day can now have a report from several crews, a report is named with its crew everywhere it is named by its date: the report\'s title, the PDF (in its heading, a new Crew line, and its file name, e.g. DailyReport-Dunmore-Heights-Crew-1-2026-10-06.pdf), the email subject, Documents (which now opens the report\'s crew tab), mail links, the activity feed and the dashboard\'s Latest daily report card. In the list view the men-on-site column is now called "Men".',
       'Your existing daily reports are now in a crew called "Crew 1" on each project — rename it to whatever you call that crew. Renaming a crew marks its reports\' PDFs out of date, since the crew\'s name is printed on them.',
       'Note for self-hosters: this update includes a data-transforming migration (45) that rebuilds the daily reports table to give each report a crew, and moves every project\'s existing reports into a new "Crew 1" (report ids, photos and PDF attachments are unchanged) — back up before pulling this update.',
     ],
@@ -242,7 +250,7 @@ const CHANGELOG: ChangelogEntry[] = [
     date: 'September 25, 2026',
     changes: [
       'Backups, managed by the app: Settings → Backup takes a complete snapshot (database, every file and document, and the mail encryption key) into a backup folder, and after the first one only new or changed files are copied. Set BACKUP_PATH to a second volume; back up on demand or on a schedule; keep as many snapshots as you like; download any snapshot as one zip.',
-      'Google Drive backup: connect a Google account once (Drive access only) and snapshots are pushed to a "Frugal Takeoff Backups" folder on Drive, incrementally.',
+      'Google Drive backup: connect a Google account once (Drive access only) and snapshots are pushed to a "FrugalOmnibuild Backups" folder (or "Frugal Takeoff Backups" on older installs) on Drive, incrementally.',
       'Local and Google Drive backups have separate daily schedules and keep counts — each can be on or off, at its own time.',
       'A running backup shows a progress bar with its percentage, what it is doing, and how much has been copied.',
       'Setup guide on the Backup page (collapsible): the backup folder and connecting Google Drive step by step, with this server\'s own redirect addresses to copy and fixes for the common Google errors.',
@@ -494,7 +502,7 @@ const CHANGELOG: ChangelogEntry[] = [
       'Read-only revision history: opening a superseded revision shows a banner and blocks drawing, dragging, editing, or deleting measurements (with a one-click "Go to current"). Revisions can be compared in an enlarged full-screen overlay with pan/zoom and opacity.',
       'No duplicate pages in a set: naming two pages with the same page number within one plan set is now blocked, with a one-click option to auto-suffix the duplicate (e.g. "A-1 (2)").',
       'More reliable page-name extraction: the extract tool now reads both the PDF\'s embedded text and an OCR pass of the selected area and reconciles them, so garbled or image-only title blocks are matched far more reliably.',
-      'AIA export matches your template: the default G702/G703 Excel export now mirrors the standard Big Bear AIA template, with contract line items and change-order items in separate sections that scale to fit however many rows you have.',
+      'AIA export matches your template: the default G702/G703 Excel export now mirrors the standard AIA template, with contract line items and change-order items in separate sections that scale to fit however many rows you have.',
       'Branded documents: generated PDFs (proposals, invoices, change-order requests, issue reports, punch lists) now carry a branded header and footer. Set your company brand colour and choose whether to invert your logo for the dark banner under Settings.',
     ],
   },
@@ -2011,7 +2019,7 @@ const ADMIN_ONLY_TAB_IDS = new Set<TabId>(['general', 'storage', 'backup', 'docu
 export const Settings: React.FC = () => {
   const { toast } = useToast();
   const [serverSettings, setServerSettings] = useState<Record<string, string>>({
-    appName: 'Takeoff Pro',
+    appName: 'FrugalOmnibuild',
     logoUrl: '',
     companyName: '',
     companyLegalName: '',

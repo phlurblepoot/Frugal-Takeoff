@@ -1,7 +1,7 @@
 // src/pages/project/proposal/proposalGenerator.highlights.test.ts
 // Regression test for the "highlights offset diagonally" printout bug: pages
-// whose MediaBox origin is not (0,0) (center-origin CAD exports, e.g. TEG
-// Dania Beach REV.pdf with MediaBox [-1512 -1080.12 1512 1080.12]) must have
+// whose MediaBox origin is not (0,0) (center-origin CAD exports, e.g. Tidewater
+// Dunmore Heights REV.pdf with MediaBox [-1512 -1080.12 1512 1080.12]) must have
 // the overlay translated into the real view box, not drawn as if the page
 // started at (0,0).
 import { describe, it, expect, vi } from 'vitest';

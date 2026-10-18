@@ -4,7 +4,7 @@ import type { SessionInfo } from './types';
 
 function makeSession(over: Partial<SessionInfo> = {}): SessionInfo {
   return {
-    sessionId: 's1', userId: 'u1', name: 'nathan', role: 'admin',
+    sessionId: 's1', userId: 'u1', name: 'noah', role: 'admin',
     color: '#3b82f6', device: 'Windows · Chrome',
     location: null, editing: null, cursor: null, lastActive: 1000,
     ...over,
@@ -43,7 +43,7 @@ describe('PresenceRegistry', () => {
     const s = r.get('s1')!;
     expect(s.color).toBe('#ef4444');
     expect(s.cursor).toEqual({ x: 5, y: 6 });
-    expect(s.name).toBe('nathan');
+    expect(s.name).toBe('noah');
     expect(s.lastActive).toBeGreaterThan(1000);
   });
 

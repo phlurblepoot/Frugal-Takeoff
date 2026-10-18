@@ -87,7 +87,13 @@ describe('DriveStore', () => {
   it('ensureDriveFolders creates root/objects/snapshots once and finds them next time', async () => {
     const a = await ensureDriveFolders(async () => 'AT', fake.fetch as any);
     const b = await ensureDriveFolders(async () => 'AT', fake.fetch as any);
-    expect(a).toEqual(b); expect([...fake.files.values()].filter(f => f.name === 'Frugal Takeoff Backups').length).toBe(1);
+    expect(a).toEqual(b); expect([...fake.files.values()].filter(f => f.name === 'FrugalOmnibuild Backups').length).toBe(1);
+  });
+  it('reuses an existing "Frugal Takeoff Backups" folder instead of creating a new one', async () => {
+    fake.files.set('old1', { name: 'Frugal Takeoff Backups', parents: [], mime: 'application/vnd.google-apps.folder' });
+    const a = await ensureDriveFolders(async () => 'AT', fake.fetch as any);
+    expect(a.folderId).toBe('old1');
+    expect([...fake.files.values()].filter(f => f.name === 'FrugalOmnibuild Backups').length).toBe(0);
   });
   it('listObjects pages through objects/; putObject is resumable and retries once on 503', async () => {
     const st = await mk();

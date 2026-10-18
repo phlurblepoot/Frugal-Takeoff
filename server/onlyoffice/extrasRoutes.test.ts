@@ -38,7 +38,7 @@ const fakeFetch = (async (input: any) => {
 }) as typeof fetch;
 
 const users: Record<string, any> = {
-  admin: { id: 'u-admin', username: 'nathan', role: 'admin' },
+  admin: { id: 'u-admin', username: 'noah', role: 'admin' },
   crew: { id: 'u-crew', username: 'crew', role: 'user' },
 };
 const mkApp = (as: keyof typeof users = 'crew', env: Record<string, string> = ENV) => {

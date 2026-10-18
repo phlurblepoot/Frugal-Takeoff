@@ -205,7 +205,7 @@ describe('dash-deck', () => {
 describe('dash-activity', () => {
   it('renders activity rows, linking where activityTarget resolves a target', async () => {
     getActivity.mockResolvedValue([
-      { id: 'a1', projectId: 'p1', userId: 'u1', type: 'issue_created', message: 'Issue opened', createdAt: Date.now(), projectName: 'Acme', username: 'nathan' },
+      { id: 'a1', projectId: 'p1', userId: 'u1', type: 'issue_created', message: 'Issue opened', createdAt: Date.now(), projectName: 'Acme', username: 'noah' },
       { id: 'a2', projectId: null, userId: null, type: 'other', message: 'Global thing', createdAt: Date.now(), projectName: null, username: null },
     ]);
     mount('dash-activity', 1, { isAdmin: true });

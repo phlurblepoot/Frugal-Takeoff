@@ -5,7 +5,7 @@ import { test, expect } from './fixtures/test';
 // registers, and turning notifications on registers this device with the
 // server. Headless Chromium can't reach Google's push service, so only the
 // browser's subscribe call is stood in for; delivery to a real phone is
-// Nathan's manual check. Encryption and sending are covered by
+// The owner's manual check. Encryption and sending are covered by
 // server/push.test.ts.
 
 test('the app is installable: manifest, icons and the service worker are served', async ({ request }) => {

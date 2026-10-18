@@ -124,10 +124,10 @@ describe('useItemThreadLinks', () => {
   });
 
   it('joins the participant snapshot into the resolve-thread query', async () => {
-    h.links.mockResolvedValue([link({ participantsJson: JSON.stringify([{ addr: 'gc@teg.com' }, { addr: 'me@bb.com' }]) })]);
+    h.links.mockResolvedValue([link({ participantsJson: JSON.stringify([{ addr: 'gc@tidewater.example' }, { addr: 'me@birchwood.example' }]) })]);
     renderHook(() => useItemThreadLinks('rfi', 'r1'));
     await waitFor(() => expect(h.resolveThread).toHaveBeenCalledWith(
-      expect.objectContaining({ participants: 'gc@teg.com,me@bb.com' }),
+      expect.objectContaining({ participants: 'gc@tidewater.example,me@birchwood.example' }),
     ));
   });
 });

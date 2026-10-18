@@ -51,7 +51,7 @@ export async function geocodeAddress(address: string): Promise<{ lat: number; lo
 
   const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(address);
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'Frugal-Takeoff/2.7 (daily-report weather)' },
+    headers: { 'User-Agent': 'FrugalOmnibuild/2.7 (daily-report weather)' },
     signal: AbortSignal.timeout(10_000),
   });
   // A transient !ok (e.g. Nominatim 429/503) must NOT be cached — that would

@@ -39,9 +39,9 @@ import { LienReleaseEditor, draftFromPrefill } from './LienReleaseEditor';
 const stored = (over: Partial<LienRelease> = {}): LienRelease => ({
   id: 'lr1', projectId: 'p1', number: '3', paymentType: 'progress', conditional: true,
   sourceType: null, sourceId: null, supersedesId: null,
-  lienorName: 'Big Bear Plaster', customerName: 'Acme GC', ownerName: 'Jane Owner',
+  lienorName: 'Birchwood Plaster', customerName: 'Acme GC', ownerName: 'Jane Owner',
   propertyDescription: 'Maple House\n1 Main St', amountCents: 123456,
-  throughDate: '2026-10-01', releaseDate: '2026-10-15', signerName: 'Nathan', signerTitle: 'Owner',
+  throughDate: '2026-10-01', releaseDate: '2026-10-15', signerName: 'Noah', signerTitle: 'Owner',
   conditionKind: 'funds', checkNumber: null, checkMaker: 'Acme GC', checkBank: null,
   exceptions: null, signatureFileId: null, status: 'draft', version: 4, createdAt: 1, updatedAt: 10,
   ...over,
@@ -108,8 +108,8 @@ describe('LienReleaseEditor', () => {
   it('creates an unsaved draft on Save and reports the new id', async () => {
     const draft = draftFromPrefill('p1', {
       paymentType: 'final', conditional: false, sourceType: null, sourceId: null,
-      lienorName: 'Big Bear Plaster', customerName: 'Acme GC', ownerName: 'Jane Owner', propertyDescription: 'Maple House',
-      amountCents: 5000, throughDate: null, releaseDate: '2026-10-15', signerName: 'Nathan', signerTitle: '',
+      lienorName: 'Birchwood Plaster', customerName: 'Acme GC', ownerName: 'Jane Owner', propertyDescription: 'Maple House',
+      amountCents: 5000, throughDate: null, releaseDate: '2026-10-15', signerName: 'Noah', signerTitle: '',
       conditionKind: null, checkMaker: '', exceptions: '', source: null, warnings: [],
     });
     const { onCreated } = mount(draft);

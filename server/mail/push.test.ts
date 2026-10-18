@@ -48,7 +48,7 @@ beforeEach(() => {
   db = openDb(':memory:');
   runMigrations(db, dir, migrations, { mailCrypto: crypto });
   db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','admin')`).run();
-  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'me@bb.com', auth: { refreshToken: 'r' } });
+  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'me@birchwood.example', auth: { refreshToken: 'r' } });
   provider = new FakeMailProvider();
   provider.seed([env('seeded')]);
   ctx = { db, dataDir: dir, crypto, providerFactory: () => provider, broadcastChange: () => {} };
@@ -85,7 +85,7 @@ describe('handleGraphWebhook', () => {
   });
 
   it('ignores a subscription id no account claims, and never matches a different account', () => {
-    const other = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'other@bb.com', auth: { refreshToken: 'r' } });
+    const other = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'other@birchwood.example', auth: { refreshToken: 'r' } });
     setState(other.id, { deltaLinks: {}, subscriptionId: 'sub-2' });
     expect(handleGraphWebhook(ctx, { value: [{ subscriptionId: 'sub-unknown', clientState: 'secret' }] }, 'secret')).toEqual([]);
     expect(handleGraphWebhook(ctx, { value: [{ subscriptionId: 'sub-2', clientState: 'secret' }] }, 'secret')).toEqual([other.id]);
@@ -265,7 +265,7 @@ function stubGmail(over: Partial<GmailWatchApi> = {}) {
   return { watch, stopWatch, ...over } as GmailWatchApi & { watch: typeof watch; stopWatch: typeof stopWatch };
 }
 
-const googleAccount = (email = 'nate@bigbear.com', userId = 'u1') =>
+const googleAccount = (email = 'nick@birchwood.example', userId = 'u1') =>
   accounts.createAccount(db, crypto, { userId, provider: 'google', emailAddress: email, auth: { refreshToken: 'r' } });
 
 const pubsubBody = (payload: unknown, over: Record<string, unknown> = {}) => ({
@@ -415,15 +415,15 @@ describe('ensureGmailWatch', () => {
 describe('handleGoogleWebhook', () => {
   it('maps the pushed address to every google account that holds it, case-insensitively', () => {
     db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u2','b','x','user')`).run();
-    const a = googleAccount('Nate@BigBear.com', 'u1');
-    const b = googleAccount('nate@bigbear.com', 'u2');
-    const ids = handleGoogleWebhook(ctx, pubsubBody({ emailAddress: 'NATE@bigbear.com', historyId: 9 }));
+    const a = googleAccount('Nick@Birchwood.example', 'u1');
+    const b = googleAccount('nick@birchwood.example', 'u2');
+    const ids = handleGoogleWebhook(ctx, pubsubBody({ emailAddress: 'NICK@birchwood.example', historyId: 9 }));
     expect(new Set(ids)).toEqual(new Set([a.id, b.id]));
   });
 
   it('never pokes an account on another provider that happens to share the address', () => {
-    const g = googleAccount('me@bb.com');           // acct (microsoft) already has me@bb.com
-    expect(handleGoogleWebhook(ctx, pubsubBody({ emailAddress: 'me@bb.com' }))).toEqual([g.id]);
+    const g = googleAccount('me@birchwood.example');           // acct (microsoft) already has me@birchwood.example
+    expect(handleGoogleWebhook(ctx, pubsubBody({ emailAddress: 'me@birchwood.example' }))).toEqual([g.id]);
   });
 
   it('returns nothing for an address no account holds', () => {
@@ -469,8 +469,8 @@ describe('releaseGmailWatch', () => {
     // behalf of one would silently cancel the other's push, and their stored
     // expiry would hide it for up to six days.
     db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u2','b','x','user')`).run();
-    const a = googleAccount('Shared@bigbear.com', 'u1');
-    const b = googleAccount('shared@bigbear.com', 'u2');
+    const a = googleAccount('Shared@birchwood.example', 'u1');
+    const b = googleAccount('shared@birchwood.example', 'u2');
     setState(a.id, { historyId: '100', watchExpiration: NOW + 3 * 24 * HOUR });
     setState(b.id, { historyId: '200', watchExpiration: NOW + 3 * 24 * HOUR, watchRetryAfter: NOW + HOUR });
     const api = stubGmail();
@@ -489,11 +489,11 @@ describe('releaseGmailWatch', () => {
   });
 
   it('still stops the watch when the address is connected only once', async () => {
-    const g = googleAccount('sole@bigbear.com');
+    const g = googleAccount('sole@birchwood.example');
     setState(g.id, { watchExpiration: NOW + 3 * 24 * HOUR });
     // A microsoft account on the same address is not a sibling — its push is a
     // Graph subscription and nothing about it is mailbox-scoped here.
-    accounts.createAccount(db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'sole@bigbear.com', auth: { refreshToken: 'r' } });
+    accounts.createAccount(db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'sole@birchwood.example', auth: { refreshToken: 'r' } });
     const api = stubGmail();
     releaseGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, () => api);
     await flush();

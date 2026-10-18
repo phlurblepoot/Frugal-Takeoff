@@ -190,6 +190,6 @@ export class PushService {
   private subject(): string {
     const c = (this.deps.contact ?? '').trim();
     if (/^mailto:.+@.+/.test(c) || /^https:\/\/[^\s]+$/.test(c)) return c;
-    return 'mailto:notifications@frugal-takeoff.app';
+    return 'mailto:admin@example.com';
   }
 }

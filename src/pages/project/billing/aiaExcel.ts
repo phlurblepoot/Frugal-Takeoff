@@ -105,7 +105,7 @@ function setCell(
 
 // US Letter, landscape, every column fitted to the page width. `onePage`
 // also fits the height (the G702 is one page); otherwise as many pages tall
-// as the rows need (the G703). Nathan's PDF rules (2026-09-26); Excel prints
+// as the rows need (the G703). The owner's PDF rules (2026-09-26); Excel prints
 // the same way, and the PDF ("Make PDF") is made from these settings.
 function applyPageSetup(ws: ExcelJS.Worksheet, onePage: boolean): void {
   ws.pageSetup = {
@@ -127,7 +127,7 @@ function applyTemplatePageSetup(ws: ExcelJS.Worksheet, onePage: boolean): void {
 }
 
 // ---------------------------------------------------------------------------
-// Dynamic G702/G703 builder — matches Nathan's `docs/AIA SOV.xlsx` template.
+// Dynamic G702/G703 builder — matches the standard AIA G702/G703 layout.
 //
 // Both sheets carry LIVE formulas (inputs in C/D/E/F, every G/H/I/J derived) so
 // a GC can tweak the workbook in Excel and it recomputes, exactly like the
@@ -511,7 +511,7 @@ function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): vo
 export async function buildAiaWorkbook(ctx: AiaExportCtx): Promise<ExcelJS.Workbook> {
   const { default: ExcelJSlib } = await import('exceljs');
   const wb = new ExcelJSlib.Workbook();
-  wb.creator = ctx.company.name ?? 'Frugal Takeoff';
+  wb.creator = ctx.company.name ?? 'FrugalOmnibuild';
   wb.created = new Date();
   // Add G702 FIRST so the workbook opens on it, but fill it AFTER G703 so its
   // formulas can anchor to G703's computed dynamic row numbers.

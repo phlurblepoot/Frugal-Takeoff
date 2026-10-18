@@ -22,14 +22,14 @@ describe('registerRealtime auth', () => {
 
   it('accepts a valid token and sends a sessions-snapshot with identity from the JWT, not the client', async () => {
     // Client tries to spoof identity via auth payload — must be ignored.
-    const client = connectClient(srv.port, makeToken({ id: 'u1', username: 'nathan' }), {
+    const client = connectClient(srv.port, makeToken({ id: 'u1', username: 'noah' }), {
       userId: 'evil-spoof', name: 'evil-spoof',
     });
     const snapshot = await waitFor<{ selfId: string; sessions: any[] }>(client, 'sessions-snapshot');
     expect(snapshot.selfId).toBeTruthy();
     expect(snapshot.sessions).toHaveLength(1);
     expect(snapshot.sessions[0].userId).toBe('u1');
-    expect(snapshot.sessions[0].name).toBe('nathan');
+    expect(snapshot.sessions[0].name).toBe('noah');
     expect(snapshot.sessions[0].sessionId).toBe(snapshot.selfId);
     client.close();
   });

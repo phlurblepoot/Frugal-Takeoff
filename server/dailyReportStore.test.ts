@@ -30,12 +30,12 @@ beforeEach(() => {
 
 describe('createDailyReport', () => {
   it('creates with prefills and returns the id', () => {
-    const r = createDailyReport(db, 'p1', { crewId: c1, reportDate: '2026-08-26', jobName: 'Job', contractorName: 'GC' }, 'nathan');
+    const r = createDailyReport(db, 'p1', { crewId: c1, reportDate: '2026-08-26', jobName: 'Job', contractorName: 'GC' }, 'noah');
     const row = getDailyReport(db, r.id);
     expect(row.reportDate).toBe('2026-08-26');
     expect(row.jobName).toBe('Job');
     expect(row.version).toBe(1);
-    expect(row.createdBy).toBe('nathan');
+    expect(row.createdBy).toBe('noah');
     expect(row.photos).toEqual([]);
     expect(row.attachments).toEqual([]);
     expect(row.manCounts).toEqual([]);

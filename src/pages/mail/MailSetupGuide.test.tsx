@@ -5,7 +5,7 @@
 // most common way a connect flow fails — so the tests pin that the URIs come
 // from setup-info rather than from a template, that an unset env var is
 // visibly unset, and that the copy button disappears (leaving selectable text)
-// where navigator.clipboard does not exist: Nathan runs this over plain HTTP
+// where navigator.clipboard does not exist: the owner runs this over plain HTTP
 // on the LAN, where it does not.
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

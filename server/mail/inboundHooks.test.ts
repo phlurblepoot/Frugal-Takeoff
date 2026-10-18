@@ -22,18 +22,18 @@ let db: Database.Database; let ctx: MailContext; let acct: accounts.MailAccountR
 let provider: FakeMailProvider; let events: any[]; let dir: string;
 const crypto = new MailCrypto(Buffer.alloc(32, 9));
 
-const THREAD = 'rfi-thread@bb.com';
-const BODY_TEXT = "Corridor 9ft\n\nOn Aug 26 Nathan wrote:\n> RFI attached";
+const THREAD = 'rfi-thread@birchwood.example';
+const BODY_TEXT = "Corridor 9ft\n\nOn Aug 26 Noah wrote:\n> RFI attached";
 
 type Seeded = Envelope & { html?: string; text?: string };
 const env = (id: string, o: Partial<Seeded> = {}): Seeded => ({
-  providerMessageId: id, references: [THREAD], from: { addr: 'gc@teg.com', name: 'Mike' }, to: [{ addr: 'me@bb.com' }], cc: [], bcc: [],
+  providerMessageId: id, references: [THREAD], from: { addr: 'gc@tidewater.example', name: 'Mike' }, to: [{ addr: 'me@birchwood.example' }], cc: [], bcc: [],
   subject: 'Re: RFI-001', snippet: 'Corridor 9ft (snippet)', date: '2026-08-28T10:00:00.000Z',
   isRead: false, isStarred: false, isDraft: false, attachments: [], sizeBytes: 10,
-  folderProviderIds: ['INBOX'], messageIdHeader: id + '@teg.com',
+  folderProviderIds: ['INBOX'], messageIdHeader: id + '@tidewater.example',
   // The "On … wrote:" marker has to survive htmlToText as its OWN line, the way
   // real clients emit it — stripQuotedReply cuts on lines, not on <blockquote>.
-  text: BODY_TEXT, html: "<p>Corridor 9ft</p><div>On Aug 26 Nathan wrote:</div><blockquote><p>RFI attached</p></blockquote>", ...o,
+  text: BODY_TEXT, html: "<p>Corridor 9ft</p><div>On Aug 26 Noah wrote:</div><blockquote><p>RFI attached</p></blockquote>", ...o,
 });
 
 /** Feeds one message through the engine exactly as a sync would: the provider
@@ -64,7 +64,7 @@ beforeEach(() => {
   runMigrations(db, dir, migrations, { mailCrypto: crypto });
   db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','admin')`).run();
   createProject(db, { id: 'p1', name: 'Test Project', createdAt: 1, pages: [], takeoffs: [] });
-  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', auth: { refreshToken: 'r' }, indexedSince: '2026-06-01T00:00:00.000Z' });
+  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@birchwood.example', auth: { refreshToken: 'r' }, indexedSince: '2026-06-01T00:00:00.000Z' });
   provider = new FakeMailProvider(); provider.seed([]);
   events = [];
   ctx = { db, dataDir: dir, crypto, providerFactory: () => provider, broadcastChange: e => events.push(e) };
@@ -85,8 +85,8 @@ describe('rfi pending-reply inbound hook', () => {
     expect(rfi.status).toBe('sent');                       // stays pending review
     expect(rfi.pendingReply.threadKey).toBe(THREAD);
     expect(rfi.pendingReply.accountId).toBe(acct.id);
-    expect(rfi.pendingReply.messageIdHeader).toBe('m1@teg.com');
-    expect(rfi.pendingReply.from).toEqual({ addr: 'gc@teg.com', name: 'Mike' });
+    expect(rfi.pendingReply.messageIdHeader).toBe('m1@tidewater.example');
+    expect(rfi.pendingReply.from).toEqual({ addr: 'gc@tidewater.example', name: 'Mike' });
     expect(rfi.pendingReply.date).toBe('2026-08-28T10:00:00.000Z');
     expect(rfi.pendingReply.attachments).toEqual([{ attId: 'a1', name: 'answer.pdf', mime: 'application/pdf', size: 12 }]);
     expect(rfi.pendingReply.receivedAt).toBeTruthy();
@@ -124,7 +124,7 @@ describe('rfi pending-reply inbound hook', () => {
 
   it('ignores an outbound message from one of our own addresses', async () => {
     const rfiId = makeSentRfi();
-    deliver(env('m1', { from: { addr: 'me@bb.com' } }));
+    deliver(env('m1', { from: { addr: 'me@birchwood.example' } }));
     await settle();
     expect(getRfi(db, rfiId).pendingReply).toBeNull();
     expect(events.filter(e => e.type === 'rfi')).toHaveLength(0);
@@ -187,7 +187,7 @@ describe('rfi pending-reply inbound hook', () => {
 
   it('the same email indexed by a second mailbox does not capture twice', async () => {
     const rfiId = makeSentRfi();
-    const second = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'ops@bb.com', auth: { refreshToken: 'r' }, indexedSince: '2026-06-01T00:00:00.000Z' });
+    const second = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'ops@birchwood.example', auth: { refreshToken: 'r' }, indexedSince: '2026-06-01T00:00:00.000Z' });
     upsertFolders(db, second.id, provider.folders);
     const m = env('m1');
     deliver(m);

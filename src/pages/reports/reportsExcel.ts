@@ -137,7 +137,7 @@ const FORMATS: Partial<Record<ColumnKind, string>> = { money: MONEY_FMT, date: D
 export async function buildReportWorkbook(spec: SheetSpec): Promise<ExcelJS.Workbook> {
   const { default: ExcelJSlib } = await import('exceljs');
   const wb = new ExcelJSlib.Workbook();
-  wb.creator = 'Frugal Takeoff';
+  wb.creator = 'FrugalOmnibuild';
   wb.created = new Date();
   const headerRow = spec.details.length + 3; // title, details, a blank row
   const ws = wb.addWorksheet(spec.sheetName, { views: [{ state: 'frozen', ySplit: headerRow }] });

@@ -63,8 +63,8 @@ vi.mock('../../../utils/store', async () => {
     getDocumentTypes: vi.fn(async () => []),
     fetchFileBlob: vi.fn(async () => new Blob(['pdf'])),
     getFileMeta: vi.fn(async () => null),
-    getSettings: vi.fn(async () => ({ companyEmail: 'office@bigbear.test' })),
-    getMailAccounts: vi.fn(async () => [{ id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 }]),
+    getSettings: vi.fn(async () => ({ companyEmail: 'office@birchwood.test' })),
+    getMailAccounts: vi.fn(async () => [{ id: 'a1', provider: 'fake', emailAddress: 'me@birchwood.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 }]),
     getAlwaysCc: vi.fn(async () => ''),
     getCustomer: vi.fn(async () => undefined),
   };
@@ -82,7 +82,7 @@ vi.mock('../../../context/CollaborationContext', () => ({
 vi.mock('../../../utils/mailApi', () => ({
   mailApi: {
     accounts: vi.fn(async () => [
-      { id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, signatureHtml: null,
+      { id: 'a1', provider: 'fake', emailAddress: 'me@birchwood.test', displayName: null, signatureHtml: null,
         isDefault: 1, status: 'ok', lastSyncAt: null, lastError: null, indexedSince: '', unreadCount: 0 },
     ]),
     links: vi.fn(async () => []),
@@ -423,11 +423,11 @@ describe('ProposalEditor smoke', () => {
 
   it('stamps the from-address the sender picked onto that PDF', async () => {
     const dialog = await openComposer();
-    fireEvent.change(within(dialog).getByLabelText('Document shows email:'), { target: { value: 'me@bigbear.test' } });
+    fireEvent.change(within(dialog).getByLabelText('Document shows email:'), { target: { value: 'me@birchwood.test' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(sendProposal).toHaveBeenCalled());
-    expect(buildProposalPdf.mock.calls[0][0]).toMatchObject({ headerEmail: 'me@bigbear.test' });
+    expect(buildProposalPdf.mock.calls[0][0]).toMatchObject({ headerEmail: 'me@birchwood.test' });
     expect(sendProposal.mock.calls[0][1]).toMatchObject({ fileId: 'f-generated' });
   });
 

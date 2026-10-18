@@ -3,8 +3,8 @@
 // onto a copied PDF page. The bug this guards against: printouts assumed every
 // page's user space starts at (0,0) and equals the MediaBox, but CAD/plotter
 // PDFs often have an offset origin (e.g. center-origin MediaBox) or a CropBox
-// inset — which shifted all highlights diagonally (real case: TEG Dania Beach
-// REV.pdf, MediaBox [-1512, -1080.12, 1512, 1080.12]).
+// inset — which shifted all highlights diagonally (real case: a CAD plan set,
+// MediaBox [-1512, -1080.12, 1512, 1080.12]).
 import { describe, it, expect } from 'vitest';
 import { normalizeRect, viewBox, overlayPlacement } from './pdfOverlayTransform';
 
@@ -63,7 +63,7 @@ describe('overlayPlacement', () => {
     expect(p.isIdentity).toBe(true);
   });
 
-  it('REAL CASE — TEG Dania Beach: center-origin MediaBox translates by (x0, y0)', () => {
+  it('REAL CASE — CAD plan set: center-origin MediaBox translates by (x0, y0)', () => {
     // MediaBox [-1512 -1080.12 1512 1080.12], rendered at 2× → image 6048 wide.
     const view = { x0: -1512, y0: -1080.12, x1: 1512, y1: 1080.12 };
     const p = overlayPlacement(view, 0, 6048);

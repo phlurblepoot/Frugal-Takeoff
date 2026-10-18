@@ -76,7 +76,7 @@ const fakeFetch = (async (input: any, init: any = {}) => {
 }) as typeof fetch;
 
 const users: Record<string, any> = {
-  admin: { id: 'u-admin', username: 'nathan', role: 'admin' },
+  admin: { id: 'u-admin', username: 'noah', role: 'admin' },
   user: { id: 'u-user', username: 'crew', role: 'user' },
 };
 
@@ -114,7 +114,7 @@ beforeEach(() => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-oo-hist-'));
   db = openDb(':memory:');
   runMigrations(db, dataDir, migrations);
-  db.prepare(`INSERT INTO users (id, username, role) VALUES ('u-admin', 'nathan', 'admin'), ('u-user', 'crew', 'user')`).run();
+  db.prepare(`INSERT INTO users (id, username, role) VALUES ('u-admin', 'noah', 'admin'), ('u-user', 'crew', 'user')`).run();
   events = [];
   dsFiles = new Map();
   openKeys = new Set();
@@ -125,7 +125,7 @@ beforeEach(() => {
   app = mkApp();
 });
 
-/** Three versions: v1 by nathan, v2 by crew in the editor (with its change
+/** Three versions: v1 by noah, v2 by crew in the editor (with its change
  *  log), v3 an upload by crew. */
 const threeVersions = () => {
   saveNewVersion(db, dataDir, 'doc1', Buffer.from('v2 bytes'), DOCX, 'u-user', 'editor');
@@ -141,7 +141,7 @@ describe('GET /api/onlyoffice/history/:fileId', () => {
     expect(r.status).toBe(200);
     expect(r.body.currentVersion).toBe(3);
     expect(r.body.versions.map((v: any) => v.version)).toEqual([1, 2, 3]);
-    expect(r.body.versions.map((v: any) => v.user?.name)).toEqual(['nathan', 'crew', 'crew']);
+    expect(r.body.versions.map((v: any) => v.user?.name)).toEqual(['noah', 'crew', 'crew']);
     expect(r.body.versions[1]).toMatchObject({ origin: 'editor', serverVersion: '9.4.0', changes: [{ created: '2026-09-26 10:00:00' }] });
     expect(r.body.versions[0].changes).toBeUndefined();
     // Keys are distinct, and the current one is the key the editor opens with.
@@ -286,7 +286,7 @@ describe('POST /api/files/:id/restore', () => {
   });
 
   describe('from inside the editor, alone in it', () => {
-    /** v1, then v2 by crew; nathan opens v2 and is alone in the editor. */
+    /** v1, then v2 by crew; noah opens v2 and is alone in the editor. */
     const openAlone = async () => {
       saveNewVersion(db, dataDir, 'doc1', Buffer.from('v2 bytes'), DOCX, 'u-user');
       const key = await openEditor();

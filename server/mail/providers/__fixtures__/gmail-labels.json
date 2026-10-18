@@ -111,7 +111,7 @@
     },
     {
       "id": "Label_31",
-      "name": "Clients/TEG",
+      "name": "Clients/Tidewater",
       "messageListVisibility": "show",
       "labelListVisibility": "labelShow",
       "type": "user"

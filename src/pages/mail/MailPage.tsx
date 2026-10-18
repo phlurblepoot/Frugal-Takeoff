@@ -356,7 +356,7 @@ export const MailPage: React.FC = () => {
         <EmptyState
           icon={<Mail size={22} />}
           title="Connect a mail account"
-          description="Link Google, Microsoft, or any IMAP mailbox to read and send mail from inside Takeoff Pro."
+          description="Link Google, Microsoft, or any IMAP mailbox to read and send mail from inside FrugalOmnibuild."
           action={<Button onClick={() => navigate('/settings?tab=mail')}>Open mail settings</Button>}
         />
       </div>

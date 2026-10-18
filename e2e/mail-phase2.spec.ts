@@ -86,7 +86,7 @@ test('link-from-thread: "+ Link" to an RFI shows a resolved-label chip, not the 
     emailAddress: `link-${short}@e2e.test`,
     threads: [{
       subject,
-      from: { addr: 'mike@teg.test', name: 'Mike Torres' },
+      from: { addr: 'mike@tidewater.test', name: 'Mike Torres' },
       messages: [{ text: 'Can you confirm the corridor ceiling height?' }],
     }],
   });
@@ -135,7 +135,7 @@ test('convert-from-thread: "Create ▾" → RFI carries the subject/body and aut
     emailAddress: `convert-${short}@e2e.test`,
     threads: [{
       subject,
-      from: { addr: 'mike@teg.test', name: 'Mike Torres' },
+      from: { addr: 'mike@tidewater.test', name: 'Mike Torres' },
       messages: [{ text: question }],
     }],
   });
@@ -187,7 +187,7 @@ test('project Mail tab lists a thread linked to the project', async ({ authedPag
     emailAddress: `projectmail-${short}@e2e.test`,
     threads: [{
       subject,
-      from: { addr: 'dana@teg.test', name: 'Dana Lee' },
+      from: { addr: 'dana@tidewater.test', name: 'Dana Lee' },
       messages: [{ text: 'Following up on the schedule.' }],
     }],
   });
@@ -225,7 +225,7 @@ test('reply indicator: an injected reply flags a linked, sent invoice', async ({
   const { token } = apiToken;
   const auth = { Authorization: `Bearer ${token}` };
   const short = randomUUID().slice(0, 8);
-  const gcEmail = `gc-${short}@teg.test`;
+  const gcEmail = `gc-${short}@tidewater.test`;
 
   const { projectId } = await seedProject(request, token, { contactEmail: gcEmail });
   const invoiceNumber = `INV-${short}`;
@@ -263,7 +263,7 @@ test('reply indicator: an injected reply flags a linked, sent invoice', async ({
   await injectReply(request, token, {
     accountId,
     threadKey,
-    from: { addr: 'mike@teg.test', name: 'Mike Torres' },
+    from: { addr: 'mike@tidewater.test', name: 'Mike Torres' },
     text: 'Received, thanks — payment is scheduled for Friday.',
   });
 

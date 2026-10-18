@@ -13,7 +13,7 @@ vi.mock('../../components/Toast', () => ({ useToast: () => ({ toast: h.toast }) 
 vi.mock('../../utils/store', async (orig) => ({
   ...(await orig<typeof import('../../utils/store')>()),
   listFileVersions: vi.fn(),
-  getAssignableUsers: vi.fn(async () => [{ id: 'u-nathan', username: 'nathan', role: 'admin' }, { id: 'u-crew', username: 'crew', role: 'user' }]),
+  getAssignableUsers: vi.fn(async () => [{ id: 'u-noah', username: 'noah', role: 'admin' }, { id: 'u-crew', username: 'crew', role: 'user' }]),
   restoreFileVersion: vi.fn(async () => ({ versionNumber: 4, restoredFrom: 1 })),
   deleteFileVersion: vi.fn(async () => {}),
   fetchFileBlob: vi.fn(async () => new Blob(['x'])),
@@ -30,7 +30,7 @@ const version = (n: number, over: Record<string, unknown> = {}) => ({
 const VERSIONS = [
   version(3, { createdBy: 'u-crew' }),
   version(2, { createdBy: 'u-crew', versionOrigin: 'editor' }),
-  version(1, { createdBy: 'u-nathan' }),
+  version(1, { createdBy: 'u-noah' }),
 ];
 
 const renderHistory = () => render(<ConfirmProvider><VersionHistory fileId="doc1" fileName="Scope.docx" /></ConfirmProvider>);
@@ -49,7 +49,7 @@ describe('VersionHistory', () => {
     const v2 = await rowFor(2);
     await waitFor(() => expect(v2).toHaveTextContent('by crew'));
     expect(v2).toHaveTextContent('edited');
-    expect(await rowFor(1)).toHaveTextContent('by nathan');
+    expect(await rowFor(1)).toHaveTextContent('by noah');
     expect(screen.getAllByTestId('version-row')).toHaveLength(2); // the current version isn't listed
   });
 
@@ -60,7 +60,7 @@ describe('VersionHistory', () => {
   });
 
   it('lets an admin delete any version', async () => {
-    signIn({ id: 'u-nathan', role: 'admin' });
+    signIn({ id: 'u-noah', role: 'admin' });
     renderHistory();
     expect(within(await rowFor(2)).getByRole('button', { name: 'Delete version 2' })).toBeInTheDocument();
     expect(within(await rowFor(1)).getByRole('button', { name: 'Delete version 1' })).toBeInTheDocument();

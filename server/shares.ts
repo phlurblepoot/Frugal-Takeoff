@@ -9,7 +9,7 @@
 //   'files'     several documents under one link          — JSON [fileId, …]
 //
 // New links expire (7, 30 or 90 days, or never; 30 by default) and can be
-// stopped. Links made before expiry existed never expire (Nathan,
+// stopped. Links made before expiry existed never expire (the owner,
 // 2026-09-25). Every public route asks activeShare() first, so an expired or
 // stopped link gets the same friendly answer everywhere.
 import crypto from 'crypto';

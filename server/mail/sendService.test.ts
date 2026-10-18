@@ -25,7 +25,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-ss-')); db = openDb(':memory:'); runMigrations(db, dir, migrations, { mailCrypto: crypto });
   db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','user')`).run();
   createProject(db, { id: 'p1', name: 'P', createdAt: 1, pages: [], takeoffs: [] } as any);
-  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', displayName: 'Me', auth: { refreshToken: 'r' } });
+  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@birchwood.example', displayName: 'Me', auth: { refreshToken: 'r' } });
   provider = new FakeMailProvider(); provider.seed([]);
   events = [];
   ctx = { db, dataDir: dir, crypto, providerFactory: () => provider, broadcastChange: ev => { events.push(ev); } };
@@ -34,9 +34,9 @@ describe('sendService.send', () => {
   it('sends through the default account, indexes the sent row, links + effects the item', async () => {
     const { id: rfiId } = createRfi(db, 'p1', { title: 'Ceilings' });
     putBuffer(db, dir, 'f1', Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'rfi', name: 'RFI-001.pdf' });
-    const r = await send(ctx, user, { to: [{ addr: 'gc@teg.com' }], subject: 'RFI-001', html: '<p>See attached</p>', attachments: [{ fileId: 'f1', itemType: 'rfi', itemId: rfiId }] });
+    const r = await send(ctx, user, { to: [{ addr: 'gc@tidewater.example' }], subject: 'RFI-001', html: '<p>See attached</p>', attachments: [{ fileId: 'f1', itemType: 'rfi', itemId: rfiId }] });
     expect(provider.sent.length).toBe(1);
-    expect(provider.sent[0]).toMatchObject({ from: { addr: 'me@bb.com', name: 'Me' }, subject: 'RFI-001', text: 'See attached' });
+    expect(provider.sent[0]).toMatchObject({ from: { addr: 'me@birchwood.example', name: 'Me' }, subject: 'RFI-001', text: 'See attached' });
     expect(provider.sent[0].attachments[0]).toMatchObject({ name: 'RFI-001.pdf', mime: 'application/pdf' });
     const row = db.prepare('SELECT threadKey, sentFromApp, isRead FROM mail_messages').get() as any;
     expect(row.sentFromApp).toBe(1); expect(row.threadKey).toBe(r.threadKey);
@@ -46,14 +46,14 @@ describe('sendService.send', () => {
     expect(r.effectsSkipped).toEqual([]);
   });
   it('replies inside an existing thread with In-Reply-To/References to its last message', async () => {
-    db.prepare(`INSERT INTO mail_messages (id, accountId, providerMessageId, messageIdHeader, threadKey, date, createdAt, updatedAt, referencesJson) VALUES ('m1', ?, 'p1', 'root@teg.com', 'root@teg.com', '2026-08-01T00:00:00.000Z', 't', 't', '[]')`).run(acct.id);
-    const r = await send(ctx, user, { to: [{ addr: 'gc@teg.com' }], subject: 'Re: x', html: 'ok', attachments: [], replyTo: { accountId: acct.id, threadKey: 'root@teg.com' } });
-    expect(provider.sent[0].inReplyTo).toBe('root@teg.com'); expect(provider.sent[0].references).toEqual(['root@teg.com']);
-    expect(r.threadKey).toBe('root@teg.com');
+    db.prepare(`INSERT INTO mail_messages (id, accountId, providerMessageId, messageIdHeader, threadKey, date, createdAt, updatedAt, referencesJson) VALUES ('m1', ?, 'p1', 'root@tidewater.example', 'root@tidewater.example', '2026-08-01T00:00:00.000Z', 't', 't', '[]')`).run(acct.id);
+    const r = await send(ctx, user, { to: [{ addr: 'gc@tidewater.example' }], subject: 'Re: x', html: 'ok', attachments: [], replyTo: { accountId: acct.id, threadKey: 'root@tidewater.example' } });
+    expect(provider.sent[0].inReplyTo).toBe('root@tidewater.example'); expect(provider.sent[0].references).toEqual(['root@tidewater.example']);
+    expect(r.threadKey).toBe('root@tidewater.example');
   });
   it('indexes the sent row under the Message-ID the provider reports, not the one we generated', async () => {
     provider.sendMessageIdHeader = '<REWRITTEN@mail.gmail.com>';
-    const r = await send(ctx, user, { to: [{ addr: 'gc@teg.com' }], subject: 's', html: 'h', attachments: [] });
+    const r = await send(ctx, user, { to: [{ addr: 'gc@tidewater.example' }], subject: 's', html: 'h', attachments: [] });
     const row = db.prepare('SELECT messageIdHeader, threadKey FROM mail_messages').get() as any;
     expect(row.messageIdHeader).toBe('rewritten@mail.gmail.com');
     expect(row.threadKey).toBe('rewritten@mail.gmail.com');
@@ -68,7 +68,7 @@ describe('sendService.send', () => {
   });
   it('uses staged uploads and deletes the draft after send', async () => {
     const { uploadId } = stageUpload(dir, 'site.jpg', 'image/jpeg', Buffer.from('jpg'));
-    const d = await provider.saveDraft({ from: { addr: 'me@bb.com' }, to: [], cc: [], bcc: [], subject: '', html: '', text: '', attachments: [], messageIdHeader: 'x' });
+    const d = await provider.saveDraft({ from: { addr: 'me@birchwood.example' }, to: [], cc: [], bcc: [], subject: '', html: '', text: '', attachments: [], messageIdHeader: 'x' });
     await send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [{ uploadId }], draftProviderId: d.providerMessageId });
     expect(provider.sent[0].attachments[0].name).toBe('site.jpg'); expect(provider.drafts.size).toBe(0);
     expect(fs.existsSync(path.join(dir, 'tmp', 'mail-uploads', uploadId + '.bin'))).toBe(false);
@@ -84,7 +84,7 @@ describe('sendService.send', () => {
     // converted SMTP config) — the send must move to the healthy account rather
     // than fail on a default the user cannot send from.
     accounts.updateAccount(db, acct.id, { status: 'needs_review' });
-    const good = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'good@bb.com', auth: { refreshToken: 'r' } });
+    const good = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'good@birchwood.example', auth: { refreshToken: 'r' } });
     const r = await send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] });
     expect(r.accountId).toBe(good.id);
     // a healthy default still wins over a healthy non-default
@@ -103,8 +103,8 @@ describe('sendService.send', () => {
   });
   it('rejects a replyTo.accountId the user does not own, and sends nothing', async () => {
     db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u2','b','x','user')`).run();
-    const otherAcct = accounts.createAccount(db, crypto, { userId: 'u2', provider: 'fake', emailAddress: 'other@bb.com', displayName: 'Other', auth: { refreshToken: 'r' } });
-    const p = send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [], replyTo: { accountId: otherAcct.id, threadKey: 'root@teg.com' } });
+    const otherAcct = accounts.createAccount(db, crypto, { userId: 'u2', provider: 'fake', emailAddress: 'other@birchwood.example', displayName: 'Other', auth: { refreshToken: 'r' } });
+    const p = send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [], replyTo: { accountId: otherAcct.id, threadKey: 'root@tidewater.example' } });
     await expect(p).rejects.toMatchObject({ status: 404 });
     expect(provider.sent.length).toBe(0);
   });

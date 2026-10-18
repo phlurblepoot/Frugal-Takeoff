@@ -83,7 +83,7 @@ test('touch-action:none is already in force on a card the instant edit mode is e
   // why the reorder tests above work even against the old, latent bug), but
   // it does prove our half of the contract: the style is present on the
   // wrapper from render, not gated behind `armed`. Real-device confirmation
-  // lands in Nathan's phone smoke.
+  // lands in the owner's phone smoke.
   await page.goto('/dashboard');
   await expect(page.getByTestId('card-grid')).toBeVisible();
   await page.getByTestId('cards-customize').click();

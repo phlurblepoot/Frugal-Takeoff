@@ -15,7 +15,7 @@ beforeEach(() => {
   db = openDb(':memory:');
   runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-act-')), migrations);
   db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Maple', 1);
-  db.prepare('INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)').run('u1', 'nathan', 'x', 'admin');
+  db.prepare('INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)').run('u1', 'noah', 'x', 'admin');
 });
 
 describe('activity log', () => {
@@ -27,7 +27,7 @@ describe('activity log', () => {
     expect(items[0].message).toBe('Project "Other" created');
     expect(items[0].projectName).toBeNull();
     expect(items[1]).toMatchObject({
-      type: 'status_changed', projectId: 'p1', projectName: 'Maple', username: 'nathan',
+      type: 'status_changed', projectId: 'p1', projectName: 'Maple', username: 'noah',
     });
   });
 

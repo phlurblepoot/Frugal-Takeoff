@@ -22,7 +22,7 @@ let notifier: Notifier;
 beforeEach(() => {
   db = openDb(':memory:');
   runMigrations(db, fs.mkdtempSync(path.join(os.tmpdir(), 'ft-notif-')), migrations);
-  for (const [id, name] of [['u1', 'nathan'], ['u2', 'maria'], ['u3', 'joe']]) {
+  for (const [id, name] of [['u1', 'noah'], ['u2', 'maria'], ['u3', 'joe']]) {
     db.prepare('INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)').run(id, name, 'x', 'user');
   }
   pushed = [];
@@ -31,7 +31,7 @@ beforeEach(() => {
 
 describe('Notifier', () => {
   it('stores a notification and pushes it to that user', () => {
-    const n = notifier.notify({ userId: 'u2', type: 'task-assigned', title: 'nathan assigned you a task', body: 'Hang board', link: '/tasks?open=t1', actorUserId: 'u1' });
+    const n = notifier.notify({ userId: 'u2', type: 'task-assigned', title: 'noah assigned you a task', body: 'Hang board', link: '/tasks?open=t1', actorUserId: 'u1' });
     expect(n).toMatchObject({ userId: 'u2', type: 'task-assigned', link: '/tasks?open=t1', readAt: null, actorUserId: 'u1' });
     expect(pushed).toEqual([{ userId: 'u2', ev: { kind: 'new', notification: n } }]);
     expect(notifier.list('u2')).toEqual({ items: [n], unread: 1 });

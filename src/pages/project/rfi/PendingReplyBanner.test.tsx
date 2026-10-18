@@ -58,8 +58,8 @@ const postsTo = (url: string) => h.fetchMock.mock.calls.filter(c => c[0] === url
 const bodyOf = (call: any[]) => JSON.parse(call[1].body);
 
 const pending = (over: Partial<RfiPendingReply> = {}): RfiPendingReply => ({
-  threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@teg.com',
-  from: { addr: 'gc@teg.com', name: 'Mike Ruiz' },
+  threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@tidewater.example',
+  from: { addr: 'gc@tidewater.example', name: 'Mike Ruiz' },
   date: '2026-08-28T10:00:00.000Z',
   text: 'Corridor is 9\'-0" per the reflected ceiling plan.',
   attachments: [], receivedAt: '2026-08-28T10:00:05.000Z',
@@ -118,8 +118,8 @@ describe('PendingReplyBanner', () => {
   });
 
   it('falls back to the address when the sender has no display name', () => {
-    mount(rfi({ pendingReply: pending({ from: { addr: 'gc@teg.com' } }) }));
-    expect(screen.getByText(/gc@teg\.com/)).toBeInTheDocument();
+    mount(rfi({ pendingReply: pending({ from: { addr: 'gc@tidewater.example' } }) }));
+    expect(screen.getByText(/gc@tidewater.example/)).toBeInTheDocument();
   });
 
   // The RFI's status is the authority on whether an answer is still awaited: a
@@ -142,7 +142,7 @@ describe('PendingReplyBanner', () => {
     const evil = '<img src=x onerror="alert(1)">';
     mount(rfi({
       pendingReply: pending({
-        from: { addr: 'gc@teg.com', name: evil },
+        from: { addr: 'gc@tidewater.example', name: evil },
         text: `answer ${evil}`,
         attachments: [{ attId: 'a1', name: `${evil}.pdf`, mime: 'application/pdf', size: 10 }],
       }),

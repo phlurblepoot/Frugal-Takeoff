@@ -1,9 +1,9 @@
-# GPU build: Frugal-Takeoff + a bundled CUDA llama.cpp server for local AI
+# GPU build: FrugalOmnibuild + a bundled CUDA llama.cpp server for local AI
 # sheet reading. Build on a host with the NVIDIA Container Toolkit and run with
 # `--gpus all`. See docs/ai-sheet-reading-runbook.md.
 #
-#   docker build -f Dockerfile.cuda -t frugal-takeoff:cuda .
-#   docker run --gpus all -v /path/to/models:/models -p 3000:3000 frugal-takeoff:cuda
+#   docker build -f Dockerfile.cuda -t frugalomnibuild:cuda .
+#   docker run --gpus all -v /path/to/models:/models -p 3000:3000 frugalomnibuild:cuda
 #
 # We base directly on the prebuilt CUDA llama.cpp server image so the
 # `llama-server` binary, its shared libraries, and the CUDA runtime are all from

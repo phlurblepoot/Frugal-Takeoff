@@ -1085,7 +1085,7 @@ describe('updatedAt stamping', () => {
   });
 
   // Internal notes never print on the invoice PDF or go into invoice emails
-  // (Nathan's ruling), so a notes-only save must not flip the "up to date"
+  // (the owner's ruling), so a notes-only save must not flip the "up to date"
   // freshness chip — same reasoning as the RFI pendingReply exemption
   // (commit 5907997). version still bumps so live listeners refresh.
   it('a notes-only saveInvoice does not bump updatedAt, but bumps version', async () => {

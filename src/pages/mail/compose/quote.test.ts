@@ -8,7 +8,7 @@ import {
 const msg = (over: Partial<MessageRow> = {}): MessageRow => ({
   id: 'm1', accountId: 'a1', threadKey: 'tk-1', messageIdHeader: null, inReplyTo: null, references: [],
   from: { addr: 'bob@acme.com', name: 'Bob Smith' },
-  to: [{ addr: 'nathan@bigbearplaster.com', name: 'Nathan' }, { addr: 'carol@acme.com' }],
+  to: [{ addr: 'noah@birchwoodplaster.example', name: 'Noah' }, { addr: 'carol@acme.com' }],
   cc: [{ addr: 'dave@acme.com' }],
   bcc: [], subject: 'Roof detail', snippet: '', date: '2026-08-27T16:00:00.000Z',
   isRead: true, isStarred: false, isDraft: false, hasAttachments: false, attachments: [],
@@ -49,14 +49,14 @@ describe('quoteForForward', () => {
     expect(html).toContain('Subject:');
     expect(html).toContain('To:');
     expect(html).toContain('Roof detail');
-    expect(html).toContain('nathan@bigbearplaster.com');
+    expect(html).toContain('noah@birchwoodplaster.example');
     expect(html).toContain('<p>Body copy</p>');
   });
 });
 
 describe('replyAllRecipients', () => {
   it('puts the sender and original To on To, keeps Cc, and drops our own addresses', () => {
-    const { to, cc } = replyAllRecipients(msg(), ['NATHAN@bigbearplaster.com']);
+    const { to, cc } = replyAllRecipients(msg(), ['NOAH@birchwoodplaster.example']);
     expect(to.map(a => a.addr)).toEqual(['bob@acme.com', 'carol@acme.com']);
     expect(cc.map(a => a.addr)).toEqual(['dave@acme.com']);
   });

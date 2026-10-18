@@ -24,7 +24,7 @@ const baseInvoice = (overrides: Record<string, unknown> = {}) => ({
   totalCents: 0, paidCents: 0, balanceCents: 0, ...overrides,
 }) as any;
 
-const letterhead = { brandRgb: [153, 203, 56] as [number, number, number], company: { name: 'Big Bear' } };
+const letterhead = { brandRgb: [153, 203, 56] as [number, number, number], company: { name: 'Birchwood' } };
 
 describe('buildInvoicePdf — photo pages', () => {
   it('appends no extra page when there are no photos', async () => {

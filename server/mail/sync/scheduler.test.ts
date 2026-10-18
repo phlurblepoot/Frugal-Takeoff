@@ -13,7 +13,7 @@ const env = (id: string) => ({ providerMessageId: id, references: [], from: { ad
 beforeEach(() => {
   const db = openDb(':memory:'); runMigrations(db, fs.mkdtempSync(path.join(os.tmpdir(), 'ft-sc-')), migrations, { mailCrypto: crypto });
   db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','admin')`).run();
-  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', auth: { refreshToken: 'r' } });
+  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@birchwood.example', auth: { refreshToken: 'r' } });
   provider = new FakeMailProvider(); provider.seed([env('seeded')]);
   ctx = { db, dataDir: '', crypto, providerFactory: () => provider, broadcastChange: () => {} };
 });
@@ -53,7 +53,7 @@ describe('MailScheduler', () => {
     vi.useFakeTimers();
     const events: { type: string; id: string }[] = [];
     ctx.broadcastChange = ev => { events.push(ev as { type: string; id: string }); };
-    const bad = accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'bad@bb.com', auth: { refreshToken: 'r' } });
+    const bad = accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'bad@birchwood.example', auth: { refreshToken: 'r' } });
     ctx.providerFactory = (a) => { if (a.id === bad.id) throw new Error('auth blob unreadable'); return provider; };
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000 });
@@ -285,7 +285,7 @@ describe('MailScheduler push', () => {
 
   it('keeps a Graph subscription alive on each tick when a public URL is configured', async () => {
     vi.useFakeTimers();
-    const ms = accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'ms@bb.com', auth: { refreshToken: 'r' } });
+    const ms = accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'ms@birchwood.example', auth: { refreshToken: 'r' } });
     const graph = provider as FakeMailProvider & {
       createSubscription: ReturnType<typeof vi.fn>; renewSubscription: ReturnType<typeof vi.fn>;
     };
@@ -306,7 +306,7 @@ describe('MailScheduler push', () => {
 
   it('keeps a Gmail watch alive on each tick when a Pub/Sub topic is configured', async () => {
     vi.useFakeTimers();
-    const g = accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'google', emailAddress: 'g@bb.com', auth: { refreshToken: 'r' } });
+    const g = accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'google', emailAddress: 'g@birchwood.example', auth: { refreshToken: 'r' } });
     const gmail = provider as FakeMailProvider & { watch: ReturnType<typeof vi.fn>; stopWatch: ReturnType<typeof vi.fn> };
     gmail.watch = vi.fn(async () => ({ historyId: '7', expiration: String(Date.now() + 7 * 24 * 3600_000) }));
     gmail.stopWatch = vi.fn(async () => {});
@@ -324,7 +324,7 @@ describe('MailScheduler push', () => {
 
   it('leaves Gmail alone when no Pub/Sub topic is configured — polling is the whole story', async () => {
     vi.useFakeTimers();
-    accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'google', emailAddress: 'g@bb.com', auth: { refreshToken: 'r' } });
+    accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'google', emailAddress: 'g@birchwood.example', auth: { refreshToken: 'r' } });
     const gmail = provider as FakeMailProvider & { watch: ReturnType<typeof vi.fn>; stopWatch: ReturnType<typeof vi.fn> };
     gmail.watch = vi.fn(); gmail.stopWatch = vi.fn();
     const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000 });
@@ -335,7 +335,7 @@ describe('MailScheduler push', () => {
 
   it('leaves Graph alone when no public URL is configured', async () => {
     vi.useFakeTimers();
-    accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'ms@bb.com', auth: { refreshToken: 'r' } });
+    accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'ms@birchwood.example', auth: { refreshToken: 'r' } });
     const graph = provider as FakeMailProvider & { createSubscription: ReturnType<typeof vi.fn> };
     graph.createSubscription = vi.fn();
     const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000 });

@@ -221,13 +221,13 @@ describe('CommandPalette help overlay', () => {
 
 describe('CommandPalette search results group', () => {
   it('adds a "Search results" group once results resolve', async () => {
-    searchAll.mockResolvedValue([{ type: 'project', id: 'pr1', title: 'Big Bear Job', projectId: 'pr1' }]);
+    searchAll.mockResolvedValue([{ type: 'project', id: 'pr1', title: 'Birchwood Job', projectId: 'pr1' }]);
     renderPalette('/dashboard');
     openPalette();
-    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'big bear' } });
+    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'birchwood' } });
 
     await waitFor(() => expect(screen.getByText('Search results')).toBeInTheDocument());
-    expect(screen.getByText('Big Bear Job')).toBeInTheDocument();
+    expect(screen.getByText('Birchwood Job')).toBeInTheDocument();
   });
 });
 
@@ -273,7 +273,7 @@ describe('CommandPalette — Reports', () => {
   };
 
   it('offers Reports to admins and opens the page', () => {
-    localStorage.setItem('user', JSON.stringify({ username: 'nathan', role: 'admin' }));
+    localStorage.setItem('user', JSON.stringify({ username: 'noah', role: 'admin' }));
     render(
       <MemoryRouter initialEntries={['/dashboard']}>
         <ToastProvider><CommandPalette /><LocationProbe /></ToastProvider>

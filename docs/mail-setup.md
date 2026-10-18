@@ -133,7 +133,7 @@ Push: a persistent IMAP IDLE connection on INBOX; other folders every 5 min.
 ## 4.1 Google Drive backups
 
 Settings → Backup can push the same snapshots Backups writes locally to a
-"Frugal Takeoff Backups" folder in Google Drive, incrementally. This reuses
+"FrugalOmnibuild Backups" folder (or "Frugal Takeoff Backups" on older installs) in Google Drive, incrementally. This reuses
 the Google OAuth client from §2 (Drive access only — no Gmail scopes are
 requested for it), so it needs one more thing in the same Cloud project:
 
@@ -210,8 +210,7 @@ Set `MAIL_FAKE_PROVIDER=1` to run the app against an in-memory fake mail
 provider instead of real IMAP/OAuth — no external accounts, tokens, or
 network calls needed. Every account created while the flag is set uses it
 (there is no per-account choice), which is why it is a dev/E2E-only switch
-and must **never** be set in production (see the warning in
-`docs/MIGRATION-CUTOVER.md`).
+and must **never** be set in production.
 
 With the flag on, two extra routes exist purely to drive the fake provider
 from tests:

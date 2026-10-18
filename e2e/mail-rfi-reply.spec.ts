@@ -19,7 +19,7 @@ import { connectFakeAccount, injectReply, resetMailAccounts } from './fixtures/m
 const ANSWER = 'Corridor is 9 ft to the underside of the deck.';
 const QUOTED_LINE = 'Please find the attached RFI.';
 const replyBody = (): string =>
-  `${ANSWER}\n\nOn Fri, 29 Aug 2026 at 10:00, Takeoff Pro wrote:\n> ${QUOTED_LINE}\n`;
+  `${ANSWER}\n\nOn Fri, 29 Aug 2026 at 10:00, FrugalOmnibuild wrote:\n> ${QUOTED_LINE}\n`;
 
 async function seedProjectWithContact(
   request: APIRequestContext,
@@ -100,7 +100,7 @@ test('emailed RFI reply: quote-stripped banner + list chip, Use as response reco
   const auth = { Authorization: `Bearer ${token}` };
   const short = randomUUID().slice(0, 8);
 
-  const projectId = await seedProjectWithContact(request, token, `gc-${short}@teg.test`);
+  const projectId = await seedProjectWithContact(request, token, `gc-${short}@tidewater.test`);
   const rfiTitle = `Corridor height ${short}`;
   const rfi = await seedRfi(request, token, projectId, rfiTitle);
 
@@ -113,7 +113,7 @@ test('emailed RFI reply: quote-stripped banner + list chip, Use as response reco
   await injectReply(request, token, {
     accountId,
     threadKey,
-    from: { addr: 'mike@teg.test', name: 'Mike Torres' },
+    from: { addr: 'mike@tidewater.test', name: 'Mike Torres' },
     text: replyBody(),
   });
 
@@ -171,7 +171,7 @@ test('emailed RFI reply: Dismiss drops the banner and leaves the RFI Sent', asyn
   const auth = { Authorization: `Bearer ${token}` };
   const short = randomUUID().slice(0, 8);
 
-  const projectId = await seedProjectWithContact(request, token, `gc-${short}@teg.test`);
+  const projectId = await seedProjectWithContact(request, token, `gc-${short}@tidewater.test`);
   const rfiTitle = `Soffit framing ${short}`;
   const rfi = await seedRfi(request, token, projectId, rfiTitle);
 
@@ -183,7 +183,7 @@ test('emailed RFI reply: Dismiss drops the banner and leaves the RFI Sent', asyn
   await injectReply(request, token, {
     accountId,
     threadKey,
-    from: { addr: 'dana@teg.test', name: 'Dana Lee' },
+    from: { addr: 'dana@tidewater.test', name: 'Dana Lee' },
     text: 'Thanks, got it — no action needed.',
   });
 

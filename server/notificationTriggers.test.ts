@@ -32,7 +32,7 @@ const ENV = {
 };
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const USERS = {
-  nathan: { id: 'u1', username: 'nathan', role: 'admin' },
+  noah: { id: 'u1', username: 'noah', role: 'admin' },
   maria: { id: 'u2', username: 'maria', role: 'user' },
   joe: { id: 'u3', username: 'joe', role: 'user' },
 };
@@ -55,7 +55,7 @@ beforeEach(() => {
   app = express();
   app.use(express.json());
   // Who's asking comes from a header, so one app serves every user.
-  const authenticateToken = (req: any, _res: any, next: any) => { req.user = USERS[(req.get('x-as') as Who) || 'nathan']; next(); };
+  const authenticateToken = (req: any, _res: any, next: any) => { req.user = USERS[(req.get('x-as') as Who) || 'noah']; next(); };
   const requireAdmin = (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }));
   registerDataRoutes(app, {
     db, dataDir, dbFile: path.join(dataDir, 'app.db'), authenticateToken, requireAdmin,
@@ -76,9 +76,9 @@ const as = (who: Who) => ({
 
 describe('tasks', () => {
   it('tell the assignee when a task is made for them or handed to them, never the one assigning themselves', async () => {
-    const t = (await as('nathan').post('/api/tasks', { title: 'Hang board in 204', assigneeUserId: 'u2' })).body;
+    const t = (await as('noah').post('/api/tasks', { title: 'Hang board in 204', assigneeUserId: 'u2' })).body;
     expect(bell('u2')).toEqual([expect.objectContaining({
-      type: 'task-assigned', title: 'nathan assigned you a task', body: 'Hang board in 204', link: `/tasks?open=${t.id}`, actorUserId: 'u1',
+      type: 'task-assigned', title: 'noah assigned you a task', body: 'Hang board in 204', link: `/tasks?open=${t.id}`, actorUserId: 'u1',
     })]);
 
     await as('joe').post('/api/tasks', { title: 'Mine', assigneeUserId: 'u3' });
@@ -96,14 +96,14 @@ describe('tasks', () => {
 
 describe('RFIs', () => {
   it('keep an internal assignee, told when assigned or reassigned', async () => {
-    const r = (await as('nathan').post('/api/projects/p1/rfis', { title: 'Corridor height?', assigneeUserId: 'u2' })).body;
+    const r = (await as('noah').post('/api/projects/p1/rfis', { title: 'Corridor height?', assigneeUserId: 'u2' })).body;
     expect(getRfi(db, r.id).assigneeUserId).toBe('u2');
     expect(bell('u2')).toEqual([expect.objectContaining({
-      type: 'rfi-assigned', title: 'nathan assigned you RFI-001', body: 'Corridor height?', link: `/project/p1/rfis?open=${r.id}`,
+      type: 'rfi-assigned', title: 'noah assigned you RFI-001', body: 'Corridor height?', link: `/project/p1/rfis?open=${r.id}`,
     })]);
 
     // A save that doesn't mention the assignee (an older client) leaves it alone.
-    await as('nathan').put(`/api/rfis/${r.id}`, { title: 'Corridor height?', version: 1 });
+    await as('noah').put(`/api/rfis/${r.id}`, { title: 'Corridor height?', version: 1 });
     expect(getRfi(db, r.id).assigneeUserId).toBe('u2');
     expect(bell('u2')).toHaveLength(1);
 
@@ -112,12 +112,12 @@ describe('RFIs', () => {
     await as('joe').put(`/api/rfis/${r.id}`, { title: 'Corridor height?', assigneeUserId: null, version: 3 });
     expect(getRfi(db, r.id).assigneeUserId).toBeNull();
 
-    expect((await as('nathan').put(`/api/rfis/${r.id}`, { title: 'x', assigneeUserId: 'ghost', version: 4 })).status).toBe(400);
+    expect((await as('noah').put(`/api/rfis/${r.id}`, { title: 'x', assigneeUserId: 'ghost', version: 4 })).status).toBe(400);
   });
 
   it('record who sent them', async () => {
-    const r = (await as('nathan').post('/api/projects/p1/rfis', { title: 'Corridor height?' })).body;
-    applySendEffects(db, { itemType: 'rfi', itemId: r.id, userId: 'u3', role: 'user', to: 'gc@teg.com', threadKey: 't' });
+    const r = (await as('noah').post('/api/projects/p1/rfis', { title: 'Corridor height?' })).body;
+    applySendEffects(db, { itemType: 'rfi', itemId: r.id, userId: 'u3', role: 'user', to: 'gc@tidewater.example', threadKey: 't' });
     expect(getRfi(db, r.id)).toMatchObject({ status: 'sent', sentByUserId: 'u3' });
   });
 });
@@ -128,7 +128,7 @@ describe('@mentions in document comments', () => {
     putBuffer(db, fs.mkdtempSync(path.join(os.tmpdir(), 'ft-notif-f-')), 'inv1', Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'invoice', name: 'Invoice 7.pdf' });
   });
   const ACTION = { action: { type: 'comment', data: 'c_42' } };
-  const mentionAddress = (id: string) => ({ u1: 'nathan@team.invalid', u2: 'maria@team.invalid', u3: 'joe@team.invalid' } as Record<string, string>)[id];
+  const mentionAddress = (id: string) => ({ u1: 'noah@team.invalid', u2: 'maria@team.invalid', u3: 'joe@team.invalid' } as Record<string, string>)[id];
 
   it('give each user a readable address ONLYOFFICE recognises in a comment, never a real one', () => {
     const got = mentionAddresses([
@@ -146,10 +146,10 @@ describe('@mentions in document comments', () => {
     const users = (await as('maria').get('/api/onlyoffice/mention-users/doc1')).body.users;
     expect(users).toEqual([
       { id: 'u3', name: 'joe', email: mentionAddress('u3') },
-      { id: 'u1', name: 'nathan', email: mentionAddress('u1') },
+      { id: 'u1', name: 'noah', email: mentionAddress('u1') },
     ]);
     // An admin-only document: only admins can be mentioned, and only admins can ask.
-    expect((await as('nathan').get('/api/onlyoffice/mention-users/inv1')).body.users).toEqual([]);
+    expect((await as('noah').get('/api/onlyoffice/mention-users/inv1')).body.users).toEqual([]);
     expect((await as('maria').get('/api/onlyoffice/mention-users/inv1')).status).toBe(404);
   });
 
@@ -172,7 +172,7 @@ describe('@mentions in document comments', () => {
   });
 
   it('never reach someone who cannot open the file', async () => {
-    const r = await as('nathan').post('/api/onlyoffice/mention/inv1', { emails: [mentionAddress('u2')], message: 'hi' });
+    const r = await as('noah').post('/api/onlyoffice/mention/inv1', { emails: [mentionAddress('u2')], message: 'hi' });
     expect(r.body).toEqual({ notified: 0 });
     expect((await as('maria').post('/api/onlyoffice/mention/inv1', { emails: [mentionAddress('u1')] })).status).toBe(404);
   });

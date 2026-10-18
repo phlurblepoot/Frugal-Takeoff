@@ -16,7 +16,9 @@ import { summarize, countBytes } from './store';
 
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 export const DRIVE_STATE_TYP = 'backup_drive_state';
-export const ROOT_FOLDER_NAME = 'Frugal Takeoff Backups';
+export const ROOT_FOLDER_NAME = 'FrugalOmnibuild Backups';
+/** Installs made before the rename already have this folder; it keeps being used so their backup chain survives. */
+export const LEGACY_ROOT_FOLDER_NAME = 'Frugal Takeoff Backups';
 const API = 'https://www.googleapis.com/drive/v3/';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const FOLDER = 'application/vnd.google-apps.folder';
@@ -96,15 +98,16 @@ const listAll = async (access: Access, fetchFn: typeof fetch, q: string, fields 
   } while (pageToken);
   return out;
 };
-const findOrCreateFolder = async (access: Access, fetchFn: typeof fetch, name: string, parent: string | null): Promise<string> => {
+const findOrCreateFolder = async (access: Access, fetchFn: typeof fetch, name: string, parent: string | null, alsoFind?: string): Promise<string> => {
   const q = `name = '${name}' and mimeType = '${FOLDER}' and trashed = false` + (parent ? ` and '${parent}' in parents` : '');
   const found = await listAll(access, fetchFn, q);
   if (found[0]) return found[0].id;
+  if (alsoFind) { const old = await listAll(access, fetchFn, q.replace(`name = '${name}'`, `name = '${alsoFind}'`)); if (old[0]) return old[0].id; }
   const r = await api<{ id: string }>(access, fetchFn, 'files', { method: 'POST', body: JSON.stringify({ name, mimeType: FOLDER, parents: parent ? [parent] : undefined }) });
   return r.id;
 };
 export async function ensureDriveFolders(access: Access, fetchFn: typeof fetch): Promise<{ folderId: string; objectsFolderId: string; snapshotsFolderId: string }> {
-  const folderId = await findOrCreateFolder(access, fetchFn, ROOT_FOLDER_NAME, null);
+  const folderId = await findOrCreateFolder(access, fetchFn, ROOT_FOLDER_NAME, null, LEGACY_ROOT_FOLDER_NAME);
   return { folderId, objectsFolderId: await findOrCreateFolder(access, fetchFn, 'objects', folderId), snapshotsFolderId: await findOrCreateFolder(access, fetchFn, 'snapshots', folderId) };
 }
 
